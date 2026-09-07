@@ -2154,3 +2154,83 @@ div.pswp__img--placeholder,
 @media (max-width: 768px) {
     .pswp__button.uris-pswp-act { font-size: calc(18px * var(--uris-font-scale, 1)); }
 }
+
+.croppr-container * {
+  user-select: none;
+  -moz-user-select: none;
+  -webkit-user-select: none;
+  -ms-user-select: none;
+  box-sizing: border-box;
+  -webkit-box-sizing: border-box;
+  -moz-box-sizing: border-box;
+}
+
+.croppr-container img {
+  vertical-align: middle;
+  max-width: 100%;
+}
+
+.croppr {
+  position: relative;
+  display: inline-block;
+}
+
+.croppr-overlay {
+  background: rgba(0,0,0,0.5);
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  z-index: 1;
+  cursor: crosshair;
+}
+
+.croppr-region {
+  border: 1px dashed rgba(0, 0, 0, 0.5);
+  position: absolute;
+  z-index: 3;
+  cursor: move;
+  top: 0;
+}
+
+.croppr-imageClipped {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  z-index: 2;
+  pointer-events: none;
+}
+
+.croppr-handle {
+  border: 1px solid black;
+  background-color: white;
+  width: 10px;
+  height: 10px;
+  position: absolute;
+  z-index: 4;
+  top: 0;
+}
+/* ════ URIS: crop dialog (Croppr) ════
+   Поверх открытого PhotoSwipe (save-as-reference из просмотрщика):
+   pswp = 100000, наши оверлеи = 100000 (решает DOM-порядок), кроп = 100100. */
+.uris-crop-overlay { z-index: 100100; }
+.uris-crop-dialog { max-width: min(92vw, 640px); }
+.uris-crop-stage {
+    position: relative;
+    max-height: 60vh;
+    max-height: 60dvh;
+    overflow: hidden;
+    text-align: center;
+    background: repeating-conic-gradient(rgba(255,255,255,.06) 0% 25%, transparent 0% 50%) 50% / 16px 16px;
+    touch-action: none; /* жестами управляет Croppr, не скролл */
+}
+.uris-crop-stage img { max-width: 100%; max-height: 60vh; max-height: 60dvh; }
+.uris-crop-presets { justify-content: center; }
+.uris-batch-crop {
+    background: none; border: none; color: var(--uris-text-mut); cursor: pointer;
+    padding: 6px; font-size: var(--uris-font);
+}
+.uris-batch-crop:hover { color: var(--uris-text-strong); }

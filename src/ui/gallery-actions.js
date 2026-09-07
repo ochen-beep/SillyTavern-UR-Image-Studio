@@ -10,6 +10,7 @@ import { deleteGalleryCard } from '../storage.js';
 import { runStage2 } from '../pipeline.js';
 import { createRef, createReferenceFromGalleryCard, listRefs, updateRef } from '../refs-library.js';
 import { imageToDataUrl, ingestReferenceImage } from '../references.js';
+import { openCropDialog } from './crop-dialog.js';
 import { recordUrisError } from '../error-pool.js';
 
 import { canonicalizeNativeImagePath } from '../native-image-path.js';
@@ -35,7 +36,13 @@ export async function saveAsReference(item) {
         if (createNew) {
             const name = await showInputModal('Имя референса:', 'Из галереи');
             if (!name) return;
-            const uploaded = await uploadEntryAsRef(item);
+            const wantCrop = await showConfirmModal(
+                'Обрезать перед сохранением?\n\n' +
+                '«OK» — открыть кроп (Свободно / 1:1 / 3:4).\n' +
+                '«Отмена» — сохранить как есть.'
+            );
+            const uploaded = wantCrop ? await uploadCroppedEntry(item) : await uploadEntryAsRef(item);
+            if (uploaded === null) return; // кроп отменён — референс не создаём
             const ref = uploaded.reusedNativePath
                 ? await createReferenceFromGalleryCard(item, { name })
                 : await createRef({ name, imagePath: uploaded.imagePath, ...uploaded.metadata });
@@ -172,6 +179,23 @@ async function uploadEntryAsRef(it) {
     // lands in the pool with its dimensions and byte sizes instead of a bare path.
     const uploaded = await ingestReferenceImage(dataUrl, `npc_capture_${Date.now()}`);
     return { ...uploaded, reusedNativePath: false };
+}
+
+/**
+ * Crop-ветка «сохранить как референс»: обрезанные байты отличаются от
+ * сохранённого файла, поэтому реюз native-пути (uploadEntryAsRef) невозможен —
+ * материализуем data URL, режем и грузим новый файл.
+ *
+ * @returns {Promise<{imagePath:string, metadata:Object}|null>} null — кроп отменён
+ */
+async function uploadCroppedEntry(it) {
+    const src = it.src;
+    if (!src) throw new Error('нет изображения');
+    const dataUrl = src.startsWith('data:') ? src : await imageToDataUrl(src);
+    if (!dataUrl) throw new Error('не удалось получить изображение');
+    const crop = await openCropDialog({ source: dataUrl });
+    if (!crop) return null;
+    return await ingestReferenceImage(crop.blob, `npc_capture_${Date.now()}`);
 }
 
 async function showRefPicker(title, refs) {

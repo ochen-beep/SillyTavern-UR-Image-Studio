@@ -13,6 +13,7 @@ import {
 
 import { ingestReferenceImage } from '../references.js';
 import { openBatchUploadDialog } from './ref-batch-upload.js';
+import { openCropDialog } from './crop-dialog.js';
 import { refreshActive, getActiveTab } from './tabs.js';
 import { lockBodyScroll, unlockBodyScroll } from './window.js';
 import { recordUrisError } from '../error-pool.js';
@@ -580,7 +581,11 @@ function _bindEditorBody(root, host, ref, folders, opts = {}) {
         const file = e.target.files?.[0];
         if (!file) return;
         try {
-            const optimized = await ingestReferenceImage(file, `ref_${ref.id}`);
+            // Кроп опционален: «Без обрезки» грузит файл как есть, «Отмена»
+            // вообще ничего не меняет.
+            const crop = await openCropDialog({ source: file, allowSkip: true });
+            if (!crop) return;
+            const optimized = await ingestReferenceImage(crop.blob || file, `ref_${ref.id}`);
             try {
                 await updateRef(ref.id, { imagePath: optimized.imagePath, ...optimized.metadata });
             } catch (mutationError) {

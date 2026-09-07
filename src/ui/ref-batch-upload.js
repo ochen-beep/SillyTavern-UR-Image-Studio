@@ -18,6 +18,7 @@
 import { escapeHtml } from '../core.js';
 import { ingestReferenceImage } from '../references.js';
 import { createRef } from '../refs-library.js';
+import { openCropDialog } from './crop-dialog.js';
 import { lockBodyScroll, unlockBodyScroll } from './window.js';
 import { recordUrisError } from '../error-pool.js';
 
@@ -109,6 +110,7 @@ const STATUS_ICON = { pending: '·', running: '⏳', ok: '✓', error: '✗' };
 export function openBatchUploadDialog({ files, folderIds = [], onFinish, deps = {} } = {}) {
     const ingest = deps.ingest || ((file, id) => ingestReferenceImage(file, id));
     const doCreateRef = deps.createRef || createRef;
+    const doCrop = deps.crop || openCropDialog;
     const noteError = deps.recordUrisError || recordUrisError;
 
     const stale = document.querySelector('.uris-batch-overlay');
@@ -170,7 +172,8 @@ export function openBatchUploadDialog({ files, folderIds = [], onFinish, deps = 
                 <img class="uris-batch-thumb" src="${escapeHtml(thumbFor(item))}" alt="" loading="lazy">
                 <input class="text_pole uris-batch-name" value="${escapeHtml(item.name)}" ${item.status !== 'pending' ? 'disabled' : ''} aria-label="Имя референса">
                 <span class="uris-batch-status" aria-hidden="true">${STATUS_ICON[item.status] || '·'}</span>
-                ${item.status === 'pending' ? '<button type="button" class="uris-batch-del" title="Убрать из загрузки" aria-label="Убрать из загрузки">×</button>' : ''}
+                ${item.status === 'pending' ? `<button type="button" class="uris-batch-crop" title="Обрезать" aria-label="Обрезать"><i class="fa-solid fa-crop-simple"></i></button>
+                <button type="button" class="uris-batch-del" title="Убрать из загрузки" aria-label="Убрать из загрузки">×</button>` : ''}
             </div>`).join('');
         countEl.textContent = String(items.length);
         okBtn.textContent = running ? 'Загрузка…' : `Загрузить (${pending().length})`;
@@ -189,6 +192,17 @@ export function openBatchUploadDialog({ files, folderIds = [], onFinish, deps = 
             if (nameInput && item.status === 'pending') {
                 nameInput.addEventListener('input', () => { item.name = nameInput.value; });
             }
+            row.querySelector('.uris-batch-crop')?.addEventListener('click', async () => {
+                if (running) return;
+                const result = await doCrop({ source: item.blob || item.file });
+                if (!result || result.skip) return;   // отмена / без изменений
+                item.blob = result.blob;              // кроп заменяет источник загрузки
+                if (item.thumbUrl) {
+                    try { URL.revokeObjectURL(item.thumbUrl); } catch { /* already gone */ }
+                    item.thumbUrl = '';
+                }
+                renderList();
+            });
             row.querySelector('.uris-batch-del')?.addEventListener('click', () => {
                 if (running) return;
                 if (item.thumbUrl && typeof URL !== 'undefined' && typeof URL.revokeObjectURL === 'function') {
@@ -220,7 +234,8 @@ export function openBatchUploadDialog({ files, folderIds = [], onFinish, deps = 
             item.status = 'running';
             renderList();
             try {
-                const uploaded = await ingest(item.file, `ref_${stamp}_${i}`);
+                // Обрезка (если была) подменяет источник: item.blob вместо файла.
+                const uploaded = await ingest(item.blob || item.file, `ref_${stamp}_${i}`);
                 try {
                     await doCreateRef({ name: item.name, imagePath: uploaded.imagePath, ...uploaded.metadata, folders: folderIds });
                     item.status = 'ok';
