@@ -1,0 +1,17 @@
+.worktrees/
+
+# dependencies
+node_modules/
+
+# AI agent workspace data
+.zcode/
+
+# temp scratch & test output
+tmp_*
+*.log
+.nano-*
+
+# OS junk
+Thumbs.db
+Desktop.ini
+.DS_Store

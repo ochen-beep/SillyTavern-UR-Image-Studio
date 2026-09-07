@@ -1,0 +1,187 @@
+// @ts-check
+// Tests for the Settings tab: uiScale normalization/persistence, tab rendering
+// and its live-apply controls.
+import { test, beforeEach } from 'node:test';
+import assert from 'node:assert/strict';
+import { makeFakeDocument } from './fake-dom.js';
+
+// Module-scope bootstrap: the import chain (core → tab-settings → data-port →
+// refs-library / diagnostic-dump → netdump) needs ST globals before first load.
+let fakeDoc = makeFakeDocument();
+globalThis.document = fakeDoc.document;
+globalThis.document.documentElement = makeScaleRoot();
+globalThis.window = { location: { origin: 'http://localhost:8000' }, dispatchEvent: () => {} };
+globalThis.toastr = { success: () => {}, error: () => {}, info: () => {}, warning: () => {} };
+globalThis.SillyTavern = makeStMock();
+
+const { state, loadSettings, applyUiScale, applyFontScale, normalizeUiScale, normalizeFontScale, MODULE_NAME } = await import('../src/core.js');
+const { render } = await import('../src/ui/tab-settings.js');
+
+function makeScaleRoot() {
+    return { style: { _props: {}, setProperty(k, v) { this._props[k] = String(v); } } };
+}
+
+function makeStMock() {
+    return {
+        getContext: () => ({
+            extensionSettings: extensionSettings,
+            saveSettingsDebounced: () => { saveCalls++; },
+            getRequestHeaders: () => ({}),
+        }),
+        libs: { localforage: { getItem: async () => null, setItem: async () => {}, removeItem: async () => {} } },
+    };
+}
+
+let extensionSettings = {};
+let saveCalls = 0;
+
+beforeEach(() => {
+    fakeDoc = makeFakeDocument();
+    globalThis.document = fakeDoc.document;
+    globalThis.document.documentElement = makeScaleRoot();
+    extensionSettings = {};
+    saveCalls = 0;
+    globalThis.SillyTavern = makeStMock();
+    state.settings = {
+        uiScale: 1,
+        fontScale: 1,
+        debugMode: false,
+        useParametersForAllChats: false,
+    };
+});
+
+function makeRoot() {
+    const root = globalThis.document.createElement('div');
+    root.id = 'root';
+    return root;
+}
+
+test('normalizeUiScale clamps, snaps to step and collapses float noise', () => {
+    assert.equal(normalizeUiScale(3), 1.5);
+    assert.equal(normalizeUiScale(0.1), 0.75);
+    assert.equal(normalizeUiScale('abc'), 1);
+    assert.equal(normalizeUiScale(undefined), 1);
+    assert.equal(normalizeUiScale(1.234), 1.25);
+    assert.equal(normalizeUiScale(1), 1);
+});
+
+test('normalizeFontScale clamps to its own narrower range', () => {
+    assert.equal(normalizeFontScale(2), 1.4);
+    assert.equal(normalizeFontScale(0.1), 0.85);
+    assert.equal(normalizeFontScale('oops'), 1);
+    assert.equal(normalizeFontScale(undefined), 1);
+    assert.equal(normalizeFontScale(1.234), 1.25);
+    assert.equal(normalizeFontScale(1), 1);
+});
+
+test('loadSettings clamps persisted scales and fills missing ones', () => {
+    extensionSettings[MODULE_NAME] = { uiScale: 4, fontScale: 3 };
+    loadSettings();
+    assert.equal(state.settings.uiScale, 1.5);
+    assert.equal(state.settings.fontScale, 1.4);
+
+    delete extensionSettings[MODULE_NAME];
+    loadSettings();
+    assert.equal(state.settings.uiScale, 1);
+    assert.equal(state.settings.fontScale, 1);
+});
+
+test('applyUiScale publishes --uris-scale on documentElement', () => {
+    state.settings.uiScale = 1.25;
+    applyUiScale();
+    assert.equal(globalThis.document.documentElement.style._props['--uris-scale'], '1.25');
+});
+
+test('applyFontScale publishes --uris-font-scale on documentElement', () => {
+    state.settings.fontScale = 1.15;
+    applyFontScale();
+    assert.equal(globalThis.document.documentElement.style._props['--uris-font-scale'], '1.15');
+});
+
+test('render reflects stored scale and toggles', () => {
+    state.settings.uiScale = 1.25;
+    state.settings.fontScale = 1.15;
+    state.settings.debugMode = true;
+    const root = makeRoot();
+    render(root);
+    const slider = root.querySelector('#urisUiScale');
+    assert.equal(slider.value, '125');
+    assert.equal(root.querySelector('#urisUiScaleValue').textContent, '125%');
+    assert.equal(slider.getAttribute('min'), '75');
+    assert.equal(slider.getAttribute('max'), '150');
+    assert.equal(slider.getAttribute('step'), '5');
+
+    const fontSlider = root.querySelector('#urisFontScale');
+    assert.equal(fontSlider.value, '115');
+    assert.equal(root.querySelector('#urisFontScaleValue').textContent, '115%');
+    assert.equal(fontSlider.getAttribute('min'), '85');
+    assert.equal(fontSlider.getAttribute('max'), '140');
+    assert.equal(fontSlider.getAttribute('step'), '5');
+
+    assert.equal(root.querySelector('#uris_debug_mode').checked, true);
+    assert.equal(root.querySelector('#uris_use_all_params').checked, false);
+});
+
+test('slider input applies the scale live: state, CSS var and debounced save', async () => {
+    const root = makeRoot();
+    render(root);
+    const slider = root.querySelector('#urisUiScale');
+    slider.value = '125';
+    await slider.dispatchEvent({ type: 'input', target: slider });
+    assert.equal(state.settings.uiScale, 1.25);
+    assert.equal(globalThis.document.documentElement.style._props['--uris-scale'], '1.25');
+    assert.equal(root.querySelector('#urisUiScaleValue').textContent, '125%');
+    assert.ok(saveCalls > 0);
+});
+
+test('font slider input applies the font scale live', async () => {
+    const root = makeRoot();
+    render(root);
+    const slider = root.querySelector('#urisFontScale');
+    slider.value = '110';
+    await slider.dispatchEvent({ type: 'input', target: slider });
+    assert.equal(state.settings.fontScale, 1.1);
+    assert.equal(globalThis.document.documentElement.style._props['--uris-font-scale'], '1.1');
+    assert.equal(root.querySelector('#urisFontScaleValue').textContent, '110%');
+    assert.ok(saveCalls > 0);
+});
+
+test('reset buttons restore both scales to 100%', async () => {
+    state.settings.uiScale = 1.4;
+    state.settings.fontScale = 1.3;
+    const root = makeRoot();
+    render(root);
+    await root.querySelector('#urisUiScaleReset').click();
+    assert.equal(state.settings.uiScale, 1);
+    assert.equal(globalThis.document.documentElement.style._props['--uris-scale'], '1');
+    assert.equal(root.querySelector('#urisUiScaleValue').textContent, '100%');
+
+    await root.querySelector('#urisFontScaleReset').click();
+    assert.equal(state.settings.fontScale, 1);
+    assert.equal(globalThis.document.documentElement.style._props['--uris-font-scale'], '1');
+    assert.equal(root.querySelector('#urisFontScaleValue').textContent, '100%');
+});
+
+test('behavior toggles persist debug mode and global params flags', async () => {
+    const root = makeRoot();
+    render(root);
+    const debug = root.querySelector('#uris_debug_mode');
+    debug.checked = true;
+    await debug.change();
+    assert.equal(state.settings.debugMode, true);
+    debug.checked = false;
+    await debug.change();
+    assert.equal(state.settings.debugMode, false);
+
+    const allParams = root.querySelector('#uris_use_all_params');
+    allParams.checked = true;
+    await allParams.change();
+    assert.equal(state.settings.useParametersForAllChats, true);
+});
+
+test('render without loaded settings shows a fallback hint', () => {
+    state.settings = null;
+    const root = makeRoot();
+    render(root);
+    assert.match(root.textContent, /не загружены/);
+});

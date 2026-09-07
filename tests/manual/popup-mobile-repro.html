@@ -1,0 +1,160 @@
+<!doctype html>
+<!--
+    Репродукция бага «попапы не видны в мобильном SillyTavern (портрет)».
+
+    Запуск:  python -m http.server 8931  (из корня проекта)
+             открыть http://127.0.0.1:8931/tests/manual/popup-mobile-repro.html
+    Затем в DevTools включить тулбар устройств (портрет 390×844 / ландшафт 844×390).
+
+    Страница подключает НАСТОЯЩИЕ стили SillyTavern (st-assets/, выгрузка от
+    2026-09) + наш style.css. Ключевое условие бага — правило из
+    mobile-styles.css: `body { position: fixed; overflow: hidden }` (@media ≤1000px),
+    из-за которого fixed-оверлеи с inset:0 / bottom-привязкой вырождаются.
+    Кнопки слева открывают picker / lightbox / ERR-панель — после фикса
+    (style.css: явные top/left/width/height) все три видны в обеих ориентациях.
+-->
+<html lang="ru">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>UR Image Studio — popup mobile repro (со стилями ST mobile: body { position: fixed })</title>
+    <link rel="stylesheet" href="st-assets/st-style.css?v=1">
+    <link rel="stylesheet" href="st-assets/st-mobile.css?v=1">
+    <link rel="stylesheet" href="../../style.css?v=fix1">
+    <style>
+        /* Имитация переменных темы ST, чтобы наши var(--SmartTheme*) фолбэки не мешали */
+        html { --uris-st-top: 40px; --uris-st-bottom: 120px; }
+        .repro-actions { position: fixed; top: 48px; left: 8px; z-index: 100001; display: flex; flex-direction: column; gap: 6px; }
+        .repro-actions button { padding: 8px 10px; }
+        /* минимальная раскраска ST-скелета, чтобы видеть его на скриншотах */
+        #top-bar, #send_form { background: #222244; color: #eee; padding: 8px 12px; box-sizing: border-box; }
+        #chat { padding: 12px; color: #eee; }
+    </style>
+</head>
+<body class="mobile">
+    <!-- Скелет SillyTavern -->
+    <div id="sheld">
+        <div id="top-settings-holder">
+            <div id="top-bar"><span>ST #top-bar</span></div>
+        </div>
+        <main id="chat"><p>Чат SillyTavern…</p></main>
+        <div id="form_sheld">
+            <form id="send_form"><span>ST #send_form (120px)</span></form>
+        </div>
+    </div>
+
+    <div class="repro-actions">
+        <button id="openPicker">Открыть picker (Выбор для генерации)</button>
+        <button id="openLightbox">Открыть lightbox (галерея)</button>
+        <button id="toggleErr">Показать ERR-панель</button>
+        <button id="closeAll">Закрыть всё</button>
+    </div>
+
+    <!-- Точная копия #urisWindow в мобильном режиме (mountPanel + applyMobileClass) -->
+    <div id="urisWindow" class="uris-window uris-mobile" style="">
+        <div class="uris-header" id="urisHeader">
+            <span class="uris-title">🎨 UR Image Studio</span>
+            <div class="uris-header-actions">
+                <span class="uris-status" id="urisStatus"></span>
+                <button class="uris-icon-btn uris-error-badge" id="urisErrorBadge" title="Ошибки">ERR <span class="uris-error-count" id="urisErrorCount">2</span></button>
+                <button class="uris-icon-btn" title="Выгрузить">📥</button>
+                <button class="uris-icon-btn" title="Свернуть">✕</button>
+            </div>
+        </div>
+        <div class="uris-error-panel" id="urisErrorPanel" role="dialog" aria-label="Ошибки" hidden>
+            <section class="uris-error-section"><h3>Ошибки текущей сессии</h3>
+                <div class="uris-error-rows">
+                    <div class="uris-error-row"><span>Тестовая ошибка №1: соединение сброшено</span></div>
+                    <div class="uris-error-row"><span>Тестовая ошибка №2: таймаут</span></div>
+                </div>
+            </section>
+            <div class="uris-error-panel-actions"><button type="button" class="uris-btn uris-btn-ghost">Очистить ошибки</button></div>
+        </div>
+        <div class="uris-tabs" id="urisTabs">
+            <button class="uris-tab uris-tab-active">Генерация</button>
+            <button class="uris-tab">Галерея</button>
+            <button class="uris-tab">Референсы</button>
+        </div>
+        <div class="uris-body" id="urisBody">
+            <div class="uris-field"><label>Тело окна расширения в мобильном режиме</label></div>
+        </div>
+    </div>
+
+    <script>
+        const img = (name) => 'data:image/svg+xml,' + encodeURIComponent(
+            `<svg xmlns="http://www.w3.org/2000/svg" width="160" height="160"><rect width="160" height="160" fill="#445"/><text x="80" y="85" text-anchor="middle" fill="#fff" font-size="18">${name}</text></svg>`);
+
+        // Picker — точная структура из tab-references.js / tab-generate.js
+        function openPicker() {
+            closeAll();
+            const overlay = document.createElement('div');
+            overlay.className = 'uris-picker-overlay';
+            overlay.setAttribute('role', 'dialog');
+            overlay.innerHTML = `
+                <div class="uris-picker-dialog">
+                    <h4>Выбор референсов</h4>
+                    <div class="uris-refs-filterbar">
+                        <div class="uris-refs-chips uris-scroll-x" id="urisPickerFolders">
+                            <span class="uris-folder-chip">Все</span><span class="uris-folder-chip">Персонажи</span>
+                        </div>
+                    </div>
+                    <div class="uris-pool-grid uris-picker-grid">
+                        <button type="button" class="uris-pool-tile uris-pick-tile"><img src="${img('ref1')}" alt=""><div class="uris-pool-tile-name">Референс 1</div></button>
+                        <button type="button" class="uris-pool-tile uris-pick-tile"><img src="${img('ref2')}" alt=""><div class="uris-pool-tile-name">Референс 2</div></button>
+                        <button type="button" class="uris-pool-tile uris-pick-tile"><img src="${img('ref3')}" alt=""><div class="uris-pool-tile-name">Референс 3</div></button>
+                        <button type="button" class="uris-pool-tile uris-pick-tile"><img src="${img('ref4')}" alt=""><div class="uris-pool-tile-name">Референс 4</div></button>
+                    </div>
+                    <div class="uris-picker-actions">
+                        <button class="uris-btn uris-btn-ghost uris-pick-cancel">Отмена</button>
+                        <button class="uris-btn uris-btn-primary uris-pick-ok">Готово</button>
+                    </div>
+                </div>`;
+            document.body.appendChild(overlay);
+            document.body.style.overflow = 'hidden'; // lockBodyScroll()
+        }
+
+        // Lightbox — точная структура из lightbox.js render()
+        function openLightbox() {
+            closeAll();
+            const lb = document.createElement('div');
+            lb.className = 'uris-lightbox';
+            lb.setAttribute('role', 'dialog');
+            lb.innerHTML = `
+                <div class="uris-lb-counter">1 / 3</div>
+                <button class="uris-lb-close" type="button" title="Закрыть (Esc)">✕</button>
+                <div class="uris-lb-content">
+                    <img alt="" class="uris-lb-img" src="${img('gallery photo')}">
+                    <div class="uris-lb-info">
+                        <div class="uris-lb-prompt">Промпт тестового изображения галереи</div>
+                    </div>
+                    <div class="uris-lb-actions">
+                        <button class="uris-lb-act"><i>copy</i></button>
+                        <button class="uris-lb-act"><i>save</i></button>
+                        <button class="uris-lb-act"><i>regen</i></button>
+                        <button class="uris-lb-act uris-lb-act-danger"><i>del</i></button>
+                    </div>
+                    <button class="uris-lb-nav prev">‹</button><button class="uris-lb-nav next">›</button>
+                </div>`;
+            document.body.appendChild(lb);
+            document.body.style.overflow = 'hidden';
+        }
+
+        function toggleErr() {
+            const panel = document.getElementById('urisErrorPanel');
+            panel.hidden = !panel.hidden;
+        }
+
+        function closeAll() {
+            document.querySelector('.uris-picker-overlay')?.remove();
+            document.querySelector('.uris-lightbox')?.remove();
+            document.getElementById('urisErrorPanel').hidden = true;
+            document.body.style.overflow = '';
+        }
+
+        document.getElementById('openPicker').addEventListener('click', openPicker);
+        document.getElementById('openLightbox').addEventListener('click', openLightbox);
+        document.getElementById('toggleErr').addEventListener('click', toggleErr);
+        document.getElementById('closeAll').addEventListener('click', closeAll);
+    </script>
+</body>
+</html>

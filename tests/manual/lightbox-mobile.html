@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="ru">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>UR Image Studio — lightbox mobile test</title>
+    <link rel="stylesheet" href="../../style.css">
+    <style>
+        /* Минимальный фон, имитирующий SillyTavern UI за окном */
+        body { margin: 0; background: #1a1a2e; color: #eee; font-family: system-ui, sans-serif; }
+        #fakeChat { padding: 12px; line-height: 1.6; }
+        #openBtn { position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%); padding: 12px 20px; }
+    </style>
+</head>
+<body>
+    <div id="fakeChat">
+        <p>Эмуляция мобильного SillyTavern. Нажмите кнопку — откроется lightbox.</p>
+        <p>На узком экране картинка не должна выходить за края, кнопки ✕ / ‹ / › должны быть доступны.</p>
+    </div>
+    <button id="openBtn">Открыть lightbox</button>
+    <script type="module">
+        import { showLightbox } from '../../src/ui/lightbox.js';
+
+        // Широкая/высокая картинка, которая раньше легко вылезала за viewport
+        const wideSrc = 'data:image/svg+xml,' + encodeURIComponent(`
+            <svg xmlns="http://www.w3.org/2000/svg" width="1600" height="900" viewBox="0 0 1600 900">
+                <rect width="1600" height="900" fill="#334"/>
+                <text x="800" y="450" text-anchor="middle" fill="#fff" font-size="60">16:9 Wide image</text>
+                <circle cx="200" cy="200" r="120" fill="#88a"/>
+                <circle cx="1400" cy="700" r="120" fill="#a88"/>
+            </svg>`);
+
+        document.getElementById('openBtn').addEventListener('click', () => {
+            showLightbox([{
+                src: wideSrc,
+                style: 'test style',
+                prompt: 'Vertical manga page with an unpredictable, highly asymmetrical layout of [4 to 5] panels. Panels must vary drastically in size, angle and orientation, avoiding a repetitive stacked look. The composition is driven by a chaotic arrangement where small inset panels cross over the borders of larger panels, creating layered depth.'
+            }]);
+        });
+    </script>
+</body>
+</html>

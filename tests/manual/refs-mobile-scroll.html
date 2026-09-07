@@ -1,0 +1,97 @@
+<!doctype html>
+<!--
+    Репродукция «галерея референсов не листается на мобильном».
+    Точная цепочка DOM вкладки «Референсы» (mobile stack, экран grid):
+    #urisWindow.uris-mobile > .uris-body.uris-body-flush#urisBody
+      > .uris-references.uris-refs-mobile.uris-refs-mobile-stack
+        > #urisMobileScreen.uris-mobile-screen
+          > .uris-mobile-toolbar + .uris-mobile-search-wrap
+          > #urisMobileGrid.uris-pool-grid.uris-mobile-grid  (30 тайлов)
+
+    Запуск: python -m http.server 8931 → /tests/manual/refs-mobile-scroll.html
+    Проверяются: высоты звеньев цепочки, clientHeight vs scrollHeight сетки,
+    computed overflow/touch-action. Кнопка логирует диагностику в консоль и
+    в блок на странице.
+-->
+<html lang="ru">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>URIS — refs mobile scroll repro</title>
+    <link rel="stylesheet" href="st-assets/st-style.css?v=1">
+    <link rel="stylesheet" href="st-assets/st-mobile.css?v=1">
+    <link rel="stylesheet" href="../../style.css?v=scroll1">
+    <style>
+        html { --uris-st-top: 40px; --uris-st-bottom: 120px; }
+        body { margin: 0; background: #1a1a2e; color: #eee; font-family: system-ui, sans-serif; }
+        #top-bar { position: fixed; top: 0; left: 0; right: 0; height: 40px; background: #222244; z-index: 3005; }
+        #send_form { position: fixed; bottom: 0; left: 0; right: 0; height: 120px; background: #222244; z-index: 30; }
+        #diagBtn { position: fixed; top: 48px; right: 8px; z-index: 100001; padding: 8px 10px; }
+        #diag { position: fixed; top: 88px; right: 8px; z-index: 100001; background: #000c; color: #9f9;
+                font: 11px/1.45 monospace; padding: 8px; max-width: 78vw; max-height: 60vh; overflow: auto; white-space: pre; }
+    </style>
+</head>
+<body class="mobile">
+    <div id="top-bar">ST #top-bar</div>
+    <div id="send_form">ST #send_form</div>
+    <button id="diagBtn">Диагностика</button>
+    <div id="diag" hidden></div>
+
+    <div id="urisWindow" class="uris-window uris-mobile">
+        <div class="uris-header" id="urisHeader"><span class="uris-title">🎨 UR Image Studio</span></div>
+        <div class="uris-tabs"><button class="uris-tab">Генерация</button><button class="uris-tab uris-tab-active">Референсы</button></div>
+        <div class="uris-body uris-body-flush" id="urisBody">
+            <div class="uris-references uris-refs-mobile uris-refs-mobile-stack">
+                <div class="uris-mobile-screen" id="urisMobileScreen">
+                    <div class="uris-mobile-toolbar">
+                        <button class="uris-mobile-back">‹</button>
+                        <span class="uris-mobile-toolbar-title">Все карточки</span>
+                        <span class="uris-mobile-folder-count" id="urisMobileCount">30</span>
+                        <button class="uris-mobile-add-ref">＋</button>
+                    </div>
+                    <div class="uris-mobile-search-wrap">
+                        <input class="uris-mobile-search" type="search" placeholder="Поиск...">
+                    </div>
+                    <div class="uris-pool-grid uris-mobile-grid" id="urisMobileGrid"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const tile = (i) => {
+            const img = 'data:image/svg+xml,' + encodeURIComponent(
+                `<svg xmlns="http://www.w3.org/2000/svg" width="120" height="160"><rect width="120" height="160" fill="#3a4a5a"/><text x="60" y="85" text-anchor="middle" fill="#fff" font-size="20">${i}</text></svg>`);
+            return `<button type="button" class="uris-pool-tile"><img src="${img}" alt="" loading="lazy"><div class="uris-pool-tile-name">Реф ${i}</div></button>`;
+        };
+        document.getElementById('urisMobileGrid').innerHTML = Array.from({ length: 30 }, (_, i) => tile(i + 1)).join('');
+
+        document.getElementById('diagBtn').addEventListener('click', () => {
+            const chain = [
+                ['#urisWindow', 'urisWindow'],
+                ['.uris-body-flush', 'urisBody'],
+                ['.uris-references', 'refs'],
+                ['#urisMobileScreen', 'screen'],
+                ['#urisMobileGrid', 'grid'],
+            ];
+            const lines = [`viewport ${innerWidth}x${innerHeight}`];
+            for (const [sel, label] of chain) {
+                const el = document.querySelector(sel);
+                const cs = getComputedStyle(el);
+                const r = el.getBoundingClientRect();
+                lines.push(`${label}: h=${Math.round(r.height)} csH=${cs.height} ov=${cs.overflowY} flex=${cs.flex} minH=${cs.minHeight} pos=${cs.position} touch=${cs.touchAction}`);
+            }
+            const grid = document.getElementById('urisMobileGrid');
+            lines.push(`grid: client ${grid.clientHeight}x${grid.clientWidth}, scroll ${grid.scrollHeight}x${grid.scrollWidth}`);
+            lines.push(`grid scrollable: ${grid.scrollHeight > grid.clientHeight}`);
+            grid.scrollTop = 200;
+            lines.push(`after scrollTop=200 → ${grid.scrollTop} (0 = скролл заблокирован геометрией)`);
+            grid.scrollTop = 0;
+            const out = document.getElementById('diag');
+            out.hidden = false;
+            out.textContent = lines.join('\n');
+            console.log(lines.join('\n'));
+        });
+    </script>
+</body>
+</html>

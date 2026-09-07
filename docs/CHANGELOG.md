@@ -1,0 +1,223 @@
+## 2026-09-07 — v0.7.0: шаблоны — серверный файл вместо settings-блоба
+
+- **Новое хранилище шаблонов** (`src/template-file-store.js`): массив шаблонов переехал из `extensionSettings.ur_image_studio.imageConnections.templates` в собственный файл на сервере `data/<user>/user/files/uris_templates.json` через официальный user-files API (POST /api/files/upload — атомарная запись `write-file-atomic` на сервере, GET `​/user/files/<name>` — чтение). Мотивация (сверено с исходниками ST release): `saveSettingsDebounced` стреляет через ~1 с и POST-ит **весь** settings.json без слияния и блокировок — правка шаблона в пределах ~1,4 с (400 мс UI-дебаунс + 1000 мс ST-дебаунс) до закрытия/перезагрузки вкладки терялась молча, а соседняя вкладка могла затереть её чужим сохранением; честный flush невозможен — мгновенный `saveSettings` расширениям больше не экспонируется (st-context.js отдаёт только debounced-вариант).
+- **Дисциплина записи** — как в DS Comments (feed-file-store): in-memory mirror + сериализованная promise-цепочка, одна мутация → одна немедленная полная перезапись файла (последний в цепочке побеждает, порядок гарантирован). Неудачная загрузка не откатывает mirror: payload остаётся «pending», следующая мутация или unload-flush долечивает файл. Ошибка записи → toastr (дедуп 5 с) + warn — тихих потерь больше нет. UTF-8-safe base64 (инструкции с кириллицей).
+- **Настоящий flush на выгрузку** (`index.js`): `pagehide` + `visibilitychange→hidden` вызывают `flushTemplateWritesOnUnload()` — догоняющий `fetch(..., keepalive: true)` с последним незаписанным payload (лимит ~60 КБ, идемпотентно: это та же полная атомарная запись). Прежний `flushSettings()` оставлен, но он лишь перезапускает debounced ST — на settings больше ничего критичного не завязано.
+- **Миграция и фолбэк**: при первой загрузке файла нет → зеркало seed'ится из settings-копии и заливается на сервер (копия в settings сохраняется для даунгрейда/бэкапов); битый/чужоверсионный файл → warn + повторная миграция из settings; user-files эндпоинт недоступен (старый ST, Node-тесты) → режим `legacy`, CRUD работает по settings как раньше (детект одним POST /api/files/verify). Режим резолвится один раз за сессию.
+- **Починен баг индекса кэша** (`saveTemplate`): индекс искался в отфильтрованном `listTemplates()` (без неподдерживаемых legacy-записей), а писался в сырой `cachedTemplates` — при наличии legacy-записей затирался чужой слот кэша и появлялся дубль (хранилище оставалось корректным, лечилось перезагрузкой). Теперь поиск по `id` прямо в `cachedTemplates`; CRUD в file-режиме дополнительно работает на клонах — кэш и mirror больше не делят ссылки.
+- **data-port**: экспорт накладывает свежие записи из зеркала (settings-копия в file-режиме может быть устаревшей); импорт после восстановления settings зеркалирует итоговый массив в файл **с ожиданием записи** (свежий импорт больше не зависит от дебаунса); rollback при неудачном импорте захватывает и восстанавливает и template-записи. В legacy-режиме все три пути — no-op, поведение прежнее.
+- **Тесты**: новый `tests/template-file-store.test.js` (миграция, CRUD-durability, регресс индексного бага с legacy-записями в зеркале, тост при неудаче + долечивание, keepalive-unload на «подвешенной» записи, импорт-замена набора, legacy-фолбэк), `tests/ui-persistence.test.js` — явно выключенный probe. Полный набор 925 pass.
+
+## 2026-09-07 — v0.6.0: уведомления о завершении Шага 1 / Шага 2
+
+- **Звуковые уведомления** (`src/notify.js`): синтез тонов через Web Audio API без аудио-ассетов. Гибрид трёх источников: конверты пресетов ST-Copilot (Мягкий сигнал / Куранты / Колокол / Цифровой бип / Поп), мобильный unlock-паттерн из best practices (один синглтон AudioContext, создаваемый/резюмируемый при первом жесте — контекст вне жеста на iOS стартует suspended; `resume()` перед каждым проигрыванием лечит состояние `interrupted` после звонков/блокировки) и дисциплина триггера ядра ST: звук только на успехе (`applyStage1Result.applied` и `stage2.status === 'ready'`), отмена/ошибка/stale молчат. Очередь и полный пайплайн покрываются автоматически — оба пути сходятся в `runStage2ForDraft`/`runStage1ForDraft`. Контекст — долгоживущий синглтон (в отличие от per-beep контекстов ST-Copilot, которые на iOS молчат): никогда не закрывается. Любая ошибка уведомления глотается.
+- **Гейты в порядке ядра ST** (`playMessageSound`): этап включён → пресет ≠ «Без звука» → «только когда вкладка не в фокусе» (`document.hidden` + `hasFocus` — два сигнала, т.к. iOS при сворачивании может не слать blur) → force перекрывает первые два (кнопки ▶).
+- **Секция «Уведомления»** во вкладке «Настройки»: тумблеры этапов (Шаг 1 — выкл по умолчанию; Шаг 2 — вкл: генерация 80–280 с — сценарий «ушёл и жду»; все три референса дефолтят звук в off для быстрых чат-ответов), селект звука на этап из каталога `NOTIFY_SOUNDS` (core.js — единый источник для валидации и UI), громкость 0–100 с живой подписью, «Только когда вкладка не в фокусе» (вкл по умолчанию, как `play_sound_unfocused: true` в ядре), ▶-тест на каждый этап с force.
+- **Тесты**: `tests/notify.test.js` — нормализация настроек, порядок гейтов, force, «none», тихая деградация без Web Audio, resume suspended-контекста, идемпотентный unlock, рендер секции, source-проверка вызовов в пайплайнах. Полный набор 918 pass.
+
+## 2026-09-07 — v0.5.0: отдельный «Размер шрифта» в настройках
+
+- **Второй регулятор** во вкладке «Настройки»: слайдер «Размер шрифта» 85–140% (шаг 5, живое применение, свой «Сброс»). Диапазон уже, чем у масштаба интерфейса: базовые размеры компактны, текст <85% нечитаем, >140% переполняет фиксированные иконки-чипы. Семантика: масштаб интерфейса растит содержимое окна целиком, размер шрифта — дополнительный текстовый множитель поверх (итог = произведение), действует и на шапку окна, которую зум не охватывает.
+- **CSS-хардкод сведён к единой сетке** (`style.css`): инвентаризация нашла 42 px-хардкода `font-size` при 60 использованиях через `--uris-font*`; все 42 переведены на `calc(Npx * var(--uris-font-scale, 1))`, переменные `--uris-font/--uris-font-sm/--uris-font-xs` стали calc от нового `--uris-font-scale`. em-размеры (0.75–0.85em) масштабируются по наследству и не тронуты; `.uris_hint`/`.uris_field_label` (ST-панель расширения) остаются в типографике ST — намеренно. Проверено: px-`line-height` в файле нет (все unitless), `font: inherit` сбрасывает к унаследованному масштабированному размеру, фиксированные боксы (иконки 22–26px, лайтбокс) при 140% деградируют мягко — overflow visible, ellipsis-тексты обрезаются штатно.
+- **core.js**: `fontScale` в defaultSettings, `FONT_SCALE_*` константы, `normalizeFontScale`/`applyFontScale` (общий helper `snapScale`), нормализация в `loadSettings`, публикация `--uris-font-scale` при инициализации. Привязка слайдеров во вкладке обобщена в конфиг-массив `SCALE_CONTROLS`.
+- **Тесты**: `tests/settings-tab.test.js` расширен (свой диапазон fontScale, публикация переменной, живое применение слайдера, сброс обоих). Полный набор 906 pass.
+
+## 2026-09-07 — v0.4.0: разворачиваемый редактор текста (как в ST)
+
+- **Паттерн ST «Expand text area»** (`src/ui/text-editor.js` → `editTextModal()`): у компактных полей появляется кнопка `fa-maximize`; клик открывает большой popup-редактор через `ctx.callGenericPopup` (нативный `<dialog>` ST — рендерится в browser top-layer выше нашего окна, ESC закрытие, Enter в multiline вставляет перенос благодаря `rows>1` — то же правило, что у ST-попапов). Внутри — `textarea.maximized_textarea`: класс совместим с экосистемой ST, официальный Extension-CodeMirror автоматически подменяет такой редактор на продвинутый.
+- **Где**: промпт картинки в «Генерации» (`#urisPrompt`, кнопка в углу карточки; на OK значение пишется обратно и срабатывает обычный autosave- ввод: черновик + живой предпросмотр референсов) и «Инструкция для Stage1» в «Шаблонах» (кнопка в строке заголовка поля; на OK прямое `saveTemplate`, без надежды на bubbling change — fake-dom его не распространяет).
+- **Отмена безопасна**: cancel/Esc возвращает `null`, поле остаётся без изменений. Без поддержки ST-попапов (старые билды) кнопка просто ничего не делает.
+- **Тесты**: `tests/text-editor.test.js` (структура popup-контента, wide/large/rows, OK/Cancel/нет-ST, наличие кнопок в разметке генерации и шаблонов). Полный набор 903 pass.
+
+## 2026-09-07 — v0.3.0: вкладка «Настройки» и масштаб интерфейса
+
+- **Новая вкладка «Настройки»** в плавающем окне (`src/ui/tab-settings.js`): масштаб интерфейса, Debug-режим, «параметры генерации для всех чатов», экспорт/импорт backup, экспорт диагностики/сетевого дампа и очистка диагностики. Тумблеры Debug и «параметры для всех чатов» переехали из ST-панели расширения (там остались «Включить», «Открыть окно» и кнопки действий — они нужны при закрытом окне); подсказка в ST-панели указывает на вкладку.
+- **Масштаб интерфейса** (слайдер 75–150%, шаг 5, живое применение, кнопка «Сброс»): содержимое окна (вкладки + рабочая область) масштабируется через CSS `zoom: var(--uris-scale)`. Зум применён намеренно только к вкладкам и телу окна, не к `#urisWindow`: после стандартизации `zoom` (csswg-drafts#5623, Chromium 128) `getBoundingClientRect()` возвращает масштабированные значения, и зум корневого окна сломал бы drag/resize и сохранение геометрии в `window.js`, а также позиционирование ERR-панели от бейджа. Шапка окна — системный «chrome», не масштабируется; в мобильном полноэкранном режиме зум отключён. Старые WebView без `zoom` молча получают 100%. Значение хранится в `state.settings.uiScale` (`core.js`: `normalizeUiScale` — clamp + snap к шагу; `applyUiScale()` публикует переменную при инициализации).
+- **Рефакторинг переиспользования**: интерактивный импорт backup (файл → нормализация → сводка с выбором merge/replace, включая confirm для replace) вынесен из `index.js` в `data-port.js` (`runImportInteractive()`); очистка всей диагностики — в `diagnostic-dump.js` (`clearAllDiagnostics()`, возвращает pre-clear счётчики для тоста). Обе функции используются ST-панелью и новой вкладкой.
+- **Тесты**: `tests/settings-tab.test.js` (нормализация uiScale в `loadSettings`, рендер вкладки, живое применение слайдера: state + CSS-переменная + debounce-сохранение, сброс, тумблеры). Попутно доведены до зелёного тесты, сломанные guard'ами `__urisTabId`/`isConnected` от 2026-09-06 (`ui-persistence`, `tab-references`: тестовые root'ы теперь выставляют `__urisTabId`, fake-dom получил `isConnected: true`) и CSS-парсер `refs-add-button-css` (zoom-правило перенесено ниже канонического `.uris-body`). Полный набор 897 pass.
+
+## 2026-09-05 — Надёжность генерации и настройки по умолчанию
+
+- Таймаут запроса теперь распространяется на чтение тела ответа (`json`, `blob`, `text`, `arrayBuffer`), а не заканчивается сразу после получения заголовков.
+- Повторные автоматические события для одного сообщения больше не запускают параллельные платные full-pipeline операции.
+- Изменения generation draft сериализуются; Stage 2 прекращается до POST, если prompt или reference corrections изменились во время подготовки.
+- Удаление файла галереи учитывает ссылки из библиотеки референсов и проверяет HTTP-результат удаления.
+- API-ключ подключения сохраняется с fingerprint endpoint/provider; после изменения подключения старый fingerprint больше не используется.
+- Gallery metadata и native files не входят в backup; внешние URL референсов остаются допустимыми.
+- Добавлен глобальный fallback для model, aspect ratio, image size и quality через настройки расширения.
+- Lifecycle-hook `clean` убран: он не выполнял очистку данных и дублировал disable teardown.
+- Очередь и вставка изображения из lightbox в чат остаются отложенными и описаны в `docs/plans/`.
+
+> **Версия релиза** живёт в `manifest.json` (`version`) и является авторитетной.
+> Записи ниже - в обратном хронологическом порядке (новые сверху).
+> Метки `v2.0`-`v2.2` в самом низу - внутренние имена ранних этапов разработки;
+> они описывают предыдущую архитектуру, и модули в них (`stage1-adapter.js`,
+> `parser.js`, `prompt-builder.js`, `prompt-flatter.js`) позже рефакторены в
+> текущие `src/pipeline-*.js`. Воспринимайте эти записи как исторические.
+
+## 2026-09-04 — Фикс: галерея референсов не листается на тач-устройствах
+
+- **Симптом**: на мобильном вкладка «Референсы» (сетка карточек) не прокручивается пальцем, хотя клики работают.
+- **Диагностика**: геометрия скролл-цепочки корректна (проверено рендером настоящего модуля: `#urisMobileGrid` scrollHeight > clientHeight, программный скролл работает — `tests/manual/refs-real-render.html`). Причина — ST-темы с глобальным `button { touch-action: none }`: пересечение touch-action идёт от элемента под пальцем, свайп, начатый на тайле-`<button>`, гасится темой. Тот же класс проблем, что и `pointer-events` для `.uris-tab` (фикс выше по файлу).
+- **Фикс** (`style.css`): `.uris-window button, .uris-picker-overlay button { touch-action: pan-y }` (перекрывает голый `button`-селектор темы по специфичности; тапы сохраняются, drag-чипы — span, не задеты); явный `touch-action: pan-y` у скролл-контейнеров (`.uris-pool-grid`, `.uris-mobile-list`, `.uris-mobile-card-scroll`); `.uris-mobile-screen` переведён на `flex: 1; min-height: 0` вместо опоры только на `height: 100%` (устойчивее процентных цепочек в WebKit/iOS).
+- **Проверка**: в браузере — вычисленный `touch-action` тайла остаётся `pan-y` даже при инжекте «темы» `button { touch-action: none }`; сетка скроллибельна. Регрессия — тест в `tests/popup-viewport-css.test.js`; полный набор 888 pass.
+
+
+## 2026-09-04 — Фикс #2: сетка референсов не скроллится (десктоп-раскладка, Opera Android + низкие окна)
+
+- **Симптом (баг-репорт)**: на Mobile Opera (Android) в галерее референсов нет ползунка, свайп не листает; нижний ряд карточек срезан краем окна. Первый фикс (touch-action, запись выше) не помог.
+- **Диагностика по скриншоту**: на устройстве пользователя отрендерилась ДЕСКТОП-раскладка вкладки (sidebar папок + сетка) внутри мобильного окна. Вьюпорт Оперы попал в «гибрид» между брейкпоинтами: окно ≤768px (мобильный fullscreen) при ширине вкладки ≥480px (порог мобильного стека из `tab-references.js`). Воспроизведено в Chromium на реальном модуле: `tests/manual/refs-real-render.html?cw=600`.
+- **Причина**: `.uris-refs-grid-wrap` был block-контейнером с `overflow: hidden`. Сетка `.uris-pool-grid` ограничивается высотой только как flex-item (`flex: 1; min-height: 0`), а в block-родителе эти свойства инертны: сетка росла до высоты контента, wrap её обрезал. `scrollTop` сетки не двигался вообще (client == scroll). Ломало и десктоп в низком окне (460×560, много референсов) — там просто хватало высоты окон, чтобы не замечать.
+- **Фикс** (`style.css`): `.uris-refs-grid-wrap { display: flex; flex-direction: column; … }` — сетка стала ограниченным flex-item и настоящим scroll-контейнером (`touch-action: pan-y` уже был).
+- **Проверка**: реальный рендер модуля в трёх состояниях — гибрид 700×480/cw=600 (сетка 208/566, скроллится), десктоп 1280×700/cw=1200 (447/1182, скроллится), мобильный стек cw=360 (532/653, скроллится). Регрессия — новый тест в `tests/popup-viewport-css.test.js`; полный набор 889 pass.
+
+## 2026-09-04 — Массовая загрузка референсов (multiple + батч-диалог)
+
+- **Что**: «+ Референс» (десктопный тулбар и мобильные экраны вкладки «Референсы») теперь открывает системный мультивыбор (`<input type=file multiple accept="image/*">`) и батч-диалог вместо поштучного вопроса имени. Работает на iOS/Android/Windows: мультивыбор из фототеки поддерживается повсеместно; iOS сам конвертирует HEIC→JPEG при выборе.
+- **Диалог** (`src/ui/ref-batch-upload.js`): превью-строки с редактируемыми произвольными именами (дефолт — имя файла), «Пронумеровать» по базовому имени («Имя 1..N»), удаление строк, «Добавить ещё» (докидывает файлы к партии — обход лимитов Android-пикеров), дедупликация имён внутри партии. Живёт в мобильном bottom-sheet `.uris-picker-dialog` (использует фикс от 2026-09-03: явные top/left+width/height, работает при ST `body { position: fixed }`).
+- **Загрузка**: последовательная, по одному файлу через существующий пайплайн `ingestReferenceImage → createRef` (пережим в 1024px без изменений); статус по строкам (⏳/✓/✗), ошибка одного файла не роняет остальные (пул ошибок + итоговый toastr), папка назначения — текущая.
+- **«Заменить картинку» в редакторе** остался одиночным (это замена одной картинки).
+- **Тесты**: `tests/ref-batch-upload.test.js` — чистые помощники (имена, дедуп, нумерация) + полный сценарий диалога на фейковом DOM (прогон, изоляция ошибок, «Добавить ещё», правка имён). Ручная страница с реальными стилями ST: `tests/manual/batch-upload-mobile.html`.
+
+## 2026-09-03 — Фикс: попапы невидимы в мобильном SillyTavern (портрет)
+
+
+- **Симптом**: в вертикальной ориентации экрана не были видны пикеры выбора референсов («Выбор для генерации», «Whitelist референсов», «Отдельные карточки»), лайтбокс галереи и ERR-панель; в горизонтальной ориентации они появлялись.
+- **Причина**: ST mobile (`public/css/mobile-styles.css`, `@media ≤1000px`) ставит `body { position: fixed; overflow: hidden }`. Из-за этого содержащий блок fixed-потомков вырождается (html теряет высоту): `inset: 0` давал нулевую высоту оверлея, а привязка `bottom:` уводила элемент за верхний край экрана. В портрете (≤768px) наш мобильный CSS как раз включает bottom-sheet-привязку — отсюда ориентационная разница; окно расширения выживало только за счёт явных `top` + `height: calc(100dvh - …)`.
+- **Фикс** (`style.css`): `.uris-lightbox` и `.uris-picker-overlay` переведены с `inset: 0` на явные `top: 0; left: 0; width: 100%; height: 100vh/100dvh`; мобильная `.uris-error-panel` привязана сверху (`top: calc(var(--uris-st-top) + 48px); bottom: auto`) вместо нижнего bottom-sheet. Попутно `.uris-drag-ghost` поднят с `z-index: 9999` до `100000` — призрак перетаскивания чипов был спрятан за окном расширения (99999).
+- **Проверка**: живая репродукция с реальными стилями ST — `tests/manual/popup-mobile-repro.html` (портрет/ландшафт); статический регрессионный тест — `tests/popup-viewport-css.test.js`.
+
+## 2026-07-20 — Фиксы layout вкладки «Референсы» под Figma
+
+
+- **Desktop row-layout**: `.uris-references` теперь явно `flex-direction: row` — sidebar встроен слева, main (toolbar+grid) в центре, overlay-host справа. Раньше stray-правило `flex-direction: column` в `.uris-body-flush >` ломало row-layout: sidebar оказывался сверху, а overlay-редактор — снизу под сеткой.
+- **Мобильный сброс**: при переключении на вкладку «Референсы» (вызов `render()`) mobile-экран сбрасывается на `folders` — открытая карточка больше не «залипает» и не перекрывает интерфейс при возврате с другой вкладки.
+- **Кнопка назад (‹)**: увеличена до 44×44 px tap-target (min-width/height), font-size 24px, с лёгким hover-фоном. Раньше была 18px с padding 2px 6px — слишком мелкая на мобильном.
+- **Тесты**: два новых теста в `tab-references.test.js` — desktop row-layout (sidebar/main/overlay как sibling'ы) и сброс mobile-экрана при повторном `render()`.
+
+## 2026-07-19 — Редизайн вкладки «Референсы» под Figma
+
+- **Layout**: сайдбар папок (148px, с цветными dot'ами и счётчиками) + плотная сетка карточек 3:4 + overlay-панель редактора справа (260px, открывается по клику на карточку, остаётся открытой при переборе).
+- **Мульти-папки**: карточка теперь состоит в нескольких папках сразу (`folders: string[]`). Старые записи с моно-`folderId` авто-апгрейдятся при чтении — миграция не нужна, без потерь.
+- **Цвета папок**: палитра из 10 цветов, назначается циклически при создании. Dot в сайдбаре, dots (5px) внизу карточек.
+- **Мобильный стек** (<480px): 3-экранная навигация «список папок → сетка → редактор» с кнопкой ‹ назад.
+- **Multi-folder toggle** в редакторе: grid 2×N с цветными dot'ами, чек-марки.
+- **Picker overlay** (`showPoolPicker`): фильтрация переведена на `filterRefsByFolder`, карточки в нескольких папках показываются в каждой из них. Сигнатура не изменилась — вкладка Генерация не затронута.
+- **Cosmetic-проход** по остальным вкладкам: хардкод-цвета заменены на `--uris-*` токены, сохранена адаптивность к ST-теме.
+- **Адаптив**: `ResizeObserver` на ширине вкладки определяет desktop/mobile (точка 480px), а не `window.innerWidth`.
+
+## 2026-07-18 — Remove global bundles, scope configuration to chats
+
+- **Removed the global bundle / Profiles model.** Each chat now stores its complete generation configuration independently in `chatMetadata.uris_binding` as schema-v4 `{ schemaVersion: 4, config, refs }`.
+- **Profiles tab (`src/ui/tab-profiles.js`) and the bundle CRUD module (`src/bundles.js`) are removed.** No new bundles are created, selected, mutated, or deleted during normal operation.
+- **Legacy data is still readable.** Backups containing `uris_bundles` and chat `bundleId` are accepted on import; unopened chats with legacy bindings migrate lazily to schema v4 the first time they are loaded.
+- **Dangling legacy `bundleId` no longer falls back to a default bundle.** It produces fixed schema-v4 defaults, so one chat can never inherit another chat's configuration.
+- **Runtime state cleanup:** removed `state.activeBundleId`, `state.activeTextProfileId`, and `state.activeReferencesProfileId`.
+- **Updated tests:** `tests/chat-binding.test.js` and `tests/settings-migration.test.js` no longer assert old bundle CRUD/projection behavior; they assert schema-v4 defaults, chat independence, and lazy legacy migration.
+
+> **Historical context:** The July bundle/profiles design (see entries below and historical specs) is superseded by the chat-scoped model. Documents describing bundles as the current architecture are retained for historical reference only.
+
+## 2026-07-18 — Chat-scoped configuration import/export (backup v4)
+
+- Backup format bumped to **v4**: current chat's complete schema-v4 generation configuration (`config` + `refs`) is exported under `chatMetadata.<chatId>.uris_binding`.
+- Import restores schema-v4 chat metadata directly; the next chat-config load uses the restored values without re-migration.
+- Legacy backups with `uris_bundles` and chat `bundleId` remain accepted; the legacy bundle pool is imported so unopened chats can still migrate lazily.
+- Backup summary now distinguishes chat configurations from legacy bundles.
+- UI text updated to describe chat configurations instead of bundle bindings.
+- Tests: `tests/data-port.test.js` covers schema-v4 export/import round-trip and legacy import compatibility.
+
+## 2026-07-18 — Self-healing привязки бандла
+
+> **Superseded same day:** the global bundle model itself was removed in favor of per-chat schema-v4 configuration. The self-healing behavior described here existed only during the final hours of the bundle model.
+
+- `applyBindingForCurrentChat` больше не бросает чат в пустой state, когда привязанный бандл удалён: «висячая» привязка приравнена к отсутствующей — чат перепривязывается к дефолтному бандлу (первый из пула или новый «Базовый»), whitelist референсов и overrides в `chatMetadata` сохраняются. Раньше это падало с `Image-коннект не выбран` при живых референсах и чинилось только случайным side-effect `persistBundleFields`.
+- Удаление активного бандла во вкладке «Профили» сразу перепривязывает текущий чат вместо того, чтобы оставлять привязку висячей до перезагрузки.
+- Тесты: `tests/chat-binding.test.js` (fallback на дефолтный, создание «Базового» при пустом пуле, регрессии валидной/отсутствующей привязки).
+
+## 2026-07-17 — Provider-owned reference capabilities
+
+- Удалена глобальная таблица `REF_CAPABILITIES`: поддержку и протокол референсов теперь объявляет сам image-провайдер.
+- Добавлены настройки референсов для каждого image-коннекта: auto/off/custom protocol и необязательный предел 1–4.
+- UI и фактическая отправка используют единый effective policy; неподдерживаемые или лишние референсы больше не отбрасываются без объяснения.
+- Stage 1/Stage 2 scene resolution, snapshots, очередь, retry и image recovery не изменены.
+- Работа с референсами Agnes, ComfyUI и A1111 явно помечена как временно отложенная.
+
+## Unreleased
+
+### Референсы — redesign v2 (2026-07-17)
+- **UI**: `#urisRefsPanel` переделан в двухъярусную компоновку: верхняя лента effective refs (→ Stage 2) с `＋`-плиткой и `×` на каждый chip; нижние `<details>`-секции (Слоты / NPC whitelist / Stage 1 описания).
+- **Удалён `mode`** (never/smart/always). Поведение всегда: prompt-driven auto-detect + persistent per-message corrections.
+- **`buildCandidates`** теперь берёт только char slot, user slot, и NPC whitelist (`extraRefIds`); записи пула вне whitelist больше не являются кандидатами.
+- **Алиасы `{{char}}/{{user}}`**: в slot row добавлено текстовое поле, сохраняется в `chatRefs.{char,user}Slot.aliases`.
+- **`{{user}}` аватар** теперь подгружается в `imagePath` через новый `resolveUserAvatarPathForCurrent()` — Stage 2 получает user-аватар как изображение.
+- Source-бейджи (полоска снизу чипа): char=золото, user=синий, npc=серый.
+
+### Безопасный импорт/экспорт данных
+- В панели настроек URIS вернулись кнопки **Экспорт данных** и **Импорт данных**.
+- Backup формата **v4** переносит: референсы, папки, шаблоны, legacy-бандлы для миграции, коннекты, безопасные настройки и полную конфигурацию текущего чата (schema v4).
+- **Не переносятся**: галерея, API-ключи, серверные secret IDs.
+- Импорт поддерживает режимы `merge` и `replace`; перед `replace` требуется явное подтверждение.
+- Повреждённый или неподдерживаемый backup отклоняется до первой записи; при ошибке записи выполняется rollback.
+- Старые backup v2/v3 адаптируются к v4, но секреты и галерея из них не восстанавливаются.
+- Импортированные коннекты получают `secretId: ''`; ключи нужно вводить заново.
+- Chat bindings сохраняются с исходным `chatId`; автоматическое сопоставление между разными чатами не производится.
+
+### Референсы
+- Pinned `{{user}}`/`{{char}}` pool ref now participates in scene-first Stage2 on the Generate tab (previously dropped as an ambiguous NPC). Stage2 mode «Никогда» zeroes references on the wire and in the live preview.
+
+### Генерация для любого сообщения в ленте
+- Новый модуль `src/post-navigator.js` отвечает за выбор и фильтрацию сообщений для генерации.
+- Переключатель флоу генерации во вкладке «Генерация»:
+  - **Только AI** — навигация и авто-генерация только для ответов AI (`GENERATION_ENDED`);
+  - **Только пользователь** — только для сообщений пользователя (`MESSAGE_SENT`);
+  - **Все сообщения** — любое сообщение может быть источником сцены;
+  - **Ручной выбор** — навигация по всем сообщениям, авто-генерация отключена.
+- Стрелки ←/→ в панели «Генерация» теперь ходят по сообщениям согласно выбранному флоу.
+- `src/events.js` больше не завязан на `!is_user`: авто-триггеры читают фильтр из `post-navigator.js`.
+- Обратная совместимость: по умолчанию флоу `ai-only`, что повторяет прежнее поведение.
+
+### Тесты
+- Добавлен `tests/post-navigator.test.js` (фильтры, навигация, fallback при смене флоу).
+- Добавлен `tests/events.test.js` (подписки и поведение под разные флоу).
+- Полный набор тестов проходит (`node --test tests/*.test.js`).
+
+## v2.2 — Universal Stage 1 Adapter & Simplified UI (2026-07-09)
+
+### Stage 1: любой text-LLM теперь подходит
+- Новый универсальный адаптер `src/stage1-adapter.js` распознаёт:
+  - inline image tags (`<img data-iig-instruction='...' src="[IMG:GEN]">`, `[IMG:GEN:{...}]`);
+  - structured drafts (`camera`, `characters`, `panels`, …);
+  - legacy `{style, prompt, aspectRatio, imageSize}`;
+  - произвольный JSON (`subject`, `setting`, `action`, `technical_specifications`, …) через эвристики и adapter-prompt fallback;
+  - plain text — весь ответ становится `prompt`.
+- `src/parser.js` теперь асинхронный и всегда сохраняет сырое содержимое ответа в `instruction.raw`.
+- Raw-режим в `src/prompt-builder.js` явно просит модель вернуть JSON вида `{style, prompt, aspectRatio, imageSize}`.
+- `src/pipeline.js` применяет `state.styleOverride` только в advanced-режиме и пересобирает промпт при наличии draft.
+
+### UI вкладки «Генерация» (`src/ui/tab-generate.js`)
+- **Простой режим (по умолчанию):**
+  - видны только шаблон, персонажи, Stage1/Stage2, промпт, стороны и размер;
+  - убраны захардкоженные «Тип кадра» и «Стиль»;
+  - сырой JSON спрятан.
+- **Advanced-режим** включается глобальным тогглом (`extensionSettings.uris_advancedMode`):
+  - выбор `outputKind`;
+  - структур-редактор draft (если есть);
+  - `Style override` — дополняет или заменяет стиль модели;
+  - `Quality` (`auto` / `low` / `medium` / `high`);
+  - показ/редактирование сырого JSON с кнопкой «Пересобрать промпт из JSON».
+- Новые стили для advanced-секции в `style.css`.
+
+### Тесты
+- Добавлен `tests/stage1-adapter.test.js` (inline tags, structured drafts, smart extraction, plain text fallback).
+- Обновлён `tests/parser.test.js` под асинхронный парсер и поле `raw`.
+- Полный набор тестов проходит (`node --test tests/*.test.js`).
+
+## v2.1 — Structured editor & prompt flatter
+- `prompt-flatter.js` собирает финальную строку из draft по `outputKind`.
+- Вкладка «Генерация» получила kind-селектор, style control (Auto/Custom/Random) и live re-flatten.
+
+## v2.0 — Workflow redesign
+- Переработка окна под модель «workflow как в ComfyUI».
+- Независимые переключатели Stage1 / Stage2.
+- Отдельные вкладки: API, Референсы, Генерация, Галерея, Профили.
+- Бандлы — именованные атомарные пресеты всего flow.

@@ -1,0 +1,18 @@
+{
+    "display_name": "UR Image Studio",
+    "loading_order": 100,
+    "dependencies": [],
+    "js": "index.js",
+    "css": "style.css",
+    "author": "local",
+    "version": "0.7.0",
+    "homePage": "",
+    "auto_update": false,
+    "hooks": {
+        "install": "onInstall",
+        "update": "onUpdate",
+        "enable": "onEnable",
+        "disable": "onDisable",
+        "activate": "onActivate"
+    }
+}

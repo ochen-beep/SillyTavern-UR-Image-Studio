@@ -1,0 +1,78 @@
+<!doctype html>
+<!--
+    Ручная проверка батч-диалога массовой загрузки референсов
+    (src/ui/ref-batch-upload.js) на мобильной геометрии, включая окружение
+    ST mobile с body { position: fixed } (см. popup-mobile-repro.html).
+
+    Запуск:  python -m http.server 8931  (из корня проекта)
+             открыть http://127.0.0.1:8931/tests/manual/batch-upload-mobile.html
+    В DevTools — тулбар устройств: портрет 390×844 / ландшафт 844×390 / десктоп.
+
+    deps застаблены: ingest «загружает» 300 мс, createRef пишет в консоль.
+    Чек-лист: bottom-sheet виден и не уезжает за экран; имена редактируются;
+    «Пронумеровать» переименовывает; «Добавить ещё» докидывает строки;
+    загрузка идёт построчно со статусами ✓/✗; «Готово» закрывает.
+-->
+<html lang="ru">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>UR Image Studio — batch upload manual test</title>
+    <link rel="stylesheet" href="st-assets/st-style.css?v=1">
+    <link rel="stylesheet" href="st-assets/st-mobile.css?v=1">
+    <link rel="stylesheet" href="../../style.css?v=batch1">
+    <style>
+        html { --uris-st-top: 40px; --uris-st-bottom: 120px; }
+        body { margin: 0; background: #1a1a2e; color: #eee; font-family: system-ui, sans-serif; }
+        #top-bar { position: fixed; top: 0; left: 0; right: 0; height: 40px; background: #222244; z-index: 3005; display: flex; align-items: center; padding: 0 12px; }
+        #send_form { position: fixed; bottom: 0; left: 0; right: 0; height: 120px; background: #222244; z-index: 30; display: flex; align-items: center; padding: 0 12px; }
+        #openBtn { position: fixed; top: 48px; left: 8px; z-index: 100001; padding: 10px 14px; }
+    </style>
+</head>
+<body class="mobile">
+    <div id="top-bar">ST #top-bar (40px)</div>
+    <div id="send_form">ST #send_form (120px)</div>
+    <button id="openBtn">Батч-загрузка (5 файлов)</button>
+    <script type="module">
+        import { openBatchUploadDialog } from '../../src/ui/ref-batch-upload.js';
+
+        // Генерируем картинки-заглушки (без сети), с повторяющимся именем для дедупа
+        const makeFile = (label) => new Promise(resolve => {
+            const c = document.createElement('canvas');
+            c.width = 320; c.height = 400;
+            const ctx = c.getContext('2d');
+            ctx.fillStyle = ['#445', '#454', '#544', '#455', '#554'][label.charCodeAt(0) % 5];
+            ctx.fillRect(0, 0, 320, 400);
+            ctx.fillStyle = '#fff';
+            ctx.font = '48px system-ui';
+            ctx.textAlign = 'center';
+            ctx.fillText(label, 160, 210);
+            c.toBlob(blob => resolve(new File([blob], `${label}.png`, { type: 'image/png' })), 'image/png');
+        });
+
+        const log = (...a) => console.log('[batch]', ...a);
+        let n = 0;
+        const deps = {
+            ingest: async (file, id) => {
+                await new Promise(r => setTimeout(r, 300));
+                log('ingest', file.name, '→', id);
+                return { imagePath: `stub://${id}.png`, metadata: { mime: file.type, width: 320, height: 400 } };
+            },
+            createRef: async (data) => {
+                n += 1;
+                const ref = { id: `stub_ref_${n}`, ...data };
+                log('createRef', ref.name, 'folders:', data.folders);
+                return ref;
+            },
+            recordUrisError: (e) => log('error-pool:', e.message),
+        };
+
+        document.getElementById('openBtn').addEventListener('click', async () => {
+            const files = await Promise.all([
+                makeFile('hero'), makeFile('sidekick'), makeFile('hero'), makeFile(''), makeFile('villain'),
+            ]);
+            openBatchUploadDialog({ files, folderIds: ['stub-folder'], deps });
+        });
+    </script>
+</body>
+</html>

@@ -1,0 +1,154 @@
+<!doctype html>
+<!--
+    Рендер НАСТОЯЩЕЙ вкладки «Референсы» (src/ui/tab-references.js) со стабами
+    SillyTavern и 30 референсами — для диагностики мобильного скролла.
+
+    Запуск: python -m http.server 8931 → /tests/manual/refs-real-render.html
+    Кнопка «Диагностика» печатает метрики цепочки скролла (grid screen).
+-->
+<html lang="ru">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>URIS — real refs tab render (scroll diagnostics)</title>
+    <link rel="stylesheet" href="st-assets/st-style.css?v=1">
+    <link rel="stylesheet" href="st-assets/st-mobile.css?v=1">
+    <link rel="stylesheet" href="../../style.css?v=scroll2">
+    <style>
+        html { --uris-st-top: 40px; --uris-st-bottom: 120px; }
+        #top-bar { position: fixed; top: 0; left: 0; right: 0; height: 40px; background: #222244; z-index: 3005; }
+        #send_form { position: fixed; bottom: 0; left: 0; right: 0; height: 120px; background: #222244; z-index: 30; }
+        #diagBtn { position: fixed; top: 48px; right: 8px; z-index: 100001; padding: 8px 10px; }
+        #diag { position: fixed; top: 88px; right: 8px; z-index: 100001; background: #000c; color: #9f9;
+                font: 11px/1.45 monospace; padding: 8px; max-width: 78vw; max-height: 60vh; overflow: auto; white-space: pre; }
+    </style>
+</head>
+<body class="mobile">
+    <div id="top-bar">ST #top-bar</div>
+    <div id="send_form">ST #send_form</div>
+    <button id="diagBtn">Диагностика</button>
+    <div id="diag" hidden></div>
+
+    <div id="urisWindow" class="uris-window uris-mobile">
+        <div class="uris-header" id="urisHeader">
+            <span class="uris-title">🎨 UR Image Studio</span>
+            <div class="uris-header-actions">
+                <button class="uris-icon-btn uris-error-badge" hidden>ERR <span class="uris-error-count">0</span></button>
+                <button class="uris-icon-btn" id="urisClose">✕</button>
+            </div>
+        </div>
+        <div class="uris-error-panel" id="urisErrorPanel" hidden></div>
+        <div class="uris-tabs" id="urisTabs">
+            <button class="uris-tab">Генерация</button>
+            <button class="uris-tab uris-tab-active">Референсы</button>
+        </div>
+        <div class="uris-body" id="urisBody"></div>
+    </div>
+
+    <script type="module">
+        // ── ST-стабы (как в тестах, см. tests/tab-references.test.js) ──
+        const memoryStore = new Map();
+        const makeLocalforage = () => ({
+            async getItem(key) { return memoryStore.has(key) ? memoryStore.get(key) : []; },
+            async setItem(key, value) { memoryStore.set(key, value); },
+            async removeItem(key) { memoryStore.delete(key); },
+        });
+        let _chatMetadata = {};
+        globalThis.SillyTavern = {
+            getContext: () => ({
+                extensionSettings: {},
+                saveSettingsDebounced: () => {},
+                saveMetadata: () => {},
+                getRequestHeaders: () => ({}),
+                get chatMetadata() { return _chatMetadata; },
+            }),
+            libs: { localforage: makeLocalforage() },
+        };
+        globalThis.toastr = { info() {}, success() {}, warning() {}, error() {} };
+
+        const img = (i) => 'data:image/svg+xml,' + encodeURIComponent(
+            `<svg xmlns="http://www.w3.org/2000/svg" width="120" height="160"><rect width="120" height="160" fill="#3a4a5a"/><text x="60" y="85" text-anchor="middle" fill="#fff" font-size="20">${i}</text></svg>`);
+
+        const { render } = await import('../../src/ui/tab-references.js');
+        const { setRefStoreForTests, resetRefStoreForTests } = await import('../../src/refs-library.js');
+
+        // Браузерный мини-стор (tests/_helpers.js тянет node:zlib — в браузере не грузится).
+        // Интерфейс тот же, что у makeReferenceStore в тестах.
+        const collections = new Map();
+        const clone = (v) => JSON.parse(JSON.stringify(v));
+        const store = {
+            async available() { return true; },
+            async list(name) { return clone(collections.get(name) || []); },
+            async create(name, payload) {
+                const records = collections.get(name) || [];
+                const persisted = { ...clone(payload), updatedAt: 'stub-time' };
+                records.push(persisted);
+                collections.set(name, records);
+                return clone(persisted);
+            },
+            async update(name, id, payload) {
+                const records = collections.get(name) || [];
+                const idx = records.findIndex(r => r.id === id);
+                if (idx === -1) throw new Error('not found');
+                records[idx] = { ...records[idx], ...clone(payload), id };
+                return clone(records[idx]);
+            },
+            async delete(name, id) {
+                collections.set(name, (collections.get(name) || []).filter(r => r.id !== id));
+            },
+        };
+
+        resetRefStoreForTests();
+        for (let i = 1; i <= 30; i++) {
+            await store.create('refs', { id: `r${i}`, name: `Реф ${i}`, imagePath: img(i), folders: [] });
+        }
+        setRefStoreForTests(store);
+
+        const root = document.getElementById('urisBody');
+        // ?cw=NNN — ширина вкладки для брейкпоинта (480) мобильного стека.
+        // По умолчанию 360 (телефон). 480..768 — «гибрид»: окно мобильное,
+        // но вкладка шире 480 → рендерится ДЕСКТОП-раскладка (сайдбар+сетка).
+        const cwParam = Number(new URLSearchParams(location.search).get('cw'));
+        Object.defineProperty(root, 'clientWidth', { value: cwParam > 0 ? cwParam : 360, configurable: true });
+        try {
+            await render(root);
+            // Экран «grid» — как после выбора папки
+            root.querySelector('.uris-mobile-folder-item')?.click();
+            await new Promise(r => setTimeout(r, 100));
+            window.__renderResult = { ok: true, classes: root.className, htmlHead: root.innerHTML.slice(0, 120) };
+        } catch (e) {
+            window.__renderResult = { ok: false, message: e?.message, stack: String(e?.stack).split('\n').slice(0, 6).join(' | ') };
+        }
+        console.log('render result', window.__renderResult);
+
+        document.getElementById('diagBtn').addEventListener('click', () => {
+            const grid = document.querySelector('#urisMobileGrid');
+            const chain = [
+                ['#urisWindow', 'window'],
+                ['#urisBody', 'body'],
+                ['.uris-references', 'refs'],
+                ['#urisMobileScreen', 'screen'],
+            ];
+            const lines = [`viewport ${innerWidth}x${innerHeight}`, `grid found: ${!!grid}`];
+            if (grid) {
+                for (const [sel, label] of chain) {
+                    const el = document.querySelector(sel);
+                    if (!el) continue;
+                    const cs = getComputedStyle(el);
+                    lines.push(`${label}: h=${Math.round(el.getBoundingClientRect().height)} csH=${cs.height} ov=${cs.overflowY} flex=${cs.flex} minH=${cs.minHeight} display=${cs.display}`);
+                }
+                lines.push(`grid: client=${grid.clientHeight} scroll=${grid.scrollHeight} scrollable=${grid.scrollHeight > grid.clientHeight}`);
+                grid.scrollTop = 200;
+                lines.push(`scrollTop after set 200 → ${grid.scrollTop}`);
+                grid.scrollTop = 0;
+            } else {
+                lines.push(`#urisBody innerHTML head: ${root.innerHTML.slice(0, 120)}`);
+            }
+            const out = document.getElementById('diag');
+            out.hidden = false;
+            out.textContent = lines.join('\n');
+            console.log(lines.join('\n'));
+        });
+    </script>
+</body>
+</html>

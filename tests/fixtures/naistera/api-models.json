@@ -1,0 +1,26 @@
+[
+  {
+    "id": "nano-banana",
+    "name": "Nano Banana",
+    "media_kind": "image",
+    "max_reference_images": 4
+  },
+  {
+    "id": "grok-pro",
+    "name": "Grok Pro",
+    "media_kind": "image",
+    "max_reference_images": 3
+  },
+  {
+    "id": "novelai",
+    "name": "NovelAI",
+    "media_kind": "image",
+    "max_reference_images": 0
+  },
+  {
+    "id": "grok-video",
+    "name": "Grok Video",
+    "media_kind": "video",
+    "max_reference_images": 0
+  }
+]

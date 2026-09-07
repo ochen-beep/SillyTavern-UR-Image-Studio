@@ -1,0 +1,909 @@
+// @ts-check
+// Unit tests for src/ui/tab-generate.js pure helpers.
+import { test, beforeEach } from 'node:test';
+import assert from 'node:assert/strict';
+import { readFile } from 'node:fs/promises';
+
+// DOM stubs required before importing modules that use document at runtime.
+globalThis.document = {
+    createElement: () => ({
+        getContext: () => ({ drawImage: () => {} }),
+        toDataURL: (type, _q) => `data:${type || 'image/png'};base64,compressed`,
+        set textContent(_v) { this._text = _v; },
+        get innerHTML() { return String(this._text ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;'); },
+    }),
+};
+globalThis.window = { location: { origin: 'http://localhost:8000' }, dispatchEvent: () => {} };
+globalThis.SillyTavern = {
+    getContext: () => ({ extensionSettings: {}, saveSettingsDebounced: () => {}, getRequestHeaders: () => ({}) }),
+    libs: { localforage: { getItem: async () => null, setItem: async () => {}, removeItem: async () => {} } },
+};
+
+const { state } = await import('../src/core.js');
+const { POST_FILTER } = await import('../src/post-navigator.js');
+const { hashMessage } = await import('../src/generation-drafts.js');
+const { MAX_REFS } = await import('../src/refs-library.js');
+const { MAX_REFERENCE_CAPABILITY } = await import('../src/reference-limits.js');
+const tabGenerate = await import('../src/ui/tab-generate.js');
+const { decidePromptActions, buildGenerateViewModel, renderGenerateMarkup, readGenerationParams, enqueueCurrent, updateReferenceCorrections, refreshReferencePanel, buildReferencePanelState, resolveServerOwnedReferencePolicy, resolveConnectionReferencePolicy, getSnapshotReferencePolicy } = tabGenerate;
+
+beforeEach(() => {
+    state.settings = {
+        generationFlow: POST_FILTER.AI_ONLY,
+        advancedMode: false,
+    };
+});
+
+function baseVm(overrides = {}) {
+    const { draft, snapshot, messageText, automationMode = 'manual', templates = [], activeTemplateId = null } = overrides;
+    return buildGenerateViewModel({ draft, snapshot, automationMode, templates, messageText, activeTemplateId });
+}
+
+test('decidePromptActions builds prompt and disables Stage 2 when prompt is empty', () => {
+    assert.deepEqual(decidePromptActions({ prompt: '   ', promptOrigin: 'stage1' }), {
+        stage1Action: 'build-prompt', canGenerateImage: false,
+    });
+});
+
+test('decidePromptActions rebuilds prompt and enables Stage 2 for generated prompt', () => {
+    assert.deepEqual(decidePromptActions({ prompt: 'a cat', promptOrigin: 'stage1' }), {
+        stage1Action: 'rebuild-prompt', canGenerateImage: true,
+    });
+});
+
+test('decidePromptActions rebuilds prompt and enables Stage 2 for manual prompt', () => {
+    assert.deepEqual(decidePromptActions({ prompt: 'a cat', promptOrigin: 'manual' }), {
+        stage1Action: 'rebuild-prompt', canGenerateImage: true,
+    });
+});
+
+test('buildGenerateViewModel detects stale draft when message hash changed', () => {
+    const draft = { chatId: 'c', msgId: 1, messageHash: 'old-hash', prompt: 'a cat', promptOrigin: 'stage1' };
+    const vm = buildGenerateViewModel({
+        draft,
+        snapshot: null,
+        automationMode: 'manual',
+        templates: [],
+        messageText: 'new message text',
+    });
+    assert.equal(vm.isStale, true);
+    assert.equal(vm.stage1Action, 'rebuild-prompt');
+    assert.equal(vm.canGenerateImage, true);
+});
+
+test('buildGenerateViewModel keeps generate-image when draft matches message hash', () => {
+    const messageText = 'same message';
+    const draft = { chatId: 'c', msgId: 1, messageHash: hashMessage(messageText), prompt: 'a cat', promptOrigin: 'stage1' };
+    const vm = buildGenerateViewModel({
+        draft,
+        snapshot: null,
+        automationMode: 'manual',
+        templates: [],
+        messageText,
+    });
+    assert.equal(vm.isStale, false);
+    assert.equal(vm.stage1Action, 'rebuild-prompt');
+    assert.equal(vm.canGenerateImage, true);
+});
+
+test('buildGenerateViewModel surfaces stage1 and stage2 errors', () => {
+    const draft = {
+        prompt: 'x',
+        messageHash: 'h',
+        stage1: { status: 'error', error: 'stage1 failed' },
+        stage2: { status: 'error', error: 'stage2 failed' },
+    };
+    const vm1 = buildGenerateViewModel({ draft, snapshot: null, automationMode: 'manual', templates: [], messageText: 'x' });
+    assert.equal(vm1.stage1Error, 'stage1 failed');
+    const vm2 = buildGenerateViewModel({
+        draft: { ...draft, stage1: { status: 'ok' } },
+        snapshot: null,
+        automationMode: 'manual',
+        templates: [],
+        messageText: 'x',
+    });
+    assert.equal(vm2.stage2Error, 'stage2 failed');
+});
+
+test('buildGenerateViewModel passes snapshot ambiguities and refs', () => {
+    const snapshot = {
+        chatId: 'c', msgId: 1, messageHash: 'h', contextRevision: 1, entities: [],
+        stage1Descriptions: [{ id: 'aria', name: 'Aria', description: 'desc' }],
+        stage2Refs: [{ id: 'aria', name: 'Aria', imagePath: '' }],
+        ambiguities: [{ mention: 'she', candidateIds: ['aria', 'luna'] }],
+    };
+    const vm = buildGenerateViewModel({
+        draft: { prompt: 'x', messageHash: 'h' },
+        snapshot,
+        automationMode: 'manual',
+        templates: [],
+        messageText: 'x',
+    });
+    assert.deepEqual(vm.ambiguities, snapshot.ambiguities);
+    assert.deepEqual(vm.refs, snapshot.stage2Refs);
+    assert.deepEqual(vm.descriptions, snapshot.stage1Descriptions);
+});
+
+test('Generate markup no longer renders browser pending recovery rows', () => {
+    const html = renderGenerateMarkup(buildGenerateViewModel({
+        draft: { prompt: 'x', aspectRatio: '1:1', imageSize: '1K', quality: 'auto', messageHash: 'h' },
+        snapshot: null,
+        automationMode: 'manual',
+        templates: [],
+        messageText: 'x',
+    }));
+    assert.doesNotMatch(html, /uris-browser-pending/);
+});
+
+test('renderGenerateMarkup renders rebuild and enabled Stage 2 for nonempty prompt', () => {
+    const messageText = 'message text';
+    const draft = { prompt: 'a cat', aspectRatio: '9:16', imageSize: '2K', quality: 'high', templateId: null, messageHash: hashMessage(messageText) };
+    const markup = renderGenerateMarkup(buildGenerateViewModel({
+        draft,
+        snapshot: null,
+        automationMode: 'manual',
+        templates: [],
+        messageText,
+    }));
+    assert.match(markup, /id="urisPrompt"/);
+    assert.match(markup, /id="urisBuildPrompt"[^>]*>\s*<i[^>]*><\/i> Перестроить промпт/);
+    assert.match(markup, /id="urisGenerateImage"(?![^>]*disabled)[^>]*>\s*<i[^>]*><\/i> Сгенерировать/);
+    assert.doesNotMatch(markup, /id="urisPrimaryGenerate"/);
+    assert.match(markup, /a cat/);
+});
+
+test('renderGenerateMarkup splits params into two rows (format + behavior)', () => {
+    const messageText = 'message text';
+    const draft = { prompt: 'a cat', aspectRatio: '9:16', imageSize: '2K', quality: 'high', templateId: null, messageHash: hashMessage(messageText) };
+    const markup = renderGenerateMarkup(baseVm({ draft, messageText }));
+    // Two .uris-gen-params rows: format (Стороны/Размер/Quality) + behavior (Шаблон/Автоматизация/Флоу).
+    assert.equal((markup.match(/class="uris-gen-params"/g) || []).length, 2);
+    for (const id of ['urisAspect', 'urisImgSize', 'urisQuality', 'urisTemplate', 'urisAutomationMode', 'urisGenerationFlow']) {
+        assert.match(markup, new RegExp(`id="${id}"`));
+    }
+    // Split point: Quality ends row 1, Шаблон opens row 2.
+    const first = markup.indexOf('class="uris-gen-params"');
+    const second = markup.indexOf('class="uris-gen-params"', first + 1);
+    assert.ok(markup.indexOf('id="urisQuality"') < second, 'Quality sits in row 1');
+    assert.ok(second < markup.indexOf('id="urisTemplate"'), 'Шаблон sits in row 2');
+});
+
+test('renderGenerateMarkup renders build and disabled Stage 2 for whitespace prompt', () => {
+    const messageText = 'message text';
+    const draft = { prompt: '   ', aspectRatio: '9:16', imageSize: '2K', quality: 'high', templateId: null, messageHash: hashMessage(messageText) };
+    const markup = renderGenerateMarkup(baseVm({ draft, messageText }));
+    assert.match(markup, /id="urisBuildPrompt"(?![^>]*disabled)[^>]*>\s*<i[^>]*><\/i> Построить промпт/);
+    assert.match(markup, /id="urisGenerateImage"[^>]*disabled[^>]*>\s*<i[^>]*><\/i> Сгенерировать/);
+});
+
+test('renderGenerateMarkup does not ask for confirmation before replacing manual prompt', () => {
+    const messageText = 'message text';
+    const draft = { prompt: 'manual edit', promptOrigin: 'manual', aspectRatio: '9:16', imageSize: '2K', quality: 'high', messageHash: hashMessage(messageText) };
+    const markup = renderGenerateMarkup(baseVm({ draft, messageText }));
+    assert.match(markup, /Перестроить промпт/);
+    assert.doesNotMatch(markup, /confirm|подтверд|заменить ручн/i);
+});
+
+test('renderGenerateMarkup shows stale badge when draft is stale', () => {
+    const draft = { prompt: 'a cat', aspectRatio: '9:16', imageSize: '2K', quality: 'high', templateId: null, messageHash: 'h' };
+    const vm = buildGenerateViewModel({
+        draft,
+        snapshot: null,
+        automationMode: 'manual',
+        templates: [],
+        messageText: 'different message',
+    });
+    const markup = renderGenerateMarkup(vm);
+    assert.match(markup, /uris-draft-stale/);
+    assert.match(markup, /Перестроить промпт/);
+    assert.match(markup, /id="urisGenerateImage"(?![^>]*disabled)/);
+});
+
+test('renderGenerateMarkup renders template and automation mode selectors', () => {
+    const draft = { prompt: 'a cat', aspectRatio: '9:16', imageSize: '2K', quality: 'high', templateSelection: 'override', templateId: 'tpl-1', messageHash: 'h' };
+    const templates = [{ id: 'tpl-1', name: 'Fantasy' }, { id: 'tpl-2', name: 'Sci-fi' }];
+    const markup = renderGenerateMarkup(buildGenerateViewModel({
+        draft,
+        snapshot: null,
+        automationMode: 'full-pipeline',
+        templates,
+        messageText: 'a cat',
+    }));
+    assert.match(markup, /id="urisTemplate"/);
+    assert.match(markup, /value="tpl-1"[^>]*\sselected|selected[^>]*value="tpl-1"/);
+    assert.match(markup, /id="urisAutomationMode"/);
+    assert.match(markup, /value="full-pipeline"[^>]*\sselected|selected[^>]*value="full-pipeline"/);
+});
+
+test('renderGenerateMarkup selects active template for a default draft', () => {
+    const messageText = 'scene';
+    const draft = {
+        templateSelection: 'default', templateId: null,
+        messageHash: hashMessage(messageText), prompt: '',
+        aspectRatio: '1:1', imageSize: '1K', quality: 'auto',
+    };
+    const markup = renderGenerateMarkup(baseVm({
+        draft, messageText,
+        templates: [{ id: 'tpl-active', name: 'Active' }, { id: 'tpl-other', name: 'Other' }],
+        activeTemplateId: 'tpl-active',
+    }));
+    assert.match(markup, /value="tpl-active"[^>]*selected/);
+    assert.doesNotMatch(markup, /value="tpl-other"[^>]*selected/);
+});
+
+test('renderGenerateMarkup renders unknown active template fallback for a default draft', () => {
+    const messageText = 'scene';
+    const draft = {
+        templateSelection: 'default', templateId: null,
+        messageHash: hashMessage(messageText), prompt: '',
+        aspectRatio: '1:1', imageSize: '1K', quality: 'auto',
+    };
+    const markup = renderGenerateMarkup(baseVm({
+        draft, messageText,
+        templates: [{ id: 'tpl-other', name: 'Other' }],
+        activeTemplateId: 'tpl-deleted',
+    }));
+    const selectBlock = markup.match(/<select[^>]*id="urisTemplate"[^>]*>[\s\S]*?<\/select>/)?.[0];
+    assert.ok(selectBlock);
+    assert.match(selectBlock, /<option value=""[^>]*>— базовый режим —<\/option>/);
+    assert.match(selectBlock, /<option value="tpl-deleted" selected>tpl-deleted<\/option>/);
+    assert.doesNotMatch(selectBlock, /<option value="tpl-other"[^>]*selected/);
+});
+
+test('renderGenerateMarkup keeps explicit base override selected', () => {
+    const messageText = 'scene';
+    const draft = {
+        templateSelection: 'override', templateId: null,
+        messageHash: hashMessage(messageText), prompt: '',
+        aspectRatio: '1:1', imageSize: '1K', quality: 'auto',
+    };
+    const markup = renderGenerateMarkup(baseVm({
+        draft, messageText,
+        templates: [{ id: 'tpl-active', name: 'Active' }],
+        activeTemplateId: 'tpl-active',
+    }));
+    const baseBlock = markup.match(/<select[^>]*id="urisTemplate"[^>]*>[\s\S]*?<\/select>/)?.[0];
+    assert.ok(baseBlock);
+    assert.match(baseBlock, /<option value="" selected>— базовый режим —<\/option>/);
+});
+
+test('buildGenerateViewModel follows active template for default draft and preserves override', () => {
+    const messageText = 'scene';
+    const defaultDraft = {
+        templateSelection: 'default', templateId: null,
+        messageHash: hashMessage(messageText), prompt: '',
+        aspectRatio: '1:1', imageSize: '1K', quality: 'auto',
+    };
+    const overrideDraft = {
+        templateSelection: 'override', templateId: 'tpl-override',
+        messageHash: hashMessage(messageText), prompt: '',
+        aspectRatio: '1:1', imageSize: '1K', quality: 'auto',
+    };
+    const templates = [
+        { id: 'tpl-a', name: 'A' },
+        { id: 'tpl-b', name: 'B' },
+        { id: 'tpl-override', name: 'Override' },
+    ];
+
+    const vmDefaultA = buildGenerateViewModel({
+        draft: defaultDraft, snapshot: null, automationMode: 'manual', templates, messageText, activeTemplateId: 'tpl-a',
+    });
+    const vmOverrideA = buildGenerateViewModel({
+        draft: overrideDraft, snapshot: null, automationMode: 'manual', templates, messageText, activeTemplateId: 'tpl-a',
+    });
+    assert.equal(vmDefaultA.effectiveTemplateId, 'tpl-a');
+    assert.equal(vmOverrideA.effectiveTemplateId, 'tpl-override');
+
+    const vmDefaultB = buildGenerateViewModel({
+        draft: defaultDraft, snapshot: null, automationMode: 'manual', templates, messageText, activeTemplateId: 'tpl-b',
+    });
+    const vmOverrideB = buildGenerateViewModel({
+        draft: overrideDraft, snapshot: null, automationMode: 'manual', templates, messageText, activeTemplateId: 'tpl-b',
+    });
+    assert.equal(vmDefaultB.effectiveTemplateId, 'tpl-b');
+    assert.equal(vmOverrideB.effectiveTemplateId, 'tpl-override');
+});
+
+test('renderGenerateMarkup renders aspect/size/quality selectors with selected values', () => {
+    const draft = { prompt: 'a cat', aspectRatio: '16:9', imageSize: '4K', quality: 'medium', templateId: null, messageHash: 'h' };
+    const markup = renderGenerateMarkup(buildGenerateViewModel({
+        draft,
+        snapshot: null,
+        automationMode: 'manual',
+        templates: [],
+        messageText: 'a cat',
+    }));
+    assert.match(markup, /<select[^>]*id="urisAspect"/);
+    assert.match(markup, /<option selected>16:9<\/option>/);
+    assert.match(markup, /<option selected>4K<\/option>/);
+    assert.match(markup, /<option value="medium" selected>medium<\/option>/);
+});
+
+test('renderGenerateMarkup renders ambiguities and stage error', () => {
+    const draft = { prompt: 'x', aspectRatio: '9:16', imageSize: '2K', quality: 'high', templateId: null, messageHash: 'h', stage1: { status: 'error', error: 'scene ambiguous' } };
+    const snapshot = {
+        chatId: 'c', msgId: 1, messageHash: 'h', contextRevision: 1, entities: [],
+        stage1Descriptions: [], stage2Refs: [],
+        ambiguities: [{ mention: 'she', candidateIds: ['aria', 'luna'] }],
+    };
+    const markup = renderGenerateMarkup(buildGenerateViewModel({
+        draft,
+        snapshot,
+        automationMode: 'manual',
+        templates: [],
+        messageText: 'x',
+    }));
+    assert.doesNotMatch(markup, /uris-stage-error/);
+    assert.doesNotMatch(markup, /scene ambiguous/);
+    assert.match(markup, /data-ambiguity="she"/);
+    assert.match(markup, /aria/);
+    assert.match(markup, /luna/);
+});
+
+test('renderGenerateMarkup renders references panel and queue buttons', () => {
+    const draft = { prompt: 'x', aspectRatio: '9:16', imageSize: '2K', quality: 'high', templateId: null, messageHash: 'h' };
+    const markup = renderGenerateMarkup(buildGenerateViewModel({
+        draft,
+        snapshot: null,
+        automationMode: 'manual',
+        templates: [],
+        messageText: 'x',
+    }));
+    assert.match(markup, /id="urisRefsPanel"/);
+});
+
+test('renderGenerateMarkup keeps reference preview and whitelist without a references-tab shortcut', () => {
+    const draft = { prompt: 'x', aspectRatio: '9:16', imageSize: '2K', quality: 'high', templateId: null, messageHash: 'h' };
+    const markup = renderGenerateMarkup(buildGenerateViewModel({
+        draft,
+        snapshot: null,
+        automationMode: 'manual',
+        templates: [],
+        messageText: 'x',
+    }));
+    assert.match(markup, /id="urisRefsPreview"/);
+    assert.match(markup, /id="urisRefsWhitelist"/);
+    assert.match(markup, /id="urisRefsStage1Keywords"/);
+    assert.match(markup, /id="urisRefsStage2Keywords"/);
+    assert.doesNotMatch(markup, /id="urisRefsEdit"/);
+});
+
+test('Generate tab source has no tab-switching action', async () => {
+    const src = await readFile(new URL('../src/ui/tab-generate.js', import.meta.url), 'utf8');
+    assert.doesNotMatch(src, /\bsetActiveTab\b/);
+});
+
+test('renderGenerateMarkup does not render old dual Stage1/Stage2 mode selectors', () => {
+    const draft = { prompt: 'x', aspectRatio: '9:16', imageSize: '2K', quality: 'high', templateId: null, messageHash: 'h' };
+    const markup = renderGenerateMarkup(buildGenerateViewModel({
+        draft, snapshot: null, automationMode: 'manual', templates: [], messageText: 'x',
+    }));
+    assert.doesNotMatch(markup, /id="urisStage1Mode"/);
+    assert.doesNotMatch(markup, /id="urisStage2Mode"/);
+});
+
+test('renderGenerateMarkup renders ambiguity include/exclude controls', () => {
+    const draft = { prompt: 'x', aspectRatio: '9:16', imageSize: '2K', quality: 'high', templateId: null, messageHash: 'h' };
+    const snapshot = {
+        chatId: 'c', msgId: 1, messageHash: 'h', contextRevision: 1,
+        entities: [{ id: 'aria-rose', name: 'Aria Rose', aliases: [], description: '', imagePath: '' },
+                   { id: 'rose-smith', name: 'Rose Smith', aliases: [], description: '', imagePath: '' }],
+        stage1Descriptions: [], stage2Refs: [],
+        ambiguities: [{ mention: 'Rose', candidateIds: ['aria-rose', 'rose-smith'] }],
+    };
+    const markup = renderGenerateMarkup(buildGenerateViewModel({
+        draft, snapshot, automationMode: 'manual', templates: [], messageText: 'x',
+    }));
+    assert.match(markup, /data-ambiguity="Rose"/);
+    assert.match(markup, /data-candidate-id="aria-rose"/);
+    assert.match(markup, /class="[^"]*uris-ref-include[^"]*"/);
+    assert.match(markup, /class="[^"]*uris-ref-exclude[^"]*"/);
+    assert.match(markup, /Aria Rose/);
+    assert.match(markup, /Rose Smith/);
+});
+
+test('readGenerationParams reads current controls with draft fallbacks', () => {
+    const controls = new Map([
+        ['#urisAspect', { value: '16:9' }],
+        ['#urisImgSize', { value: '4K' }],
+        ['#urisQuality', { value: 'medium' }],
+    ]);
+    const root = { querySelector: selector => controls.get(selector) || null };
+    const draft = { aspectRatio: '1:1', imageSize: '1K', quality: 'auto' };
+    assert.deepEqual(readGenerationParams(root, draft), {
+        aspectRatio: '16:9', imageSize: '4K', quality: 'medium',
+    });
+
+    assert.deepEqual(readGenerationParams({ querySelector: () => null }, draft), {
+        aspectRatio: '1:1', imageSize: '1K', quality: 'auto',
+    });
+});
+
+test('persistVisibleGenerationDraft saves exact visible prompt and parameters with manual origin when changed', async () => {
+    let savedUpdater;
+    const stored = { prompt: 'old prompt', promptOrigin: 'stage1', aspectRatio: '1:1', imageSize: '1K', quality: 'auto' };
+    await tabGenerate.persistVisibleGenerationDraft({
+        draft: stored,
+        visiblePrompt: '  exact visible prompt  ',
+        params: { aspectRatio: '16:9', imageSize: '4K', quality: 'high' },
+        persist: async updater => { savedUpdater = updater; },
+    });
+    assert.deepEqual(savedUpdater(stored), {
+        ...stored,
+        prompt: '  exact visible prompt  ',
+        promptOrigin: 'manual',
+        aspectRatio: '16:9', imageSize: '4K', quality: 'high',
+    });
+});
+
+test('persistVisibleGenerationDraft preserves prompt origin when visible prompt is unchanged', async () => {
+    let savedUpdater;
+    const stored = { prompt: 'same', promptOrigin: 'stage1', aspectRatio: '1:1', imageSize: '1K', quality: 'auto' };
+    await tabGenerate.persistVisibleGenerationDraft({
+        draft: stored,
+        visiblePrompt: 'same',
+        params: { aspectRatio: '1:1', imageSize: '1K', quality: 'auto' },
+        persist: async updater => { savedUpdater = updater; },
+    });
+    assert.equal(savedUpdater(stored).promptOrigin, 'stage1');
+});
+
+test('executeGenerationAction dispatches Stage 1 only and disables both buttons during execution', async () => {
+    const build = { disabled: false };
+    const generate = { disabled: false };
+    const calls = [];
+    await tabGenerate.executeGenerationAction({
+        action: 'stage1', input: { msgId: 1 }, buttons: [build, generate],
+        runStage1: async input => {
+            calls.push(['stage1', input]);
+            assert.equal(build.disabled, true);
+            assert.equal(generate.disabled, true);
+            return 'stage1-result';
+        },
+        runStage2: async () => calls.push(['stage2']),
+    });
+    assert.deepEqual(calls, [['stage1', { msgId: 1 }]]);
+    assert.equal(build.disabled, false);
+    assert.equal(generate.disabled, false);
+});
+
+test('executeGenerationAction dispatches Stage 2 only and disables both buttons during execution', async () => {
+    const build = { disabled: false };
+    const generate = { disabled: false };
+    const calls = [];
+    await tabGenerate.executeGenerationAction({
+        action: 'stage2', input: { msgId: 2 }, buttons: [build, generate],
+        runStage1: async () => calls.push(['stage1']),
+        runStage2: async input => {
+            calls.push(['stage2', input]);
+            assert.equal(build.disabled, true);
+            assert.equal(generate.disabled, true);
+        },
+    });
+    assert.deepEqual(calls, [['stage2', { msgId: 2 }]]);
+    assert.equal(build.disabled, false);
+    assert.equal(generate.disabled, false);
+});
+
+test('cancelling prompt autosave prevents a delayed old write', async () => {
+    let delayed;
+    const writes = [];
+    const autosave = tabGenerate.createCancellablePromptAutosave({
+        persist: async value => writes.push(value),
+        delay: 400,
+        setTimer: fn => { delayed = fn; return 7; },
+        clearTimer: () => {},
+    });
+    autosave.schedule('detached old prompt');
+    autosave.cancel();
+    await delayed();
+    assert.deepEqual(writes, []);
+});
+
+test('tab-generate source imports every runtime symbol bindGenerate calls at attach time', async () => {
+    // Regression guard: bindGenerate calls debounce() while attaching listeners.
+    // Dropping the import throws ReferenceError during render and silently
+    // disables every Generate-tab button, including Stage 1 and Stage 2.
+    const src = await readFile(new URL('../src/ui/tab-generate.js', import.meta.url), 'utf8');
+    assert.match(src, /import\s*\{[^}]*\bdebounce\b[^}]*\}\s*from\s*'\.\.\/core\.js'/);
+});
+
+test('bindGenerate attaches Stage 1 and Stage 2 click handlers without throwing', () => {
+    const attached = [];
+    const makeEl = (sel) => {
+        let _disabled = false;
+        return {
+            get disabled() { return _disabled; },
+            set disabled(v) { _disabled = v; },
+            value: '',
+            addEventListener: (type) => attached.push({ sel, type }),
+        };
+    };
+    const root = { querySelector: sel => makeEl(sel) };
+
+    assert.doesNotThrow(() => tabGenerate.bindGenerate(root));
+
+    const clickSels = attached.filter(l => l.type === 'click').map(l => l.sel);
+    assert.ok(clickSels.includes('#urisBuildPrompt'), 'Stage 1 button is bound');
+    assert.ok(clickSels.includes('#urisGenerateImage'), 'Stage 2 button is bound');
+    assert.ok(clickSels.includes('#urisFollowLast'), 'follow-last-post toggle is bound');
+    assert.ok(!clickSels.includes('#urisPrimaryGenerate'), 'legacy primary button is not referenced');
+});
+
+test('enqueueCurrent surfaces storage errors via toastr', async () => {
+    const originalCtx = globalThis.SillyTavern.getContext;
+    const originalGetItem = globalThis.SillyTavern.libs.localforage.getItem;
+    const errors = [];
+    const warnings = [];
+    globalThis.toastr = {
+        error: (msg) => errors.push(msg),
+        warning: (msg) => warnings.push(msg),
+        info: () => {},
+        success: () => {},
+    };
+    globalThis.SillyTavern.getContext = () => ({
+        chatId: 'c1',
+        chat: [{ mes: 'hello' }],
+        extensionSettings: {},
+        saveSettingsDebounced: () => {},
+        getRequestHeaders: () => ({}),
+    });
+    globalThis.SillyTavern.libs.localforage.getItem = async () => {
+        throw new Error('storage failed');
+    };
+    state.currentMsgId = 0;
+    state.queue = [];
+    const fakeRoot = { querySelector: () => null };
+    try {
+        await enqueueCurrent(fakeRoot, 'full-pipeline');
+    } finally {
+        globalThis.SillyTavern.getContext = originalCtx;
+        globalThis.SillyTavern.libs.localforage.getItem = originalGetItem;
+        globalThis.toastr = undefined;
+    }
+    assert.equal(errors.length, 1, 'expected one error toast');
+    assert.match(errors[0], /storage failed/);
+    assert.equal(warnings.length, 0);
+});
+
+// ── Message-scoped reference corrections ──
+
+test('updateReferenceCorrections include removes exclusion and increments revision', () => {
+    const current = { includedIds: [], excludedIds: ['aaron'], revision: 2 };
+    assert.deepEqual(updateReferenceCorrections(current, 'aaron', true), {
+        includedIds: ['aaron'], excludedIds: [], revision: 3,
+    });
+});
+
+test('updateReferenceCorrections exclude removes inclusion and increments revision', () => {
+    const current = { includedIds: ['aaron'], excludedIds: [], revision: 7 };
+    assert.deepEqual(updateReferenceCorrections(current, 'aaron', false), {
+        includedIds: [], excludedIds: ['aaron'], revision: 8,
+    });
+});
+
+test('updateReferenceCorrections does not duplicate ids', () => {
+    const current = { includedIds: ['aaron'], excludedIds: [], revision: 1 };
+    const first = updateReferenceCorrections(current, 'aaron', true);
+    assert.deepEqual(first, { includedIds: ['aaron'], excludedIds: [], revision: 2 });
+    const second = updateReferenceCorrections(first, 'aaron', true);
+    assert.deepEqual(second, { includedIds: ['aaron'], excludedIds: [], revision: 3 });
+});
+
+test('updateReferenceCorrections normalizes missing arrays', () => {
+    const current = { revision: 0 };
+    assert.deepEqual(updateReferenceCorrections(current, 'beth', true), {
+        includedIds: ['beth'], excludedIds: [], revision: 1,
+    });
+});
+
+// ── Prompt-driven preview and effective reference controls ──
+
+test('buildGenerateViewModel keeps Stage 1 descriptions separate from prompt refs', () => {
+    const stage1Snapshot = {
+        entities: [{ id: 'aaron', name: 'Aaron' }],
+        stage1Descriptions: [{ id: 'aaron', name: 'Aaron', description: 'red coat' }],
+        stage2Refs: [{ id: 'aaron', name: 'Aaron', imagePath: '/aaron.png' }],
+        ambiguities: [],
+    };
+    const referenceResolution = {
+        entities: [{ id: 'beth', name: 'Beth' }],
+        stage2Refs: [{ id: 'beth', name: 'Beth', imagePath: '/beth.png' }],
+        ambiguities: [],
+    };
+    const messageText = 'source scene';
+    const matchingDraft = {
+        prompt: 'Beth stands alone.', promptOrigin: 'stage1',
+        messageHash: hashMessage(messageText),
+        aspectRatio: '1:1', imageSize: '1K', quality: 'auto',
+    };
+    const vm = buildGenerateViewModel({
+        draft: matchingDraft,
+        snapshot: stage1Snapshot,
+        referenceResolution,
+        automationMode: 'manual', templates: [], messageText,
+    });
+    assert.deepEqual(vm.descriptions, stage1Snapshot.stage1Descriptions);
+    assert.deepEqual(vm.refs, referenceResolution.stage2Refs);
+    assert.deepEqual(vm.ambiguities, referenceResolution.ambiguities);
+    assert.deepEqual(vm.entities, referenceResolution.entities);
+    assert.deepEqual(vm.referenceResolution, referenceResolution);
+});
+
+test('refreshReferencePanel refreshes ambiguity controls with the effective preview', async () => {
+    const hosts = new Map([
+        ['#urisRefsPanel', {}],
+        ['#urisRefsModeBadge', { innerHTML: 'old' }],
+        ['#urisRefsPreview', { innerHTML: '', querySelector: () => null }],
+        ['#urisRefsCap', { innerHTML: '' }],
+        ['#urisRefsWhitelist', { innerHTML: '', querySelector: () => null, querySelectorAll: () => [] }],
+        ['.uris-scene-context', { innerHTML: 'stale' }],
+    ]);
+    const root = {
+        querySelector: selector => hosts.get(selector) || null,
+    };
+    const resolution = {
+        entities: [{ id: 'aria-1', name: 'Aria One' }, { id: 'aria-2', name: 'Aria Two' }],
+        stage2Refs: [],
+        ambiguities: [{ mention: 'aria', candidateIds: ['aria-1', 'aria-2'] }],
+    };
+
+    await refreshReferencePanel(root, resolution);
+
+    assert.match(hosts.get('.uris-scene-context').innerHTML, /data-ambiguity="aria"/);
+    assert.match(hosts.get('.uris-scene-context').innerHTML, /data-candidate-id="aria-1"/);
+    // Cap label renamed from "-> Stage 2" to "Отправится в генерацию".
+    assert.match(hosts.get('#urisRefsPreview').innerHTML, /Выбрано для генерации/);
+});
+
+test('renderGenerateMarkup renders pool-only whitelist and no slot controls', () => {
+    const messageText = 'scene';
+    const draft = {
+        prompt: 'Beth stands alone.', promptOrigin: 'stage1',
+        messageHash: hashMessage(messageText),
+        aspectRatio: '1:1', imageSize: '1K', quality: 'auto',
+    };
+    const markup = renderGenerateMarkup(buildGenerateViewModel({
+        draft,
+        snapshot: null,
+        referenceResolution: { entities: [], stage2Refs: [], ambiguities: [] },
+        automationMode: 'manual', templates: [], messageText,
+    }));
+    assert.match(markup, /id="urisRefsPreview"/);
+    assert.match(markup, /uris-refs-sources-section/);
+    assert.match(markup, /uris-refs-sources-label/);
+    assert.match(markup, /id="urisRefsWhitelist"/);
+    // The "Stage 1 описания" desc panel was removed — descriptions flow from
+    // pool cards via buildSceneContextSnapshot, no separate chat-level list.
+    assert.doesNotMatch(markup, /data-source="desc"/);
+    assert.doesNotMatch(markup, /id="urisRefsDesc"/);
+    assert.doesNotMatch(markup, /data-source="slots"/);
+    assert.doesNotMatch(markup, /data-source="npc"/);
+    assert.doesNotMatch(markup, /urisRefsSlots|charSlot|userSlot|NPC whitelist/);
+});
+
+test('reference library source has aliases editor but no role or keywords editor', async () => {
+    const src = await readFile(new URL('../src/ui/tab-references.js', import.meta.url), 'utf8');
+    assert.match(src, /uris-ed-aliases/);
+    assert.doesNotMatch(src, /uris-ed-role/);
+    assert.doesNotMatch(src, /uris-ed-keywords|Keywords/);
+    assert.doesNotMatch(src, /keywords:\s*name/);
+});
+
+// ── Shared reference policy panel state ──
+
+test('resolveServerOwnedReferencePolicy preserves unknown and absent route capabilities as null', () => {
+    assert.deepEqual(resolveServerOwnedReferencePolicy({ selectedRoute: { capabilities: { references: 'unknown' } } }), {
+        supported: true,
+        status: 'unknown',
+        protocol: null,
+        maxRefs: null,
+        reason: '',
+        source: 'server-route',
+    });
+    assert.deepEqual(resolveServerOwnedReferencePolicy({ selectedRoute: { capabilities: null } }), {
+        supported: true,
+        status: 'unknown',
+        protocol: null,
+        maxRefs: null,
+        reason: '',
+        source: 'server-route',
+    });
+    assert.deepEqual(resolveServerOwnedReferencePolicy({}), {
+        supported: true,
+        status: 'unknown',
+        protocol: null,
+        maxRefs: null,
+        reason: '',
+        source: 'server-route',
+    });
+});
+
+test('resolveServerOwnedReferencePolicy bounds positive route reference caps', () => {
+    assert.equal(resolveServerOwnedReferencePolicy({ selectedRoute: { capabilities: { maxReferences: 2 } } }).maxRefs, 2);
+    assert.equal(resolveServerOwnedReferencePolicy({ selectedRoute: { capabilities: { maxReferences: MAX_REFERENCE_CAPABILITY + 1 } } }).maxRefs, MAX_REFERENCE_CAPABILITY);
+});
+
+test('resolveServerOwnedReferencePolicy returns the unsupported route policy exactly', () => {
+    const expected = {
+        supported: false,
+        status: 'unsupported',
+        protocol: null,
+        maxRefs: 0,
+        reason: 'Выбранный маршрут не принимает референсы.',
+        source: 'server-route',
+    };
+    assert.deepEqual(resolveServerOwnedReferencePolicy({ selectedRoute: { capabilities: { references: 'unsupported' } } }), expected);
+    assert.deepEqual(resolveServerOwnedReferencePolicy({ selectedRoute: { capabilities: { maxReferences: 0 } } }), expected);
+});
+
+test('buildReferencePanelState reports effective max and over-limit delivery', () => {
+    const state = buildReferencePanelState(
+        [{ id: 'a' }, { id: 'b' }],
+        { supported: true, maxRefs: 1, reason: '' },
+    );
+    assert.deepEqual(state, {
+        count: 2,
+        max: 1,
+        canAdd: false,
+        unsupported: false,
+        overLimit: true,
+        message: 'Выбрано 2 референсов, но маршрут поддерживает только 1. Удалите лишние референсы перед генерацией.',
+    });
+});
+
+test('buildReferencePanelState hides picker for unsupported policy', () => {
+    const state = buildReferencePanelState(
+        [{ id: 'a' }],
+        { supported: false, maxRefs: 0, reason: 'Работа временно отложена.' },
+    );
+    assert.equal(state.canAdd, false);
+    assert.equal(state.unsupported, true);
+    assert.equal(state.message, 'Работа временно отложена.');
+});
+
+test('resolveConnectionReferencePolicy uses saved browser route capabilities and transport', () => {
+    assert.deepEqual(resolveConnectionReferencePolicy({
+        executionOwner: 'legacy-browser',
+        selectedRoute: {
+            capabilities: { references: 'supported', maxReferences: 2 },
+            transport: { bodyKind: 'json', proxyEligible: true, directCors: 'preferred' },
+        },
+    }), {
+        supported: true,
+        status: 'supported',
+        protocol: null,
+        maxRefs: 2,
+        reason: '',
+        source: 'browser-route',
+    });
+    assert.deepEqual(resolveConnectionReferencePolicy({
+        executionOwner: 'legacy-browser',
+        selectedRoute: {
+            capabilities: { references: 'unsupported' },
+            transport: { bodyKind: 'json', proxyEligible: false, directCors: 'required' },
+        },
+    }), {
+        supported: false,
+        status: 'unsupported',
+        protocol: null,
+        maxRefs: 0,
+        reason: 'Выбранный маршрут не принимает референсы.',
+        source: 'browser-route',
+    });
+});
+
+test('getSnapshotReferencePolicy resolves the Stage 2 connection from its saved chat snapshot', async () => {
+    state.activeImageProfileId = 'mutable-global-connection';
+    const calls = [];
+    const getConnection = async id => {
+        calls.push(id);
+        return id === 'saved-chat-connection'
+            ? { selectedRoute: { capabilities: { references: 'supported', maxReferences: 2 } } }
+            : { selectedRoute: { capabilities: { references: 'unsupported' } } };
+    };
+
+    const policy = await getSnapshotReferencePolicy({ imageProfileId: 'saved-chat-connection' }, getConnection);
+
+    assert.equal(policy.supported, true);
+    assert.equal(policy.maxRefs, 2);
+    assert.deepEqual(calls, ['saved-chat-connection']);
+});
+
+test('getSnapshotReferencePolicy uses its immutable captured route; connection state only decorates', async () => {
+    const policy = await getSnapshotReferencePolicy({
+        imageProfileId: 'saved-chat-connection',
+        imageRoute: { generationContract: 'chat-completions', modelId: 'gemini-3.1-flash-image', capabilities: { references: 'supported', maxReferences: 2 } },
+    }, async () => ({
+        // Mutable connection disagrees with the captured route: the route wins.
+        model: { id: 'gemini-3.1-flash-image', source: 'list' },
+        selectedRoute: { capabilities: { references: 'unsupported' } },
+        evidence: { 'gemini-3.1-flash-image': { dialect: 'openai-images', refs: 'rejected', reason: 'edit не поддерживается этим шлюзом' } },
+    }));
+
+    assert.equal(policy.supported, true);
+    assert.equal(policy.maxRefs, 2);
+    assert.equal(policy.encoding, 'image_url-части (chat-completions)');
+    assert.equal(policy.rejected.dialect, 'chat-completions');
+    assert.equal(policy.rejected.nextDialect, 'gemini-native');
+    assert.equal(policy.rejected.reason, 'edit не поддерживается этим шлюзом');
+});
+
+// ── follow-last-post toggle rendering ──
+
+test('renderGenerateMarkup includes follow toggle with is-active when followLastPost=true', () => {
+    state.settings.followLastPost = true;
+    const vm = baseVm({ draft: { prompt: '', promptOrigin: 'stage1' }, messageText: 'x' });
+    const html = renderGenerateMarkup(vm);
+    assert.match(html, /id="urisFollowLast"/, 'toggle button must render');
+    assert.match(html, /uris-follow-toggle[^"]* is-active/, 'must be active when followLastPost=true');
+    assert.match(html, /aria-pressed="true"/);
+});
+
+test('renderGenerateMarkup renders follow toggle without is-active when followLastPost=false', () => {
+    state.settings.followLastPost = false;
+    const vm = baseVm({ draft: { prompt: '', promptOrigin: 'stage1' }, messageText: 'x' });
+    const html = renderGenerateMarkup(vm);
+    assert.match(html, /id="urisFollowLast"/);
+    assert.doesNotMatch(html, /uris-follow-toggle[^"]* is-active/);
+    assert.match(html, /aria-pressed="false"/);
+});
+
+test('renderGenerateMarkup renders follow toggle with default-on when setting absent', () => {
+    delete state.settings.followLastPost;
+    const vm = baseVm({ draft: { prompt: '', promptOrigin: 'stage1' }, messageText: 'x' });
+    const html = renderGenerateMarkup(vm);
+    assert.match(html, /uris-follow-toggle[^"]* is-active/, 'absent setting defaults to ON');
+    assert.match(html, /aria-pressed="true"/);
+});
+
+// ── Phase 4: model dropdown + per-family quality ──
+
+test('qualityOptionsFor follows the model family and marks the current value', async () => {
+    const { qualityOptionsFor } = await import('../src/ui/tab-generate.js');
+    assert.match(qualityOptionsFor('dall-e-3', 'hd'), /<option value="hd" selected>hd<\/option>/);
+    assert.match(qualityOptionsFor('dall-e-3', 'hd'), /value="standard"/);
+    assert.doesNotMatch(qualityOptionsFor('dall-e-3', 'hd'), /value="low"/);
+    assert.match(qualityOptionsFor('gpt-image-1', 'medium'), /<option value="medium" selected>medium<\/option>/);
+    assert.match(qualityOptionsFor('gpt-image-1', 'bogus'), /<option value="auto" selected>/, 'unknown value falls back to auto');
+    assert.match(qualityOptionsFor('', 'high'), /<option value="high" selected>/, 'no model keeps the generic scale');
+});
+
+test('renderModelSelectMarkup covers no-connection, empty-list, manual and list cases', async () => {
+    const { renderModelSelectMarkup } = await import('../src/ui/tab-generate.js');
+    assert.match(renderModelSelectMarkup(null), /id="urisModel" disabled/);
+    const empty = renderModelSelectMarkup({
+        connId: 'c', connName: 'X', ids: [], current: '', manual: false,
+        classifications: [{ modelId: 'chat-model', kind: 'non-image' }],
+    });
+    assert.doesNotMatch(empty, /urisGenerateShowAll/, 'the all-models toggle was removed from Generate');
+    assert.doesNotMatch(empty, /value="chat-model"/);
+
+    const list = renderModelSelectMarkup({ connId: 'c', connName: 'LinkAPI', ids: ['a', 'b'], current: 'a', manual: false });
+    assert.match(list, /id="urisModel"/);
+    assert.match(list, /value="a" selected/);
+    assert.match(list, /LinkAPI/);
+    assert.doesNotMatch(list, /urisGenerateShowAll/, 'the all-models toggle was removed from Generate');
+
+    const manual = renderModelSelectMarkup({ connId: 'c', connName: 'X', ids: ['a'], current: 'zzz', manual: true });
+    assert.match(manual, /value="zzz" selected>zzz \(вручную\)/);
+});
+
+test('bindModelSelect writes the model through to the connection and flushes the editor draft', async () => {
+    const { bindModelSelect } = await import('../src/ui/tab-generate.js');
+    const { makeFakeDocument } = await import('./fake-dom.js');
+    const { root } = makeFakeDocument();
+    root.innerHTML = `<select id="urisModel"><option value="old">old</option><option value="new">new</option></select>
+        <textarea id="urisPrompt">typed prompt</textarea>
+        <select id="urisAspect"><option>1:1</option></select><select id="urisImgSize"><option>1K</option></select><select id="urisQuality"><option>auto</option></select>`;
+    const saves = [];
+    let switched = null;
+    bindModelSelect(root, { connId: 'conn-1', connName: 'X', ids: ['old', 'new'], current: 'old', manual: false }, {
+        saveConnection: async patch => { saves.push(patch); },
+        onSwitched: modelId => { switched = modelId; },
+    });
+    root.querySelector('#urisModel').value = 'new';
+    await root.querySelector('#urisModel').dispatchEvent({ type: 'change' });
+    assert.deepEqual(saves, [], 'model selection is chat-scoped and does not rewrite the shared connection');
+    assert.equal(switched, 'new');
+});

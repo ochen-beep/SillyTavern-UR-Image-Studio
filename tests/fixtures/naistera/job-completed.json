@@ -1,0 +1,7 @@
+{
+  "job_id": "job_0123456789abcdef",
+  "status": "completed",
+  "data_url": "data:image/jpeg;base64,ZmFrZQ==",
+  "content_type": "image/jpeg",
+  "media_kind": "image"
+}

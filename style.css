@@ -1,0 +1,1807 @@
+/* UR Image Studio — стили */
+
+/* ── Design tokens ──
+   Визуальная система под дизайн-макет из Фигмы. Палитра остаётся адаптивной:
+   цветовой акцент --uris-accent ссылается на --SmartThemeQuoteColor, поэтому
+   в любой ST-теме подсветка вкладок/чипов/кнопок идёт в цвет темы. Поверхности
+   и границы — нейтральные серые, совместимые с любым акцентом. */
+:root {
+    --uris-label-w: 90px;
+
+    /* Поверхности (нейтральный серый) */
+    --uris-bg: #1c1c1c;
+    --uris-surface-header: #141414;
+    --uris-surface-tabs: #1a1a1a;
+    --uris-surface-card: #1e1e1e;
+    --uris-surface-btn: #252525;
+    --uris-surface-btn-hover: #2d2d2d;
+
+    /* Границы */
+    --uris-border: #3a3a3a;
+    --uris-border-soft: #2a2a2a;
+
+    /* Текст */
+    --uris-text-strong: #d4d4d4;
+    --uris-text-mut: #888;
+    --uris-text-dim: #666;
+
+    /* Акцент — адаптивен к теме ST */
+    --uris-accent: var(--SmartThemeQuoteColor, #5a9e3a);
+    --uris-accent-soft:  color-mix(in srgb, var(--uris-accent) 18%, transparent);
+    --uris-accent-line:  color-mix(in srgb, var(--uris-accent) 45%, transparent);
+    --uris-accent-hover: color-mix(in srgb, var(--uris-accent) 28%, transparent);
+
+    /* Состояния ошибок */
+    --uris-err: #e05050;
+    --uris-err-bg: #1e1010;
+    --uris-err-border: #4a2020;
+    --uris-err-soft:  color-mix(in srgb, var(--uris-err) 12%, transparent);
+    --uris-err-line:  color-mix(in srgb, var(--uris-err) 35%, transparent);
+    --uris-err-hover: color-mix(in srgb, var(--uris-err) 25%, transparent);
+
+    /* Предупреждения - адаптивны к ST --warning-color, единый янтарь
+       (раньше было три разных: #fc6 / #e6b800 / var(--warning-color)). */
+    --uris-warn: var(--warning-color, #e6b800);
+    --uris-warn-soft: color-mix(in srgb, var(--uris-warn) 12%, transparent);
+    --uris-warn-line: color-mix(in srgb, var(--uris-warn) 35%, transparent);
+
+    /* Ритм */
+    --uris-radius: 4px;
+    --uris-radius-card: 6px;
+    --uris-radius-pill: 999px;
+    --uris-gap: 6px;
+    --uris-pad: 8px;
+
+    /* Размер шрифта для тела вкладок (макет — компактнее прежнего 13px).
+       --uris-font-scale — множитель «Размера шрифта» из вкладки «Настройки»
+       (второй регулятор рядом с --uris-scale): через эти переменные масштабируются
+       60 использований, плюс 42 calc-хардкода в правилах ниже. em-размеры
+       (.uris_hint и т.п.) масштабируются по наследству от window/компонентов. */
+    --uris-font-scale: 1;
+    --uris-font: calc(12px * var(--uris-font-scale, 1));
+    --uris-font-sm: calc(11px * var(--uris-font-scale, 1));
+    --uris-font-xs: calc(10px * var(--uris-font-scale, 1));
+}
+
+/* Fallback для старых WebView без color-mix (Chromium <111): tint нельзя
+   вывести из живого акцента - откат к зелёному/красному фолбэку (прежнее
+   поведение). Сами --uris-accent/--uris-warn - простые var()-ссылки,
+   работают везде; откатываются только производные color-mix. */
+@supports not (color: color-mix(in srgb, red, blue)) {
+    :root {
+        --uris-accent-soft:  rgba(90, 158, 58, 0.18);
+        --uris-accent-line:  rgba(90, 158, 58, 0.45);
+        --uris-accent-hover: rgba(90, 158, 58, 0.28);
+        --uris-err-soft:  rgba(224, 80, 80, 0.12);
+        --uris-err-line:  rgba(224, 80, 80, 0.35);
+        --uris-err-hover: rgba(224, 80, 80, 0.25);
+        --uris-warn-soft: rgba(204, 153, 0, 0.12);
+        --uris-warn-line: rgba(204, 153, 0, 0.35);
+    }
+}
+
+/* ── Launcher в quick-reply bar ── */
+#uris_launcher { cursor: pointer; user-select: none; }
+#uris_launcher.uris_launcher_active { background: var(--uris-accent); }
+
+/* ── Плавающее окно ── */
+.uris-window {
+    position: fixed; top: 80px; right: 20px;
+    width: 460px; height: 560px; min-width: 320px; min-height: 360px;
+    /* Принудительно непрозрачный фон. Раньше брали --SmartThemeBlurTintColor
+       (с фолбэком на --uris-bg), но в прозрачных ST-темах этот tint - rgba с
+       низкой альфой, и фоллбэк не срабатывает (переменная-то задана). Окно
+       становилось «стеклянным», а т.к. backdrop-filter не добавлен, а у
+       контентных контейнеров (.uris-body, аккордеоны, .uris-gen-params,
+       .uris-refs-grid-wrap) нет своего фона - они просвечивали насквозь до
+       чата. Фиксируем непрозрачный --uris-bg, как у шапки/вкладок/карточек. */
+    box-sizing: border-box;
+    background: var(--uris-bg);
+    color: var(--SmartThemeBodyColor, var(--uris-text-strong));
+    border: 1px solid var(--SmartThemeBorderColor, var(--uris-border-soft));
+    border-radius: 10px; z-index: 99999;
+    display: flex; flex-direction: column;
+    box-shadow: 0 10px 40px rgba(0,0,0,.5);
+    overflow: hidden;
+    font-size: var(--uris-font);
+}
+.uris-window.uris-hidden { display: none; }
+.uris-header {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 8px 12px; cursor: move; user-select: none;
+    background: var(--uris-surface-header); flex-shrink: 0;
+    border-bottom: 1px solid var(--uris-border-soft);
+}
+.uris-title { font-weight: 600; font-size: calc(14px * var(--uris-font-scale, 1)); }
+.uris-header-actions { display: flex; align-items: center; gap: 8px; }
+.uris-status { font-size: var(--uris-font-sm); opacity: .8; min-height: 14px; }
+.uris-icon-btn { background: none; border: none; color: inherit; cursor: pointer; font-size: calc(16px * var(--uris-font-scale, 1)); padding: 2px 6px; }
+
+/* ── Вкладки ── */
+.uris-tabs { display: flex; flex-shrink: 0; border-bottom: 1px solid var(--uris-border-soft); background: var(--uris-surface-tabs); }
+
+.uris-tab {
+    flex: 1; padding: 8px 4px; background: none; border: none; color: var(--uris-text-mut);
+    cursor: pointer; border-bottom: 2px solid transparent; font-size: var(--uris-font);
+    transition: color .12s, border-color .12s;
+    /* ST-темы с глобальным ресетом `button { pointer-events: none }` (whitelist
+       только под .menu_button/.view_button и т.п.) гасят клик по нашим вкладкам —
+       у tab нет ST-класса, только `uris-tab`. Явно поднимаем pointer-events,
+       иначе setActiveTab не срабатывает, и весь UI вкладок (вкл. создание шаблонов)
+       в таких темах молчит. !important не нужен: специфичность .uris-tab > button. */
+    pointer-events: auto;
+}
+.uris-tab:hover { color: var(--uris-text-strong); }
+.uris-tab.uris-tab-active { border-bottom-color: var(--uris-accent); color: var(--uris-text-strong); font-weight: 600; }
+
+/* Тот же класс проблем у ST-тем, что и pointer-events выше, но для скролла:
+   тема с `button { touch-action: none }` глушит свайп, начатый на ТАЙЛЕ-кнопке
+   (пересечение touch-action идёт от элемента под пальцем), — сетку референсов/
+   галереи становится невозможно листать на тач-устройстве, хотя клики работают.
+   pan-y сохраняет тапы и разрешает вертикальную прокрутку контейнера.
+   Специфичность .uris-window button > button из темы, !important не нужен.
+   Drag-чипы — span, не button, их собственный touch-action:none не задет. */
+.uris-window button, .uris-picker-overlay button { touch-action: pan-y; }
+
+/* ── Тело ── */
+.uris-body {
+    flex: 1;
+    overflow-y: auto;
+    padding: var(--uris-pad);
+    background: var(--uris-bg);
+}
+/* full-bleed для вкладок с собственной внутренней раскладкой (референсы):
+   обнуляем padding body и блокируем его скролл — скроллит внутренний контейнер.
+   flex-direction самих .uris-references (row для десктопа) НЕ задаём тут —
+   он определяется в блоке layout v4 ниже; иначе overlay-host уезжает вниз. */
+.uris-body-flush { padding: 0; overflow: hidden; display: flex; flex-direction: column; min-height: 0; }
+.uris-body-flush > .uris-references { flex: 1; min-height: 0; }
+
+/* ── Масштаб интерфейса (вкладка «Настройки», --uris-scale) ──
+   Zoom применяется ТОЛЬКО к вкладкам и телу окна, не к #urisWindow:
+   getBoundingClientRect() окна и бейджа ошибок остаётся в нескалированных
+   CSS-пикселях, поэтому drag/resize/сохранение геометрии (window.js) и
+   позиционирование .uris-error-panel не требуют правок. После стандартизации
+   zoom (csswg-drafts#5623, Chromium 128) gBCR возвращает масштабированные
+   значения — зум корневого окна сломал бы эту математику. Шапка окна —
+   системный «chrome», не масштабируется (как титульная строка VS Code).
+   Старые WebView без поддержки zoom просто игнорируют правило (масштаб 100%).
+   Правило стоит ПОСЛЕ канонического .uris-body: CSS-парсеры тестов берут
+   первое вхождение `.uris-body {` в файле. */
+.uris-window:not(.uris-mobile) .uris-tabs,
+.uris-window:not(.uris-mobile) .uris-body { zoom: var(--uris-scale, 1); }
+
+/* ── Поля ── */
+.uris-row { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; flex-wrap: wrap; }
+.uris-row label { min-width: var(--uris-label-w, 90px); font-size: var(--uris-font-sm); color: var(--uris-text-mut); opacity: .85; }
+.uris-row .text_pole { flex: 1; min-width: 0; }
+.uris-field { margin-bottom: 8px; }
+.uris-field label { display: block; font-size: var(--uris-font-sm); opacity: .8; margin-bottom: 2px; }
+.uris-field .text_pole { width: 100%; box-sizing: border-box; }
+.uris-field textarea.text_pole { resize: vertical; }
+
+/* ── Утилиты ── */
+/* Скрытие скроллбара для горизонтальных лент (чипы-фильтры) — скролл остаётся. */
+.uris-scroll-x {
+    overflow-x: auto; -webkit-overflow-scrolling: touch;
+    scrollbar-width: none;
+}
+.uris-scroll-x::-webkit-scrollbar { display: none; }
+
+/* Утилиты взамен inline-стилей в разметке. */
+.uris-w-full { width: 100%; }
+.uris-muted { margin-top: 6px; font-size: 0.8em; opacity: 0.7; }
+.uris-rule-num { width: 60px; }
+
+/* ── Ресайзер ── */
+.uris-resizer {
+    position: absolute; right: 0; bottom: 0; width: 16px; height: 16px;
+    cursor: nwse-resize; background: linear-gradient(135deg, transparent 50%, rgba(255,255,255,.3) 50%);
+}
+
+/* ── Пресеты ── */
+.uris-accordion { margin-bottom: 8px; }
+.uris-acc-header { cursor: pointer; padding: 6px 0; border-bottom: 1px solid var(--uris-border-soft); }
+.uris-acc-body { padding: 8px 0; }
+.uris-preset-card {
+    background: var(--uris-surface-card); padding: var(--uris-pad); border-radius: var(--uris-radius-card);
+    border: 1px solid var(--uris-border-soft); margin-bottom: 8px;
+    display: flex; flex-direction: column; gap: 6px;
+}
+/* Шапка карты (accordion): вся полоса - тумблер сворачивания. Имя - подпись
+   по умолчанию (pointer-events:none, клик проваливается в шапку); кнопка-карандаш
+   переводит его в режим ввода через :focus. Кнопки в шапке (радио, карандаш)
+   не сворачивают. */
+.uris-preset-card-header {
+    display: flex; align-items: center; gap: 8px; cursor: pointer;
+}
+.uris-preset-card-header:hover { background: rgba(255,255,255,.03); }
+.uris-preset-card-header .uris-name,
+.uris-preset-card-header .uris-server-name {
+    flex: 1; min-width: 0;
+    pointer-events: none; background: transparent; border-color: transparent; cursor: default;
+}
+.uris-preset-card-header .uris-name:focus,
+.uris-preset-card-header .uris-server-name:focus {
+    pointer-events: auto; background: var(--uris-surface-btn); border-color: var(--uris-border);
+}
+.uris-preset-card-header .uris-name::placeholder { color: var(--uris-text-dim); }
+.uris-name-edit {
+    flex: 0 0 auto; display: inline-flex; align-items: center; justify-content: center;
+    width: 24px; height: 24px; padding: 0; border: 0; border-radius: var(--uris-radius);
+    background: transparent; color: var(--uris-text-dim); cursor: pointer;
+    transition: color .12s, background .12s;
+}
+.uris-name-edit:hover { color: var(--uris-text-strong); background: var(--uris-surface-btn); }
+.uris-preset-card.uris-collapsed .uris-preset-card-body { display: none; }
+.uris-preset-card-body { display: flex; flex-direction: column; gap: 6px; }
+.uris-add-btn { width: 100%; }
+/* Пунктирная «добавить»-кнопка под единую систему (раньше наследовала ST .menu_button) */
+.uris-dashed-add {
+    width: 100%; padding: 8px; border-radius: var(--uris-radius);
+    border: 1px dashed var(--uris-border); background: transparent;
+    color: var(--uris-text-dim); cursor: pointer; font-size: var(--uris-font-sm);
+    transition: color .12s, border-color .12s;
+}
+.uris-dashed-add:hover { color: var(--uris-accent); border-color: var(--uris-accent); }
+
+/* ── Коннекты / Контент ── */
+/* Индикатор наличия API-ключа (сам ключ НЕ выводится — только статус) */
+.uris-key-status {
+    font-size: calc(11px * var(--uris-font-scale, 1)); opacity: .75; white-space: nowrap; flex: 0 0 auto; align-self: center;
+}
+.uris-key-status:empty::before { content: 'ключ не задан'; opacity: .5; }
+/* Кнопки в строке модели */
+.uris-fetch-models { flex: 0 0 auto; }
+.uris-fetch-models.loading i { animation: uris-spin .8s linear infinite; }
+@keyframes uris-spin { to { transform: rotate(360deg); } }
+
+/* Server-owned image connections. Keep these states isolated from legacy cards. */
+.uris-server-connections {
+    display: flex; flex-direction: column; gap: 8px; margin-bottom: 8px;
+}
+/* Box-оформление (padding/border/фон) наследуется от .uris-preset-card. */
+.uris-server-connection .uris-row { margin-bottom: 0; }
+.uris-server-connection .uris-server-name { flex: 1; min-width: 0; }
+.uris-server-connection .uris-server-route-summary {
+    flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    font-size: .85em; color: var(--uris-text-mut);
+}
+/* Header radio: ring color = connection readiness (red/amber/green, classes
+   uris-status-* preserved for tests), filled accent = active. Doubles as the
+   "make active" click target. See headerStatus() in server-connection-form.js. */
+.uris-server-status {
+    flex: 0 0 auto; width: 14px; height: 14px; padding: 0; border: none; border-radius: 50%;
+    cursor: pointer; background: transparent; box-shadow: inset 0 0 0 2px var(--uris-text-mut);
+    transition: filter .12s, box-shadow .12s;
+}
+.uris-server-status:hover { filter: brightness(1.15); }
+.uris-server-status.uris-status-red { box-shadow: inset 0 0 0 2px var(--uris-err); }
+.uris-server-status.uris-status-amber { box-shadow: inset 0 0 0 2px var(--uris-warn); }
+.uris-server-status.uris-status-green { box-shadow: inset 0 0 0 2px var(--uris-accent); }
+/* Active connection fills the radio with accent (readiness color is then conveyed
+   by the accent bar + body button state). */
+.uris-server-connection.uris-server-active .uris-server-status {
+    background: var(--uris-accent); box-shadow: none;
+}
+/* Active connection: left accent bar + tinted background. Inset box-shadow
+   draws the bar inside the card box so layout (border/padding) does not shift
+   when the active card changes. */
+.uris-server-connection.uris-server-active {
+    background: var(--uris-accent-soft);
+    border-color: var(--uris-accent-line);
+    box-shadow: inset 3px 0 0 var(--uris-accent);
+}
+.uris-server-unavailable,
+.uris-server-warning,
+.uris-server-success,
+.uris-server-keyless-import,
+.uris-server-key-preserved {
+    padding: 6px 8px; border-radius: var(--uris-radius);
+    font-size: var(--uris-font-sm); line-height: 1.4;
+}
+.uris-server-unavailable {
+    color: var(--uris-err); background: var(--uris-err-bg);
+    border: 1px solid var(--uris-err-border);
+}
+.uris-server-warning,
+.uris-server-keyless-import {
+    color: var(--uris-warn); background: var(--uris-warn-soft);
+    border: 1px solid var(--uris-warn-line);
+}
+.uris-server-success,
+.uris-server-key-preserved {
+    color: var(--uris-accent); background: var(--uris-accent-soft);
+    border: 1px solid var(--uris-accent-line);
+}
+.uris-server-fetched {
+    display: block; color: var(--uris-text-mut); font-size: var(--uris-font-xs);
+}
+.uris-server-fetched.uris-server-stale,
+.uris-server-stale .uris-server-fetched {
+    color: var(--warning-color, #d8a657);
+}
+.uris-server-manual-mode {
+    display: flex; flex-direction: column; gap: 6px; padding: var(--uris-pad);
+    border: 1px dashed var(--uris-border); border-radius: var(--uris-radius-card);
+    background: rgba(255, 255, 255, .02);
+}
+.uris-server-manual-mode .uris-row { margin-bottom: 0; }
+.uris-server-actions { display: flex; gap: 6px; flex-wrap: wrap; }
+/* Delete: quiet, right-aligned, no fill - mirrors .uris-template-instruction .uris-del
+   so the destructive action never outshouts "Обновить модели". Turns red on hover. */
+.uris-server-connection .uris-server-delete {
+    flex: 0 0 auto; margin-left: auto;
+    background: transparent; border-color: transparent; color: var(--uris-text-mut);
+}
+.uris-server-connection .uris-server-delete:not(:disabled):hover {
+    color: var(--uris-err); background: var(--uris-err-soft); border-color: var(--uris-err-line);
+}
+/* Server-name label affordance lives on the shared .uris-preset-card-header rule
+   above (pointer-events:none + :focus), so no collapsed-only override is needed. */
+.uris-server-save { background: var(--uris-accent-soft); border-color: var(--uris-accent-line); color: var(--uris-accent); }
+.uris-server-save:not(:disabled):hover { background: var(--uris-accent-hover); border-color: var(--uris-accent); }
+.uris-server-cancel { background: var(--uris-surface-btn); border-color: var(--uris-border-soft); color: var(--uris-text-mut); }
+.uris-server-cancel:not(:disabled):hover { background: var(--uris-surface-btn-hover); border-color: var(--uris-border); color: var(--uris-text-strong); }
+.uris-server-probe.uris-server-loading,
+.uris-server-probe.loading { cursor: wait; }
+.uris-server-probe.uris-server-loading::before,
+.uris-server-probe.loading::before {
+    content: ''; width: 12px; height: 12px; box-sizing: border-box;
+    border: 2px solid currentColor; border-right-color: transparent;
+    border-radius: 50%; animation: uris-spin .8s linear infinite;
+}
+
+/* ── Генерация ── */
+.uris-gen { display: flex; flex-direction: column; gap: var(--uris-gap); }
+
+/* Пост-навигатор: стрелка-кнопка + центральная плашка + стрелка. */
+.uris-postnav { display: flex; align-items: center; gap: 6px; }
+.uris-postnav-btn {
+    flex: 0 0 auto; width: 28px; height: 28px; padding: 0;
+    display: flex; align-items: center; justify-content: center;
+    background: var(--uris-surface-btn); border: 1px solid var(--uris-border-soft);
+    border-radius: var(--uris-radius); color: var(--uris-text-mut); cursor: pointer;
+    transition: color .12s, border-color .12s;
+}
+.uris-postnav-btn:hover { color: var(--uris-text-strong); border-color: var(--uris-border); }
+.uris-postnav-btn:disabled { opacity: .45; cursor: default; }
+/* Follow-last-post toggle: иконка-магнит после #urisPostInfo. */
+.uris-follow-toggle.is-active {
+    color: var(--uris-accent);
+    border-color: var(--uris-accent);
+    background: var(--uris-accent-soft);
+}
+.uris-postnav-info {
+    flex: 1; min-width: 0;
+    font-size: var(--uris-font-sm); color: var(--uris-text-mut);
+    padding: 5px 8px; background: var(--uris-surface-card);
+    border: 1px solid var(--uris-border-soft); border-radius: var(--uris-radius);
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+
+/* Контекст-блок: excerpt источника + scene-context (ambiguities). */
+.uris-context-box {
+    display: flex; flex-direction: column; gap: 4px;
+    padding: 6px 8px; background: var(--uris-surface-card);
+    border: 1px solid var(--uris-border-soft); border-radius: var(--uris-radius-card);
+    max-height: 96px; overflow-y: auto;
+}
+
+/* Единая кнопка: ghost (вторичная) / primary (акцент). */
+.uris-btn {
+    flex: 1; min-height: 32px; padding: 6px 10px;
+    border-radius: var(--uris-radius); cursor: pointer;
+    font-size: var(--uris-font-sm); font-weight: 500;
+    display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+    border: 1px solid transparent; transition: background .12s, border-color .12s, color .12s;
+}
+.uris-btn:disabled { opacity: .5; cursor: default; }
+.uris-btn-ghost {
+    background: var(--uris-surface-btn); border-color: var(--uris-border-soft);
+    color: var(--uris-text-strong);
+}
+.uris-btn-ghost:not(:disabled):hover { background: var(--uris-surface-btn-hover); border-color: var(--uris-border); }
+.uris-btn-primary {
+    background: var(--uris-accent); color: #fff; border-color: var(--uris-accent);
+}
+.uris-btn-primary:not(:disabled):hover { filter: brightness(1.08); }
+
+/* Danger: красный для удаления/очистки */
+.uris-btn-danger {
+    background: var(--uris-err-soft); border-color: var(--uris-err-line);
+    color: var(--uris-err);
+}
+.uris-btn-danger:not(:disabled):hover { background: var(--uris-err-hover); border-color: var(--uris-err); }
+
+/* Accent outline: пунктирная обводка для «добавить» (как .uris-refs-add, но через uris-btn) */
+.uris-btn-outline {
+    background: var(--uris-accent-soft); border-style: dashed; border-color: var(--uris-accent-line);
+    color: var(--uris-accent);
+}
+.uris-btn-outline:not(:disabled):hover { background: var(--uris-accent-hover); border-color: var(--uris-accent); }
+
+/* Subtle: нейтральная вторичная кнопка (копировать, заменить) */
+.uris-btn-subtle {
+    background: var(--uris-surface-btn); border-color: var(--uris-border-soft);
+    color: var(--uris-text-mut);
+}
+.uris-btn-subtle:not(:disabled):hover { background: var(--uris-surface-btn-hover); border-color: var(--uris-border); color: var(--uris-text-strong); }
+
+/* Confirm: зелёная для «сделать активным/применить» */
+.uris-btn-confirm {
+    background: var(--uris-accent-soft); border-color: var(--uris-accent-line);
+    color: var(--uris-accent);
+}
+.uris-btn-confirm:not(:disabled):hover { background: var(--uris-accent-hover); border-color: var(--uris-accent); }
+.uris-btn-confirm:disabled { opacity: .5; }
+
+/* Кнопки внутри actions шаблонов — без цветного фона */
+#urisTemplatesActions .uris-btn {
+    background: var(--uris-surface-btn);
+    border-color: var(--uris-border-soft);
+    border-style: solid;
+    color: var(--uris-text-strong);
+}
+#urisTemplatesActions .uris-btn:not(:disabled):hover {
+    background: var(--uris-surface-btn-hover);
+    border-color: var(--uris-border);
+}
+
+.uris-prompt-area { font-size: var(--uris-font-sm); line-height: 1.45; resize: vertical; min-height: 80px; }
+.uris-editor { display: flex; flex-direction: column; gap: 6px; }
+.uris-gen-actions { display: flex; gap: 6px; flex-wrap: wrap; }
+.uris-gen-actions button { flex: 1; }
+.uris-gen-actions .uris-btn-primary { flex: 2; }
+.uris-queue-status { font-size: var(--uris-font-sm); color: var(--uris-text-mut); display: flex; align-items: center; gap: 8px; }
+.uris-queue-stop { background: var(--uris-surface-btn); border: 1px solid var(--uris-border-soft); color: var(--uris-text-mut); border-radius: 4px; padding: 1px 8px; font-size: var(--uris-font-sm); cursor: pointer; }
+.uris-queue-stop:hover { background: var(--uris-surface-btn-hover); border-color: var(--uris-border); color: var(--uris-text-strong); }
+
+/* Server-request recovery notices emitted by tab-generate. State is encoded by
+   the available actions: no action = checking, Resume = not submitted, and a
+   lone Discard action = failed or provider result uncertain. */
+.uris-pending-server-host {
+    display: flex; flex-direction: column; gap: 6px;
+}
+.uris-pending-server-host:empty { display: none; }
+.uris-pending-server-host .uris-pending-server {
+    display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
+    min-height: 34px; padding: 6px 8px;
+    border: 1px solid var(--uris-border-soft); border-radius: var(--uris-radius);
+    background: var(--uris-surface-card); color: var(--uris-text-mut);
+    font-size: var(--uris-font-sm); line-height: 1.4;
+}
+.uris-pending-server-host .uris-pending-server:not(:has([data-pending-server-action])) {
+    border-color: var(--uris-accent-line);
+    background: var(--uris-accent-soft); color: var(--uris-text-strong);
+}
+.uris-pending-server-host .uris-pending-server:not(:has([data-pending-server-action]))::before {
+    content: ''; width: 12px; height: 12px; flex: 0 0 12px;
+    box-sizing: border-box; border: 2px solid currentColor; border-right-color: transparent;
+    border-radius: 50%; animation: uris-spin .8s linear infinite;
+}
+.uris-pending-server-host .uris-pending-server:has([data-pending-server-action="resume"]) {
+    border-color: var(--uris-warn-line);
+    background: var(--uris-warn-soft); color: var(--uris-warn);
+}
+.uris-pending-server-host .uris-pending-server:has([data-pending-server-action="discard"]):not(:has([data-pending-server-action="resume"])) {
+    border-color: var(--uris-err-border);
+    background: var(--uris-err-bg); color: var(--uris-err);
+}
+.uris-pending-server-host [data-pending-server-action] {
+    min-height: 28px; padding: 4px 9px;
+    border: 1px solid var(--uris-border); border-radius: var(--uris-radius);
+    background: var(--uris-surface-btn); color: var(--uris-text-strong);
+    cursor: pointer; font: inherit; font-weight: 500;
+    transition: background .12s, border-color .12s, color .12s, opacity .12s;
+    pointer-events: auto;
+}
+.uris-pending-server-host [data-pending-server-action="resume"] {
+    border-color: var(--uris-accent-line);
+    background: var(--uris-accent-soft); color: var(--uris-accent);
+}
+.uris-pending-server-host [data-pending-server-action="discard"] { margin-left: auto; }
+.uris-pending-server-host [data-pending-server-action]:not(:disabled):hover {
+    background: var(--uris-surface-btn-hover); border-color: currentColor;
+}
+.uris-pending-server-host [data-pending-server-action]:focus-visible {
+    outline: 2px solid var(--uris-accent); outline-offset: 2px;
+}
+.uris-pending-server-host [data-pending-server-action]:disabled,
+.uris-pending-server-host [data-pending-server-action][aria-busy="true"] {
+    opacity: .55; cursor: wait; pointer-events: none;
+}
+.uris-pending-server-host [data-pending-server-action]:disabled::before,
+.uris-pending-server-host [data-pending-server-action][aria-busy="true"]::before {
+    content: ''; width: 11px; height: 11px; display: inline-block; margin-right: 5px;
+    box-sizing: border-box; border: 2px solid currentColor; border-right-color: transparent;
+    border-radius: 50%; animation: uris-spin .8s linear infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+    .uris-pending-server-host .uris-pending-server::before,
+    .uris-pending-server-host [data-pending-server-action]:disabled::before,
+    .uris-pending-server-host [data-pending-server-action][aria-busy="true"]::before {
+        animation: none;
+    }
+}
+.uris-advanced-toggle { align-self: flex-start; font-size: var(--uris-font); color: var(--uris-text-mut); cursor: pointer; }
+.uris-advanced { display: flex; flex-direction: column; gap: 6px; padding: var(--uris-pad); border: 1px solid var(--uris-border-soft); border-radius: var(--uris-radius-card); background: var(--uris-surface-card); }
+.uris-advanced > summary { cursor: pointer; font-size: var(--uris-font-sm); color: var(--uris-text-mut); }
+.uris-advanced .uris-row label { min-width: var(--uris-label-w, 90px); }
+.uris-advanced .checkbox_label { font-size: var(--uris-font-sm); color: var(--uris-text-mut); }
+.uris-rawjson { margin-top: 4px; }
+
+/* Параметры: компактный inline-ряд без тяжёлых label'ов. */
+.uris-gen-params { display: flex; flex-wrap: wrap; gap: var(--uris-gap); align-items: center; }
+.uris-gen-params + .uris-gen-params { margin-top: 4px; }
+.uris-param { display: inline-flex; align-items: center; gap: 4px; }
+.uris-param-label { font-size: var(--uris-font-xs); color: var(--uris-text-mut); }
+.uris-gen-params select { min-width: 64px; padding: 3px 6px; font-size: var(--uris-font-sm); }
+
+/* ── v2.2: prompt-first generation ── */
+.uris-prompt-card {
+    position: relative;
+    display: flex; flex-direction: column; gap: 8px;
+    padding: 10px; border-radius: var(--uris-radius-card);
+    background: var(--uris-surface-card); border: 1px solid var(--uris-border-soft);
+}
+.uris-source-excerpt {
+    font-size: var(--uris-font-sm); color: var(--uris-text-mut); line-height: 1.4;
+    display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+}
+.uris-draft-stale {
+    font-size: var(--uris-font-xs); color: var(--uris-warn); background: var(--uris-warn-soft);
+    padding: 2px 6px; border-radius: var(--uris-radius-pill); white-space: nowrap;
+}
+.uris-stage-error {
+    font-size: var(--uris-font-sm); color: var(--uris-err); background: var(--uris-err-bg);
+    padding: 6px 8px; border-radius: var(--uris-radius-card); white-space: pre-wrap;
+}
+.uris-gen-params .uris-row { flex-wrap: wrap; }
+.uris-gen-params select { min-width: 70px; }
+
+/* Scene context / ambiguities */
+.uris-scene-context {
+    display: flex; flex-direction: column; gap: 6px;
+}
+.uris-ambiguity {
+    display: flex; flex-direction: column; gap: 4px;
+    padding: 6px 8px; border-radius: var(--uris-radius-card);
+    background: var(--uris-surface-card); border: 1px solid var(--uris-border-soft);
+}
+.uris-ambiguity-mention {
+    font-size: var(--uris-font-sm); color: var(--uris-text-strong); font-weight: 600;
+}
+.uris-ambiguity-candidates {
+    display: flex; flex-wrap: wrap; gap: 6px; align-items: center;
+}
+.uris-ambiguity-candidate {
+    display: inline-flex; align-items: center; gap: 4px;
+    font-size: var(--uris-font-sm); padding: 2px 6px; border-radius: var(--uris-radius-pill);
+    background: var(--uris-surface-btn);
+}
+.uris-ambiguity-candidate .uris-candidate-name { margin-right: 4px; }
+.uris-ref-include, .uris-ref-exclude {
+    padding: 2px 5px; font-size: calc(11px * var(--uris-font-scale, 1)); line-height: 1;
+    background: transparent; border: none; color: inherit; cursor: pointer; opacity: .7;
+}
+.uris-ref-include:hover, .uris-ref-exclude:hover { opacity: 1; }
+.uris-reference-included { outline: 2px solid var(--uris-accent); outline-offset: 2px; }
+.uris-reference-excluded { opacity: .45; text-decoration: line-through; }
+
+/* Mobile */
+@media (max-width: 768px) {
+    .uris-gen-params .uris-row { gap: 6px 12px; }
+    .uris-gen-params .uris-row label { min-width: 0; }
+}
+
+/* ── Templates ── */
+.uris-templates-create { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 8px; }
+.uris-templates-create .uris-btn { flex: 1; min-width: 120px; }
+/* Header radio in the template card: doubles as the "make active" click target
+   (visible when collapsed). Filled accent = active, hollow ring = inactive. */
+.uris-template-status {
+    flex: 0 0 auto; width: 14px; height: 14px; padding: 0; border: none; border-radius: 50%;
+    cursor: pointer; transition: filter .12s, box-shadow .12s;
+}
+.uris-template-status:hover { filter: brightness(1.15); }
+.uris-template-status.uris-status-active { background: var(--uris-accent); box-shadow: none; }
+.uris-template-status:not(.uris-status-active) {
+    background: transparent; box-shadow: inset 0 0 0 2px var(--uris-text-mut);
+}
+/* Active template: same accent-bar language as .uris-server-active (API tab). */
+.uris-template-instruction.uris-template-active {
+    background: var(--uris-accent-soft);
+    border-color: var(--uris-accent-line);
+    box-shadow: inset 3px 0 0 var(--uris-accent);
+}
+/* Template-name label affordance lives on the shared .uris-preset-card-header
+   rule above (pointer-events:none + :focus), so no collapsed-only override. */
+/* Delete: quiet, right-aligned, no fill - destructive action should not
+   compete with "Сделать активным". Turns red only on hover. */
+.uris-template-instruction .uris-del {
+    flex: 0 0 auto; margin-left: auto;
+    background: transparent; border-color: transparent; color: var(--uris-text-mut);
+}
+.uris-template-instruction .uris-del:not(:disabled):hover {
+    color: var(--uris-err); background: var(--uris-err-soft); border-color: var(--uris-err-line);
+}
+
+/* ── v3: Reference editor aliases ── */
+.uris-ref-editor .uris-hint { margin-bottom: 8px; }
+.uris-ed-aliases { flex: 1; }
+
+/* ── Галерея ── */
+.uris-gallery-toolbar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 8px; }
+.uris-gallery-toolbar #urisGalleryCount { margin-right: auto; font-size: var(--uris-font); color: var(--uris-text-mut); }
+.uris-gallery-toolbar .uris-autosave-st { font-size: var(--uris-font); white-space: nowrap; }
+.uris-gallery-clear { width: auto; min-width: 0; min-height: 32px; padding: 5px 9px; margin-left: auto; flex: 0 0 auto; }
+.uris-gallery-grid { display: grid; gap: 8px; grid-template-columns: repeat(3, 1fr); }
+.uris-card {
+    border-radius: var(--uris-radius-card); overflow: hidden; position: relative;
+    border: 1px solid var(--uris-border-soft);
+}
+.uris-card-img {
+    width: 100%; aspect-ratio: 1; background-size: cover; background-position: center; cursor: pointer;
+}
+.uris-saved-badge { position: absolute; top: 4px; right: 4px; font-size: var(--uris-font-sm); }
+.uris-card-actions { display: flex; justify-content: space-around; padding: 4px; background: rgba(0,0,0,.3); }
+.uris-card-btn { background: none; border: none; color: var(--uris-text-mut); cursor: pointer; padding: 6px; font-size: var(--uris-font); }
+.uris-card-btn:hover { color: var(--uris-text-strong); }
+.uris-gallery-empty { text-align: center; color: var(--uris-text-dim); padding: 40px 0; }
+
+/* ── Lightbox ──
+   Бэкдроп на полный viewport. Контент центрируем MARGIN:AUTO,
+   а не flex-центрированием родителя: когда контент влезает — по центру,
+   когда нет — прилипает к верху, а overflow:auto даёт скролл. Так верх
+   (где кнопка закрытия) НЕ уезжает за экран — главный фикс мобильного бага.
+   dvh/dvw — progressive enhancement над vh/vw (после второй декларации).
+   ВАЖНО: НЕ inset:0, а явные top/left + width/height. SillyTavern mobile
+   (mobile-styles.css, @media ≤1000px) ставит body { position: fixed } —
+   из-за этого контейнер fixed-потомков получает высоту 0 (html вырождается),
+   inset:0 даёт нулевой бэкдроп, а привязка bottom улетает ЗА верх экрана.
+   Явные top:0 + width:100% + height:100dvh работают и в обычном, и в
+   ST-мобильном окружении (проверено тестом tests/manual/popup-mobile-repro.html). */
+.uris-lightbox {
+    position: fixed; top: 0; left: 0;
+    width: 100%; height: 100vh; height: 100dvh;
+    z-index: 100000;
+    background: rgba(0,0,0,.9);
+    display: flex;
+    overflow: auto;
+    -webkit-overflow-scrolling: touch;
+    box-sizing: border-box;
+    padding: env(safe-area-inset-top, 0) env(safe-area-inset-right, 0) env(safe-area-inset-bottom, 0) env(safe-area-inset-left, 0);
+}
+.uris-lb-content {
+    position: relative; margin: auto;
+    max-width: 92vw; max-width: 92dvw;
+    max-height: 92vh; max-height: 92dvh;
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    min-height: 0;
+}
+.uris-lb-img {
+    max-width: 100%; max-height: 80vh; max-height: 80dvh;
+    object-fit: contain; min-width: 0; min-height: 0;
+    flex: 0 1 auto;            /* сжимается, не растягивается — колонка помещается */
+}
+.uris-lb-info { max-width: 100%; margin-top: 8px; flex: 0 0 auto; min-height: 0; }
+.uris-lb-prompt { font-size: calc(12px * var(--uris-font-scale, 1)); opacity: .7; max-height: 80px; overflow-y: auto; overflow-wrap: break-word; }
+.uris-lb-actions {
+    display: flex; gap: 8px; justify-content: center;
+    padding: 10px 12px; background: rgba(0, 0, 0, 0.4);
+    border-radius: 8px; margin-top: 10px; flex: 0 0 auto;
+}
+.uris-lb-act {
+    background: rgba(255, 255, 255, 0.1); border: none; color: #fff;
+    width: 38px; height: 38px; border-radius: 6px; cursor: pointer;
+    font-size: calc(16px * var(--uris-font-scale, 1)); display: flex; align-items: center; justify-content: center;
+    transition: background 0.15s;
+}
+.uris-lb-act:hover { background: rgba(255, 255, 255, 0.22); }
+.uris-lb-act-danger:hover { background: var(--uris-err-hover); }
+.uris-lb-nav { position: absolute; top: 50%; transform: translateY(-50%); font-size: calc(40px * var(--uris-font-scale, 1)); cursor: pointer; user-select: none; border: 0; background: transparent; padding: 0; font-family: inherit; color: #fff; }
+.uris-lb-nav.prev { left: 10px; } .uris-lb-nav.next { right: 10px; }
+/* Счётчик и ✕ — прямые дети бэкдропа (inset:0), позиция относительно экрана,
+   а не относительно контента. Безопасные отступы + 44px тап-таргет → всегда
+   в углу экрана и доступны на мобильном/в компактном режиме. */
+.uris-lb-counter { position: absolute; top: max(env(safe-area-inset-top, 0px), 10px); left: 50%; transform: translateX(-50%); pointer-events: none; }
+.uris-lb-close {
+    position: absolute; top: max(env(safe-area-inset-top, 0px), 6px); right: max(env(safe-area-inset-right, 0px), 6px);
+    width: 44px; height: 44px;
+    display: flex; align-items: center; justify-content: center;
+    font-size: calc(22px * var(--uris-font-scale, 1)); cursor: pointer; z-index: 2; color: #fff;
+    border: 0; background: transparent; padding: 0; font-family: inherit;
+}
+.uris-lb-close:focus-visible, .uris-lb-nav:focus-visible, .uris-lb-act:focus-visible { outline: 2px solid #fff; outline-offset: 2px; }
+.uris-lb-nav { z-index: 2; }
+
+/* ── Mobile ── */
+/* Mobile: окно заполняет viewport EXCEPT ST-бары (#top-bar, #send_form),
+   которые имеют z-index выше и перекрывают наш header без insets.
+   Высоты баров пишутся window.js → --uris-st-top / --uris-st-bottom на <html>;
+   вне SillyTavern fallback 0px → полный full-screen.
+   !important нужен: base .uris-window задаёт width/height в CSS, а drag/resize
+   пишут inline (inline старше CSS без !important). dvh вместо vh корректно
+   учитывает show/hide URL-бара; 100% ширине, не 100vw — не заезжает за скроллбар. */
+@media (max-width: 768px) {
+    #urisWindow.uris-mobile {
+        position: fixed !important;
+        top: var(--uris-st-top, 0px) !important;
+        left: 0 !important; right: 0 !important; bottom: 0 !important;
+        width: 100% !important; max-width: 100% !important;
+        min-width: 0 !important; min-height: 0 !important;
+        height: calc(100dvh - var(--uris-st-top, 0px) - var(--uris-st-bottom, 0px)) !important;
+        border-radius: 0 !important; border: none !important;
+        box-shadow: none !important; transform: none !important;
+        padding-top: env(safe-area-inset-top, 0);
+        padding-bottom: env(safe-area-inset-bottom, 0);
+    }
+    /* Тело должно впитывать оставшуюся высоту и скроллиться внутри — иначе
+       grid карточек на длинных списках переполнит высоту окна. */
+    #urisWindow.uris-mobile .uris-body { flex: 1 !important; min-height: 0 !important; -webkit-overflow-scrolling: touch; }
+    #urisWindow.uris-mobile .uris-resizer { display: none !important; }
+    #urisWindow.uris-mobile .uris-header { cursor: default !important; touch-action: pan-y !important; }
+    .uris-gallery-grid { grid-template-columns: repeat(2, 1fr); }
+    .uris-card-actions { flex-wrap: wrap; }
+    .uris-card-btn { padding: 10px; font-size: calc(16px * var(--uris-font-scale, 1)); min-width: 44px; min-height: 44px; }
+    /* Скроллтаб для 5 вкладок на узком экране */
+    .uris-tabs { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+    .uris-tab { flex: 0 0 auto; padding: 8px 12px; white-space: nowrap; min-width: 60px; }
+}
+@supports not (height: 100dvh) {
+    @media (max-width: 768px) {
+        #urisWindow.uris-mobile {
+            height: calc(100vh - var(--uris-st-top, 0px) - var(--uris-st-bottom, 0px)) !important;
+        }
+    }
+}
+@media (max-width: 479px) {
+    .uris-gallery-grid { grid-template-columns: 1fr; }
+}
+
+/* ── Lightbox: mobile portrait ──
+   На узком экране центрированные controls недосягаемы большим пальцем
+   (top: 50% для nav, info/actions под картинкой могут уйти под address bar).
+   Решение из Material 3 / Apple HIG / shadcn consensus: bottom-anchored.
+   svh (small viewport) — картинка гарантированно влезает даже при показанном
+   URL-баре, без jitter от dvh. Controls прижимаются к нижнему краю поверх
+   safe-area. Сохраняем centered image (flex-column) — только controls едут. */
+@media (max-width: 768px) {
+    .uris-lb-content {
+        /* Уменьшаем, чтобы освободить место под bottom-anchored controls. */
+        max-height: 86svh; max-height: 86vh;
+        justify-content: flex-start;       /* image к верху, actions к низу */
+    }
+    .uris-lb-img {
+        max-height: 65svh; max-height: 65vh;
+    }
+    /* Side nav уходит вниз: thumb-reach. Превращаем ‹ › в нижнюю пару кнопок. */
+    .uris-lb-nav {
+        top: auto; transform: none;
+        bottom: max(env(safe-area-inset-bottom, 0px), 12px);
+        width: 44px; height: 44px;
+        display: flex; align-items: center; justify-content: center;
+        font-size: calc(28px * var(--uris-font-scale, 1));
+        background: rgba(0,0,0,0.45); border-radius: 8px;
+    }
+    .uris-lb-nav.prev { left: max(env(safe-area-inset-left, 0px), 10px); }
+    .uris-lb-nav.next { right: max(env(safe-area-inset-right, 0px), 10px); }
+    /* Actions toolbar — уже под картинкой, добавляем safe-area bottom padding. */
+    .uris-lb-actions {
+        margin-bottom: env(safe-area-inset-bottom, 0);
+    }
+    .uris-lb-act { width: 44px; height: 44px; font-size: calc(18px * var(--uris-font-scale, 1)); }
+    /* ✕ чуть крупнее и отодвигается от верхнего края на safe-area. */
+    .uris-lb-close { width: 48px; height: 48px; font-size: calc(24px * var(--uris-font-scale, 1)); }
+}
+@supports not (height: 100svh) {
+    @media (max-width: 768px) {
+        /* WebView без svh (Android < Chromium 108 / старый Safari) — деградируем
+           на vh, остаётся рабочий centered layout. */
+        .uris-lb-content { max-height: 86vh; }
+        .uris-lb-img { max-height: 65vh; }
+    }
+}
+
+/* ── Settings panel: source picker ── */
+.uris_field_group { margin: 8px 6px; }
+.uris_field_label { display: block; font-size: 0.78em; font-weight: 600; opacity: 0.7; margin-bottom: 5px; }
+.uris_hint { display: block; font-size: 0.75em; opacity: 0.55; margin-top: 4px; line-height: 1.4; }
+
+/* Segmented source picker (Профиль / Свой) */
+.uris_seg { display: flex; gap: 4px; background: var(--uris-surface-btn); border-radius: var(--uris-radius-card); padding: 3px; }
+.uris_seg_btn {
+    flex: 1; padding: 8px 6px; border: none; border-radius: var(--uris-radius); cursor: pointer;
+    background: transparent; color: var(--uris-text-mut);
+    font-size: var(--uris-font-sm); font-weight: 600; text-align: center;
+    touch-action: manipulation; -webkit-tap-highlight-color: transparent;
+    transition: background 0.12s, color 0.12s;
+    appearance: none; -webkit-appearance: none;
+}
+.uris_seg_btn:hover { color: var(--uris-text-strong); }
+.uris_seg_btn.uris_seg_active {
+    background: var(--uris-accent); color: #fff;
+}
+
+
+/* ── CORS-proxy status indicator ── */
+.uris-proxy-status { margin-bottom: 12px; }
+.uris-proxy-ok,
+.uris-proxy-warn {
+    padding: 8px 10px; border-radius: var(--uris-radius-card); font-size: var(--uris-font-sm);
+    display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+    line-height: 1.4;
+}
+.uris-proxy-ok {
+    background: var(--uris-accent-soft);
+    color: var(--uris-accent);
+}
+.uris-proxy-warn {
+    background: var(--uris-warn-soft);
+    color: var(--uris-warn);
+}
+.uris-proxy-ok i, .uris-proxy-warn i { font-size: calc(15px * var(--uris-font-scale, 1)); }
+.uris-proxy-warn code {
+    background: rgba(0,0,0,0.25); padding: 1px 5px; border-radius: 3px; font-size: var(--uris-font-sm);
+}
+.uris-proxy-recheck { margin-left: auto; font-size: var(--uris-font-sm); padding: 2px 10px; }
+.uris-proxy-checking { font-size: var(--uris-font); color: var(--uris-text-mut); }
+
+/* ── autoFetch: таблица стратегий хостов ── */
+.uris-host-table {
+    width: 100%; border-collapse: collapse; margin-top: 6px; font-size: calc(12px * var(--uris-font-scale, 1));
+}
+.uris-host-table th {
+    text-align: left; opacity: 0.6; font-weight: 600; padding: 2px 8px;
+}
+.uris-host-table td { padding: 2px 8px; }
+.uris-host-name { font-family: monospace; }
+.uris-host-direct { color: var(--uris-accent); }
+.uris-host-proxy { color: var(--uris-warn); }
+
+/* ── v2.3 Phase 1: Плашка референсов на вкладке «Генерация» ── */
+/* (стили status-label/panel-head см. в блоке .uris-refs-panel ниже) */
+.uris-refs-edit { padding: 2px 8px; font-size: var(--uris-font-sm); }
+.uris-refs-empty { font-size: var(--uris-font-sm); color: var(--uris-text-mut); padding: 2px 0; }
+
+/* Единая панель референсов (Generate tab) */
+.uris-refs-panel {
+    background: var(--uris-surface-card);
+    border: 1px solid var(--uris-border-soft);
+    border-radius: var(--uris-radius-card);
+    padding: var(--uris-pad);
+    margin-bottom: 8px;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+.uris-refs-panel-head {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+}
+.uris-refs-status-label { font-size: var(--uris-font); font-weight: 600; color: var(--uris-text-strong); flex: 1; }
+.uris-refs-panel-chips {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+.uris-refs-panel-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-wrap: wrap;
+}
+.uris-refs-panel-rowlabel {
+    font-size: calc(11px * var(--uris-font-scale, 1));
+    opacity: .7;
+    white-space: nowrap;
+    min-width: 130px;
+}
+.uris-refs-panel-preview {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    padding-top: 4px;
+    border-top: 1px dashed rgba(255,255,255,.1);
+}
+.uris-refs-keywords {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    padding: 2px 0;
+}
+.uris-refs-keywords-row {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 4px;
+    min-height: 18px;
+}
+.uris-refs-keywords-label {
+    color: var(--uris-text-muted, #aaa);
+    font-size: var(--uris-font-sm);
+    margin-right: 3px;
+    white-space: nowrap;
+}
+.uris-refs-keyword-chip {
+    display: inline-flex;
+    align-items: baseline;
+    gap: 3px;
+    max-width: 100%;
+    padding: 2px 6px;
+    border: 1px solid var(--uris-border-soft);
+    border-radius: 10px;
+    background: rgba(255,255,255,.04);
+    font-size: calc(11px * var(--uris-font-scale, 1));
+    line-height: 1.25;
+}
+.uris-refs-keyword-chip small { opacity: .65; }
+.uris-refs-whitelist-group {
+    display: block;
+    width: 100%;
+    margin-top: 10px;
+}
+.uris-refs-whitelist-group-head {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    margin-bottom: 5px;
+    color: var(--uris-text-muted, #aaa);
+    font-size: var(--uris-font-sm);
+}
+.uris-refs-whitelist-group-head > span { flex: 1; }
+.uris-refs-whitelist-group-cards {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    align-items: flex-start;
+    width: 100%;
+}
+.uris-refs-whitelist-actions {
+    display: flex;
+    flex: 0 0 auto;
+    flex-wrap: wrap;
+    gap: 6px;
+    width: 100%;
+    margin: 2px 0 0;
+}
+.uris-refs-whitelist-actions .uris-refs-add-tile {
+    width: 56px;
+    min-width: 56px;
+    min-height: 56px;
+    aspect-ratio: 1;
+    padding: 0;
+    font-size: calc(22px * var(--uris-font-scale, 1));
+    gap: 0;
+}
+.uris-refs-whitelist-direct {
+    margin-top: 10px;
+    padding-top: 8px;
+    border-top: 1px dashed rgba(255,255,255,.1);
+}
+.uris-ref-stale { opacity: .7; }
+.uris-folder-remove {
+    min-width: 26px;
+    min-height: 26px;
+    padding: 3px 7px;
+    border: 1px solid var(--uris-border-soft);
+    border-radius: var(--uris-radius);
+    background: transparent;
+    color: inherit;
+    cursor: pointer;
+}
+.uris-folder-picker-list {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    max-height: min(50vh, 360px);
+    overflow: auto;
+}
+.uris-folder-picker-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    width: 100%;
+    min-height: 40px;
+    padding: 8px 10px;
+    border: 1px solid var(--uris-border-soft);
+    border-radius: var(--uris-radius);
+    background: var(--uris-surface-btn);
+    color: inherit;
+    text-align: left;
+    cursor: pointer;
+}
+.uris-folder-picker-item.uris-pick-selected { border-color: var(--uris-accent); }
+
+.uris-descref-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 3px 8px;
+    border-radius: 12px;
+    background: rgba(255,255,255,.06);
+    cursor: pointer;
+    font-size: calc(11px * var(--uris-font-scale, 1));
+    border: 1px solid transparent;
+    user-select: none;
+}
+.uris-descref-chip:hover {
+    border-color: var(--uris-accent);
+}
+.uris-descref-del {
+    background: none;
+    border: none;
+    color: inherit;
+    cursor: pointer;
+    opacity: .5;
+    padding: 0;
+    font-size: calc(10px * var(--uris-font-scale, 1));
+}
+.uris-descref-del:hover { opacity: 1; }
+.uris-refs-mode-select {
+    font-size: calc(11px * var(--uris-font-scale, 1));
+    padding: 1px 6px;
+}
+
+/* Миниатюра-чип превью: 44×44 вариант удалён — был мёртвым,
+   каскад CSS выбирал 64×64 декларацию ниже (v3-redesign).
+   Оставшиеся правила (.uris-ref-chip-icon) не дублируются. */
+.uris-ref-chip-icon {
+    display: flex; align-items: center; justify-content: center;
+    width: 100%; height: 100%; font-size: calc(16px * var(--uris-font-scale, 1)); opacity: .6;
+}
+.uris-effective-ref-remove {
+    position: absolute;
+    top: 1px;
+    right: 1px;
+    width: 18px;
+    height: 18px;
+    padding: 0;
+    border: 0;
+    border-radius: 3px;
+    display: grid;
+    place-items: center;
+    background: rgba(0,0,0,.6);
+    color: #fff;
+    cursor: pointer;
+}
+.uris-effective-ref-remove:hover { background: var(--uris-err); }
+.uris-effective-ref-add {
+    margin-left: auto;
+}
+
+.uris-refs-stage2-cap {
+    font-size: var(--uris-font-sm);
+    font-weight: 600;
+    color: var(--uris-text-strong);
+    margin-bottom: 6px;
+}
+.uris-refs-policy-info {
+    display: block;
+    margin-top: 0.35rem;
+    padding: 5px 8px;
+    border: 1px solid var(--uris-border-soft);
+    border-radius: var(--uris-radius);
+    background: var(--uris-surface-card);
+    color: var(--uris-accent);
+    line-height: 1.4;
+}
+.uris-refs-policy-info.uris-warning {
+    border-color: var(--uris-warn-line);
+    color: var(--uris-warn);
+}
+.uris-refs-dialect-switch {
+    display: inline-flex;
+    align-items: center;
+    min-height: 26px;
+    margin-left: 4px;
+    padding: 3px 8px;
+    border: 1px solid var(--uris-warn-line);
+    border-radius: var(--uris-radius);
+    background: var(--uris-surface-btn);
+    color: var(--uris-warn);
+    font: inherit;
+    cursor: pointer;
+    transition: background .12s, border-color .12s, color .12s;
+}
+.uris-refs-dialect-switch:hover {
+    background: var(--uris-surface-btn-hover);
+    border-color: var(--uris-warn);
+    color: var(--uris-text-strong);
+}
+.uris-refs-dialect-switch:focus-visible {
+    outline: 2px solid var(--uris-accent);
+    outline-offset: 2px;
+}
+.uris-refs-strip {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    align-items: flex-start;
+}
+.uris-ref-chip-preview {
+    position: relative;
+    width: 56px;
+    aspect-ratio: 3 / 4;
+    border-radius: 6px;
+    overflow: hidden;
+    border: 1px solid var(--SmartThemeBorderColor, #444);
+    background: rgba(0,0,0,.3);
+    flex: 0 0 56px;
+}
+.uris-ref-chip-preview img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.uris-refs-add-tile {
+    width: 56px; aspect-ratio: 3 / 4;
+    border: 2px dashed var(--SmartThemeBorderColor, #666);
+    background: transparent; color: var(--SmartThemeBodyColor, #aaa);
+    border-radius: 6px; cursor: pointer;
+    display: flex; align-items: center; justify-content: center;
+    font-size: calc(22px * var(--uris-font-scale, 1));
+    flex: 0 0 56px;
+}
+.uris-refs-add-tile:hover {
+    border-color: var(--uris-accent);
+    color: var(--uris-accent);
+}
+/* Pinned-indicator (reserved for future use) */
+.uris-ref-chip-preview.uris-ref-pinned {
+    outline: 2px solid var(--uris-accent);
+    outline-offset: -2px;
+}
+
+.uris-refs-sources-section {
+    margin-top: 6px;
+    border-top: 1px solid var(--uris-border-soft);
+    padding-top: 6px;
+}
+.uris-refs-sources-label {
+    font-size: var(--uris-font-sm);
+    font-weight: 600;
+    color: var(--uris-text-strong);
+    margin-bottom: 6px;
+}
+
+
+
+/* ── v3-redesign: референсы по чату + пул ── */
+
+/* Extras chips */
+.uris-extras-list {
+    display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px;
+}
+/* Host'ы whitelist/Stage1-описаний во вкладке генерации: чипы идут в горизонтальный
+   ряд с переносом, как в библиотеке референсов (раньше падали по одному вертикально —
+   host не имел раскладки). Содержимое: кнопка «+», затем .uris-extra-chip. */
+.uris-refs-panel-extras, .uris-refs-panel-desc {
+    display: flex; flex-wrap: wrap; gap: 6px; align-items: flex-start; margin-top: 4px;
+}
+.uris-extra-chip {
+    position: relative; border-radius: 6px; overflow: hidden;
+    border: 1px solid var(--SmartThemeBorderColor);
+    display: inline-block; flex: 0 0 auto;
+    width: 56px;
+    aspect-ratio: 3 / 4;
+}
+.uris-extra-chip img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.uris-extra-name {
+    font-size: calc(10px * var(--uris-font-scale, 1)); padding: 2px; text-align: center;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.uris-extra-del {
+    position: absolute; top: 2px; right: 2px;
+    background: rgba(0,0,0,.6); border: none; color: #fff;
+    width: 18px; height: 18px; border-radius: 50%; cursor: pointer;
+    display: flex; align-items: center; justify-content: center;
+    font-size: calc(10px * var(--uris-font-scale, 1));
+}
+/* Drag-and-drop: whitelist chip -> preview (force-include). Pointer Events drive
+   mouse + touch alike; the ghost is a transform-moved clone (compositor, no
+   layout), the source only dims, and the drop commits a single correction. */
+.uris-extra-chip.uris-draggable { touch-action: none; cursor: grab; }
+.uris-extra-chip.uris-dragging { opacity: .4; }
+.uris-drag-ghost {
+    position: fixed; top: 0; left: 0; margin: 0; pointer-events: none; z-index: 100000;
+    opacity: .92; box-shadow: 0 6px 18px rgba(0,0,0,.5); border-radius: 6px; overflow: hidden;
+    will-change: transform;
+}
+.uris-dragging-active, .uris-dragging-active * { cursor: grabbing !important; }
+[data-drop-zone].uris-drop-zone--over {
+    outline: 2px dashed var(--uris-accent); outline-offset: -3px;
+    border-radius: var(--uris-radius-card);
+}
+
+/* ── Вкладка «Референсы» — layout v4 (Figma) ──
+   Десктоп: горизонтальный ряд — sidebar (148px) слева + main (toolbar+grid)
+   в центре + overlay-host (260px) справа, открывается по клику на карточку.
+   Мобайл: вертикальный 3-экранный стек (см. .uris-refs-mobile-stack). */
+.uris-references { display: flex; flex-direction: row; flex: 1; min-height: 0; height: 100%; overflow: hidden; }
+.uris-references.uris-refs-mobile-stack { flex-direction: column; }
+
+/* ── Sidebar (десктоп) ── */
+.uris-refs-sidebar {
+    flex: 0 0 170px; width: 170px;
+    display: flex; flex-direction: column;
+    background: var(--uris-surface-tabs);
+    border-right: 1px solid var(--uris-border-soft);
+    overflow: hidden;
+}
+.uris-folder-list { flex: 1; overflow-y: auto; padding: 4px 0; }
+.uris-folder-item {
+    display: flex; align-items: center; gap: 8px;
+    width: 100%; padding: 6px 10px; background: none; border: none;
+    color: var(--uris-text-mut); cursor: pointer; text-align: left;
+    font-size: var(--uris-font-sm); transition: background .12s, color .12s;
+}
+.uris-folder-item:hover { color: var(--uris-text-strong); background: rgba(255,255,255,.03); }
+.uris-folder-item.uris-folder-item-on {
+    background: var(--uris-accent-soft); color: var(--uris-accent);
+}
+.uris-folder-dot {
+    flex: 0 0 8px; width: 8px; height: 8px; border-radius: 50%;
+    background: var(--uris-text-dim);
+}
+.uris-folder-dot-mute { background: var(--uris-text-dim); opacity: .5; }
+.uris-folder-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.uris-folder-count { font-size: var(--uris-font-xs); color: var(--uris-text-dim); }
+.uris-folder-header {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 8px 8px 4px 10px;
+}
+.uris-folder-header-label {
+    font-size: calc(9px * var(--uris-font-scale, 1)); text-transform: uppercase; letter-spacing: .15em; color: var(--uris-text-dim);
+}
+.uris-folder-header-add {
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 22px; height: 22px; padding: 0; border: 0; border-radius: var(--uris-radius);
+    background: transparent; color: var(--uris-text-dim); cursor: pointer;
+    transition: background .12s, color .12s;
+}
+.uris-folder-header-add:hover { color: var(--uris-accent); background: var(--uris-accent-soft); }
+.uris-folder-row { display: flex; align-items: center; }
+.uris-folder-row .uris-folder-item { flex: 1; min-width: 0; }
+.uris-folder-edit, .uris-folder-editor-actions button {
+    display: inline-flex; align-items: center; justify-content: center;
+    border: 0; background: transparent; color: var(--uris-text-dim); cursor: pointer;
+}
+.uris-folder-edit { flex: 0 0 28px; width: 28px; height: 28px; }
+.uris-folder-edit:hover, .uris-folder-editor-actions button:hover { color: var(--uris-text-strong); background: var(--uris-surface-btn); }
+.uris-folder-editor { padding: 4px 10px 8px 26px; border-bottom: 1px solid var(--uris-border-soft); }
+.uris-folder-editor-name { box-sizing: border-box; width: 100%; margin-bottom: 6px; }
+.uris-folder-editor-palette { display: flex; gap: 5px; flex-wrap: wrap; }
+.uris-folder-editor-swatch {
+    flex: 0 0 16px; width: 16px; height: 16px; padding: 0;
+    border: 2px solid transparent; border-radius: 50%; cursor: pointer;
+}
+.uris-folder-editor-swatch.uris-folder-editor-swatch-on { border-color: var(--uris-text-strong); }
+.uris-folder-editor-actions { display: flex; justify-content: flex-end; gap: 4px; margin-top: 6px; }
+.uris-folder-editor-actions button { width: 24px; height: 24px; }
+.uris-folder-editor-delete:hover { color: var(--uris-err); }
+
+/* ── Main (toolbar + grid) ── */
+.uris-refs-main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.uris-refs-toolbar {
+    display: flex; flex-wrap: wrap; align-items: center; gap: 6px;
+    padding: 6px var(--uris-pad); flex-shrink: 0;
+    border-bottom: 1px solid var(--uris-border-soft);
+}
+.uris-refs-search { flex: 1 1 160px; min-width: 160px; }
+.uris-refs-search input {
+    width: 100%; padding: 4px 8px; font-size: var(--uris-font-sm);
+    background: var(--uris-surface-btn); border: 1px solid var(--uris-border);
+    border-radius: var(--uris-radius); color: var(--uris-text-strong);
+    outline: none;
+}
+.uris-refs-search input:focus { border-color: var(--uris-accent); }
+.uris-refs-add {
+    display: inline-flex; align-items: center; gap: 6px;
+    flex: 0 0 auto; padding: 6px 12px;
+    background: var(--uris-accent-soft);
+    border: 1px dashed var(--uris-accent-line); border-radius: var(--uris-radius);
+    color: var(--uris-accent); cursor: pointer;
+    font-size: var(--uris-font-sm); white-space: nowrap;
+    transition: background .12s, color .12s;
+}
+.uris-refs-add:hover { color: var(--uris-accent); background: var(--uris-accent-hover); border-color: var(--uris-accent); }
+.uris-refs-add-dest { display: inline-block; max-width: 100px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; vertical-align: bottom; }
+/* wrap обязан быть flex-контейнером: сетка ограничивается высотой только как
+   flex-item (flex:1 + min-height:0). В block-родителе (прежний вариант) grid
+   растёт до высоты контента, а wrap с overflow:hidden его обрезает — низ
+   срезается, скролла нет вообще (заметно и на десктопе в низком окне; на
+   телефоне это «галерея не листается», воспроизводится на refs-real-render.html?cw=600). */
+.uris-refs-grid-wrap { flex: 1; min-height: 0; overflow: hidden; display: flex; flex-direction: column; }
+
+/* ── Карточки 3:4 ── */
+.uris-pool-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(72px, 1fr));
+    grid-auto-rows: min-content; align-items: start;
+    gap: var(--uris-gap); padding: var(--uris-pad);
+    overflow-y: auto; flex: 1; min-height: 0;
+    -webkit-overflow-scrolling: touch;
+    touch-action: pan-y;   /* см. фикс .uris-window button выше */
+}
+.uris-pool-grid .uris-refs-empty {
+    grid-column: 1 / -1; text-align: center;
+    color: var(--uris-text-dim); padding: 32px 8px; font-size: var(--uris-font-sm);
+}
+.uris-pool-tile {
+    position: relative; border-radius: var(--uris-radius-card);
+    overflow: hidden; cursor: pointer;
+    background: var(--uris-surface-card); border: 1px solid transparent;
+    transition: border-color .12s; display: block; isolation: isolate;
+    aspect-ratio: 3 / 4; align-self: start;
+    /* The tile is a real <button> so it is keyboard-focusable; reset the UA
+       button chrome so it keeps the card appearance. */
+    font: inherit; color: inherit; padding: 0; text-align: inherit; width: 100%;
+}
+.uris-pool-tile:hover { border-color: var(--uris-accent); }
+.uris-pool-tile-selected { border-color: var(--uris-accent); }
+.uris-pool-tile:focus { outline: none; }
+.uris-pool-tile:focus-visible { outline: 2px solid var(--uris-accent); outline-offset: 2px; }
+.uris-pool-tile img {
+    position: absolute; inset: 0; width: 100%; height: 100%;
+    object-fit: cover; display: block; background: var(--uris-surface-card);
+}
+.uris-pool-tile-name {
+    position: absolute !important; left: 0; right: 0; bottom: 0; z-index: 2;
+    font-size: calc(9px * var(--uris-font-scale, 1)); line-height: 1.2; padding: 16px 4px 4px;
+    text-align: center; color: #fff; font-weight: 500;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    background: linear-gradient(to top, rgba(0,0,0,.82) 30%, rgba(0,0,0,0));
+    pointer-events: none;
+}
+.uris-pool-tile-dots {
+    position: absolute; left: 4px; bottom: 18px; z-index: 2;
+    display: flex; gap: 3px; pointer-events: none;
+}
+.uris-pool-tile-dot {
+    width: 8px; height: 8px; border-radius: 50%;
+    box-shadow: 0 0 0 1.5px rgba(0,0,0,.45), 0 1px 2px rgba(0,0,0,.4);
+}
+.uris-pick-selected { outline: 2px solid var(--uris-accent); outline-offset: -2px; }
+
+/* ── Overlay panel (редактор) ── */
+.uris-refs-overlay-host { flex: 0 0 0; }
+.uris-refs-overlay-host.uris-refs-overlay-open {
+    flex: 0 0 260px; width: 260px;
+    border-left: 1px solid var(--uris-border-soft);
+    background: var(--uris-surface-card); overflow: hidden;
+    display: flex; flex-direction: column;
+}
+.uris-refs-overlay-panel { display: flex; flex-direction: column; height: 100%; }
+.uris-refs-overlay-head {
+    display: flex; align-items: center; gap: 8px;
+    padding: 6px 10px; border-bottom: 1px solid var(--uris-border-soft);
+    flex-shrink: 0;
+}
+.uris-refs-overlay-title {
+    flex: 1; font-size: var(--uris-font-sm); color: var(--uris-text-strong);
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.uris-refs-overlay-close {
+    background: none; border: none; color: var(--uris-text-dim);
+    cursor: pointer; font-size: calc(14px * var(--uris-font-scale, 1)); padding: 2px 6px;
+}
+.uris-refs-overlay-close:hover { color: var(--uris-text-strong); }
+.uris-refs-overlay-body {
+    flex: 1; overflow-y: auto; padding: 10px;
+    display: flex; flex-direction: column; gap: 4px;
+}
+/* Description textarea: в отличие от .uris-field, оверлей не даёт resize через
+   каскад, а ST .text_pole ставит resize:none. Явно разрешаем тянуть по вертикали. */
+.uris-ed-desc { resize: vertical; min-height: 72px; }
+.uris-editor-preview-wrap { position: relative; margin-bottom: 8px; }
+.uris-editor-preview-wrap .uris-editor-preview { margin-bottom: 0; }
+.uris-editor-preview-wrap .uris-ed-replace {
+    position: absolute; right: 8px; bottom: 8px;
+}
+.uris-editor-preview {
+    width: 100%; aspect-ratio: 3 / 4; object-fit: cover;
+    border-radius: var(--uris-radius-card); margin-bottom: 8px;
+}
+.uris-ed-label {
+    font-size: calc(9px * var(--uris-font-scale, 1)); text-transform: uppercase; letter-spacing: .15em;
+    color: var(--uris-text-dim); margin-top: 4px;
+}
+.uris-hint { font-size: var(--uris-font-xs); color: var(--uris-text-dim); }
+.uris-ed-autosave {
+    font-size: var(--uris-font-xs); color: var(--uris-text-dim);
+    text-align: right; min-height: 1em; padding-top: 2px;
+    transition: color .2s;
+}
+.uris-ed-autosave.uris-ed-autosave-on { color: var(--uris-accent); }
+/* Delete: quiet, right-aligned, red on hover - mirrors .uris-template-instruction .uris-del
+   and .uris-server-connection .uris-server-delete so the destructive action stays subdued. */
+.uris-ed-del {
+    flex: 0 0 auto; margin-left: auto;
+    background: transparent; border-color: transparent; color: var(--uris-text-mut);
+}
+.uris-ed-del:not(:disabled):hover {
+    color: var(--uris-err); background: var(--uris-err-soft); border-color: var(--uris-err-line);
+}
+
+/* Multi-folder toggle grid */
+.uris-multifolder-grid {
+    display: grid; grid-template-columns: 1fr 1fr; gap: 4px;
+    margin-bottom: 8px;
+}
+.uris-multifolder-toggle {
+    display: flex; align-items: center; gap: 6px;
+    padding: 6px 8px; border-radius: var(--uris-radius);
+    background: var(--uris-surface-btn); border: 1px solid var(--uris-border-soft);
+    color: var(--uris-text-mut); cursor: pointer; text-align: left;
+    font-size: var(--uris-font-sm); transition: all .12s;
+}
+.uris-multifolder-toggle.on {
+    background: var(--uris-surface-card); color: var(--uris-text-strong);
+    border-color: var(--uris-border);
+}
+.uris-multifolder-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.uris-multifolder-check { font-size: var(--uris-font-xs); color: var(--uris-accent); }
+
+/* ── Чипы фильтра (используются только в picker-overlay) ── */
+.uris-refs-chips { display: flex; gap: 6px; flex: 1; min-width: 0; flex-wrap: wrap; }
+.uris-folder-chip {
+    flex: 0 0 auto; padding: 4px 12px; border-radius: var(--uris-radius-pill);
+    background: var(--uris-surface-btn); color: var(--uris-text-mut);
+    cursor: pointer; font-size: var(--uris-font-sm); user-select: none;
+    border: 1px solid transparent; white-space: nowrap;
+    transition: background .12s, color .12s;
+}
+.uris-folder-chip:hover { color: var(--uris-text-strong); }
+.uris-folder-chip.uris-folder-chip-on { background: var(--uris-accent); color: #fff; }
+
+/* ── Mobile stack ── */
+.uris-refs-mobile-stack { display: flex; flex-direction: column; height: 100%; }
+/* flex:1+min-height вместо опоры только на height:100% — WebKit надёжнее
+   резолвит высоту флекс-звена, чем процентную цепочку (иначе на части iOS
+   экран выростает по контенту и сетка теряет скролл). */
+.uris-mobile-screen { display: flex; flex-direction: column; flex: 1; min-height: 0; height: 100%; }
+.uris-mobile-toolbar {
+    display: flex; align-items: center; gap: 8px;
+    padding: 8px 10px; border-bottom: 1px solid var(--uris-border-soft);
+    flex-shrink: 0;
+}
+.uris-mobile-toolbar-title {
+    flex: 1; font-size: var(--uris-font); color: var(--uris-text-strong);
+    font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.uris-mobile-add-folder {
+    display: inline-flex; align-items: center; gap: 6px;
+    padding: 6px 10px; background: none;
+    border: 1px dashed var(--uris-border); border-radius: var(--uris-radius);
+    color: var(--uris-text-dim); cursor: pointer;
+    font-size: var(--uris-font-sm); white-space: nowrap;
+    transition: background .12s, color .12s;
+}
+.uris-mobile-add-folder:hover { color: var(--uris-text-strong); background: rgba(255,255,255,.03); border-color: var(--uris-border); }
+.uris-mobile-add-ref {
+    display: inline-flex; align-items: center; gap: 6px;
+    padding: 6px 12px;
+    background: var(--uris-accent-soft);
+    border: 1px dashed var(--uris-accent-line); border-radius: var(--uris-radius);
+    color: var(--uris-accent); cursor: pointer;
+    font-size: var(--uris-font-sm); white-space: nowrap;
+    transition: background .12s, color .12s;
+}
+.uris-mobile-add-ref:hover { color: var(--uris-accent); background: var(--uris-accent-hover); border-color: var(--uris-accent); }
+.uris-mobile-back {
+    display: inline-flex; align-items: center; justify-content: center;
+    min-width: 44px; min-height: 44px; flex-shrink: 0;
+    background: none; border: none; color: var(--uris-text-mut);
+    cursor: pointer; font-size: calc(24px * var(--uris-font-scale, 1)); line-height: 1; padding: 0 8px;
+    border-radius: var(--uris-radius);
+    transition: background .12s, color .12s;
+}
+.uris-mobile-back:hover { color: var(--uris-text-strong); background: rgba(255,255,255,.05); }
+.uris-mobile-list {
+    flex: 1; overflow-y: auto; padding: 8px; display: flex; flex-direction: column; gap: 6px;
+    touch-action: pan-y;   /* см. фикс .uris-window button выше */
+}
+.uris-mobile-folder-item {
+    display: flex; align-items: center; gap: 10px; width: 100%;
+    padding: 10px; border-radius: var(--uris-radius-card);
+    background: var(--uris-surface-card); border: 1px solid var(--uris-border-soft);
+    color: var(--uris-text-strong); cursor: pointer; text-align: left;
+}
+.uris-mobile-folder-item:active { background: var(--uris-surface-btn); }
+.uris-mobile-folder-icon { color: var(--uris-text-dim); }
+.uris-mobile-folder-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.uris-mobile-folder-count { font-size: var(--uris-font-xs); color: var(--uris-text-dim); }
+.uris-mobile-folder-previews { display: flex; gap: 2px; }
+.uris-mobile-folder-thumb {
+    width: 28px; height: 36px; border-radius: 3px;
+    background-size: cover; background-position: center;
+    background-color: var(--uris-surface-btn);
+}
+.uris-mobile-folder-arrow { color: var(--uris-text-dim); }
+.uris-mobile-grid { flex: 1; }
+.uris-mobile-search-wrap { padding: 8px 10px 0; }
+.uris-mobile-search {
+    width: 100%; padding: 6px 8px; font-size: var(--uris-font-sm);
+    background: var(--uris-surface-btn); border: 1px solid var(--uris-border);
+    border-radius: var(--uris-radius); color: var(--uris-text-strong); outline: none;
+}
+.uris-mobile-search:focus { border-color: var(--uris-accent); }
+.uris-mobile-card-scroll { flex: 1; overflow-y: auto; padding: 10px; display: flex; flex-direction: column; gap: 4px; touch-action: pan-y; }
+
+/* Picker overlay */
+/* Как и lightbox: НЕ inset:0, а явные top/left + width/height — иначе в
+   ST-мобиле (body { position: fixed }) оверлей схлопывается в высоту 0 и
+   bottom-sheet улетает за верх экрана (см. тест popup-mobile-repro.html). */
+.uris-picker-overlay {
+    position: fixed; top: 0; left: 0;
+    width: 100%; height: 100vh; height: 100dvh;
+    background: rgba(0,0,0,.6);
+    display: flex; align-items: center; justify-content: center;
+    z-index: 100000;
+}
+.uris-picker-dialog {
+    /* непрозрачный фон - иначе в прозрачных ST-темах диалог просвечивает (см. .uris-window) */
+    background: var(--uris-surface-card);
+    border: 1px solid var(--uris-border);
+    border-radius: 10px; padding: 16px;
+    max-width: 720px; width: 90%;
+    /* dvh сначала для браузеров с поддержкой; vh — fallback. Десктоп не
+       замечает (там vh == dvh), мобильный Safari/Chrome корректно считает
+       видимую высоту с учётом URL-бара. */
+    max-height: 80vh; max-height: 80dvh;
+    overflow: auto;
+    color: var(--SmartThemeBodyColor, var(--uris-text-strong));
+}
+.uris-picker-dialog h4 { margin-top: 0; font-size: calc(15px * var(--uris-font-scale, 1)); }
+/* Picker использует тот же компактный row чипов, что и вкладка. */
+.uris-picker-dialog .uris-refs-filterbar { padding: 0 0 10px; border-bottom: 1px solid var(--uris-border-soft); }
+.uris-pool-grid.uris-picker-grid {
+    padding: var(--uris-pad) 0 0;
+    max-height: 55vh; overflow-y: auto; margin-bottom: 12px;
+}
+.uris-picker-actions {
+    display: flex; gap: 8px; justify-content: flex-end;
+}
+.uris-editor-actions {
+    display: flex; gap: 8px; flex-wrap: wrap; margin-top: 12px;
+}
+
+/* ── Batch upload dialog (массовая загрузка референсов) ──
+   Живёт в том же .uris-picker-dialog (bottom-sheet на мобиле). Список —
+   строки «превью + редактируемое имя + статус + удалить», скролл внутри. */
+.uris-batch-renamer { display: flex; gap: 8px; flex: 0 0 auto; }
+.uris-batch-renamer .text_pole { flex: 1; min-width: 0; }
+.uris-batch-list {
+    display: flex; flex-direction: column; gap: 6px;
+    max-height: 46vh; overflow-y: auto; padding: 4px 0;
+    -webkit-overflow-scrolling: touch;
+}
+.uris-batch-item { display: flex; align-items: center; gap: 8px; }
+.uris-batch-thumb {
+    flex: 0 0 44px; width: 44px; height: 44px; object-fit: cover;
+    border-radius: 6px; background: var(--uris-surface-btn); display: block;
+}
+.uris-batch-name { flex: 1; min-width: 0; }
+.uris-batch-status { flex: 0 0 20px; text-align: center; font-size: calc(14px * var(--uris-font-scale, 1)); color: var(--uris-text-dim); }
+.uris-batch-ok .uris-batch-status { color: var(--uris-accent); }
+.uris-batch-error .uris-batch-status { color: var(--uris-err); }
+.uris-batch-del {
+    flex: 0 0 auto; background: none; border: none; color: var(--uris-text-mut);
+    cursor: pointer; font-size: calc(16px * var(--uris-font-scale, 1)); padding: 4px 8px;
+}
+.uris-batch-del:hover { color: var(--uris-err); }
+
+/* ── Консолидированный mobile-block ──
+   Раньше мобильные правила были разбросаны по файлу (три отдельных @media
+   в середине + несколько точечных правил). Здесь собраны все дополнения,
+   которых не хватало: флоу-генерация, advanced-rows, picker как bottom-sheet,
+   host-table скролл, увеличенные tap-target'ы. Десктоп не замечает — всё
+   внутри @media (max-width: 768px). Переменная --uris-label-w
+   заданы на :root в начале файла. */
+@media (max-width: 768px) {
+    /* Базовый сброс ширины подписи для ВСЕХ .uris-row (ранее только
+       .uris-gen-params). 90px label ломал строки в табах API / Content /
+       Templates / Advanced на 360px-экране: select уходил за правый край. */
+    :root { --uris-label-w: 0px; }
+    .uris-row, .uris-advanced .uris-row, .uris-gen-params .uris-row { gap: 6px 10px; }
+    .uris-row label, .uris-advanced .uris-row label {
+        min-width: 0; flex: 0 0 auto;
+    }
+
+    /* Picker overlay → bottom-sheet. Раньше центрировался с max-height:80vh —
+       на мобиле кнопки внизу уходили за видимый край при показанном URL-баре.
+       Теперь прижимается к низу, действия sticky, единственный скролл — grid. */
+    .uris-picker-overlay { align-items: flex-end; }
+    .uris-picker-dialog {
+        width: 100% !important; max-width: 100% !important;
+        max-height: 90dvh; margin: 0;
+        border-radius: 12px 12px 0 0; padding: 12px;
+        padding-bottom: calc(12px + env(safe-area-inset-bottom, 0));
+        display: flex; flex-direction: column; gap: 8px;
+        overflow: hidden; /* скроллит только grid */
+    }
+    /* dvh-fallback для WebView без support: см. блок @supports not ниже. */
+    .uris-pool-grid.uris-picker-grid {
+        max-height: none; flex: 1 1 auto; min-height: 120px;
+        overflow-y: auto;
+        -webkit-overflow-scrolling: touch;
+    }
+    /* Batch upload: список строк скроллится внутри bottom-sheet,
+       как и пикерная сетка выше. */
+    .uris-batch-list { max-height: none; flex: 1 1 auto; min-height: 120px; }
+    .uris-picker-actions {
+        position: sticky; bottom: 0; flex-wrap: wrap;
+        padding-top: 8px; margin: 0;
+        background: var(--uris-surface-card);
+    }
+    .uris-picker-actions .uris-btn {
+        flex: 1; min-height: 40px; min-width: 0;
+    }
+    /* Ref editor (использует тот же .uris-picker-dialog) — preview не должен
+       заграбастать пол-экрана. */
+    .uris-editor-preview { max-width: 100%; }
+    .uris-editor-actions .uris-btn { flex: 1 1 auto; min-height: 40px; }
+
+    /* host-table: горизонтальный скролл вместо раздутия контейнера tab-API.
+       Таблица autoFetch-стратегий с длинными именами хостов. */
+    .uris-host-table {
+        display: block; overflow-x: auto;
+        -webkit-overflow-scrolling: touch;
+    }
+    .uris-host-name { word-break: break-all; }
+
+    /* Мелкие tap-target'ы до мягкого минимума (~22px). 44px здесь перебор —
+       кнопка ✕ поверх 64px tile'a стала бы огромной; 22px сохраняет ритм. */
+    .uris-effective-ref-remove {
+        width: 22px; height: 22px; font-size: calc(12px * var(--uris-font-scale, 1));
+    }
+    .uris-extra-del { width: 22px; height: 22px; font-size: calc(12px * var(--uris-font-scale, 1)); }
+    .uris-folder-chip { padding: 8px 12px; }
+    .uris-ref-include, .uris-ref-exclude {
+        padding: 6px 10px; font-size: calc(13px * var(--uris-font-scale, 1)); line-height: 1;
+    }
+    .uris-descref-del { padding: 4px 6px; font-size: calc(12px * var(--uris-font-scale, 1)); }
+}
+
+/* dvh-fallback для старых WebView (Termux / Android < Chromium 108): picker
+   использует vh вместо dvh. Окно #urisWindow уже имеет свой fallback выше —
+   здесь обеспечиваем тот же запас для picker dialog. */
+@supports not (height: 100dvh) {
+    @media (max-width: 768px) {
+        .uris-picker-dialog { max-height: 88vh; }
+        .uris-editor-preview { max-width: 100%; }
+    }
+}
+
+/* ── Connection reference options ── */
+.uris-reference-options { margin-top: 0.5rem; }
+.uris-reference-note { display: block; color: var(--uris-accent); margin: 0.25rem 0 0.5rem; }
+.uris-reference-protocol-row[hidden] { display: none; }
+
+/* ── Error pool (header ERR badge + panel) ── */
+.uris-error-badge {
+    font-size: calc(11px * var(--uris-font-scale, 1));
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    opacity: 0.75;
+    border: 1px solid currentColor;
+    border-radius: 8px;
+    padding: 1px 7px;
+}
+.uris-error-badge:hover { opacity: 1; }
+.uris-error-count { font-weight: 400; opacity: 0.85; margin-left: 2px; }
+.uris-error-panel {
+        position: fixed;
+        top: 0;
+        right: 0;
+        z-index: 3;
+    width: min(380px, calc(100% - 20px));
+    max-height: min(70vh, 420px);
+    overflow-y: auto;
+    box-sizing: border-box;
+    padding: 10px;
+    font-size: calc(12px * var(--uris-font-scale, 1));
+    background: var(--uris-bg);
+    color: var(--uris-text-strong);
+    border: 1px solid var(--uris-border-soft);
+    border-radius: var(--uris-radius-card);
+    box-shadow: 0 8px 28px rgba(0,0,0,.35);
+}
+.uris-error-panel[hidden] { display: none; }
+.uris-error-section + .uris-error-section { margin-top: 10px; padding-top: 8px; border-top: 1px solid var(--uris-border-soft); }
+.uris-error-section h3 { margin: 0 0 5px; font-size: var(--uris-font-sm); color: var(--uris-text-mut); font-weight: 600; }
+.uris-error-rows { display: flex; flex-direction: column; gap: 3px; }
+.uris-error-row { display: flex; align-items: flex-start; gap: 5px; opacity: 0.9; word-break: break-word; }
+.uris-error-row small { flex: 1 1 100%; color: var(--uris-text-mut); }
+.uris-error-empty { opacity: 0.5; }
+.uris-pending-discard { margin-left: auto; flex: 0 0 auto; font-size: calc(13px * var(--uris-font-scale, 1)); }
+.uris-error-panel-actions { display: flex; justify-content: flex-end; margin-top: 8px; }
+
+@media (max-width: 768px) {
+    .uris-error-panel {
+        position: fixed;
+        /* top-привязка вместо bottom: в ST-мобиле body { position: fixed }
+           схлопывает контейнер fixed-элементов, и bottom:N уводит панель
+           за верхний край. top + max-height работают всегда. Лист открывается
+           под шапкой окна (высота шапки ~44px от --uris-st-top). */
+        top: calc(var(--uris-st-top, 0px) + 48px);
+        right: 8px;
+        left: 8px;
+        bottom: auto;
+        width: auto;
+        max-height: min(65dvh, 440px);
+        border-radius: 8px;
+    }
+}
+
+/* ── Connection card model toggle (compact checkbox, not a big button) ── */
+.uris-server-model-toggle {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    font-size: calc(12px * var(--uris-font-scale, 1));
+    opacity: 0.8;
+    margin: 2px 0 0 0;
+    cursor: pointer;
+    width: auto;
+}
+
+/* ── Вкладка «Настройки» ── */
+.uris-settings { display: flex; flex-direction: column; gap: 10px; }
+.uris-settings-section {
+    background: var(--uris-surface-card);
+    border: 1px solid var(--uris-border-soft);
+    border-radius: var(--uris-radius-card);
+    padding: 10px 12px;
+}
+.uris-settings-section h3 {
+    margin: 0 0 8px; font-size: var(--uris-font-xs); font-weight: 600;
+    color: var(--uris-text-mut); text-transform: uppercase; letter-spacing: .05em;
+}
+.uris-settings .checkbox_label {
+    display: flex; align-items: center; gap: 8px;
+    font-size: var(--uris-font); margin: 6px 0 2px;
+}
+.uris-scale-row { display: flex; align-items: center; gap: 8px; }
+.uris-scale-row input[type="range"] { flex: 1; min-width: 0; accent-color: var(--uris-accent); }
+.uris-scale-value {
+    min-width: 42px; text-align: right; font-size: var(--uris-font-sm);
+    color: var(--uris-text-strong); font-variant-numeric: tabular-nums;
+}
+.uris-settings-actions { display: flex; flex-wrap: wrap; gap: 6px; }
+.uris-settings-actions .uris-btn { flex: 1 1 auto; }
+
+/* ── Разворачиваемый редактор текста (кнопка у компактных полей) ──
+   Паттерн ST: компактное поле + иконка fa-maximize -> большой popup-редактор
+   (native <dialog> через callGenericPopup, класс maximized_textarea — его
+   подхватывают редактор-экстеншны вроде CodeMirror). */
+.uris-expand-btn {
+    width: 26px; height: 26px;
+    display: inline-flex; align-items: center; justify-content: center;
+    background: var(--uris-surface-btn); border: 1px solid var(--uris-border-soft);
+    border-radius: var(--uris-radius); color: var(--uris-text-mut);
+    cursor: pointer; font-size: calc(12px * var(--uris-font-scale, 1)); padding: 0; flex: 0 0 auto;
+    transition: color .12s, background .12s, border-color .12s;
+}
+.uris-expand-btn:hover { color: var(--uris-text-strong); background: var(--uris-surface-btn-hover); border-color: var(--uris-accent-line); }
+.uris-expand-btn:disabled { opacity: .5; cursor: default; }
+
+/* Угловой вариант (поле промпта в Генерации): поверх правого верхнего угла
+   textarea, поэтому полю добавлен отступ справа, чтобы текст не уходил под
+   кнопку. */
+.uris-prompt-card .uris-expand-btn { position: absolute; top: 16px; right: 16px; }
+.uris-prompt-card .uris-prompt-area { padding-right: 34px; }
+
+/* Вариант в строке заголовка поля (инструкция шаблона). */
+.uris-field-head { display: flex; align-items: center; justify-content: space-between; gap: 6px; margin-bottom: 2px; }
+.uris-field-head .uris-expand-btn { width: 22px; height: 22px; font-size: calc(11px * var(--uris-font-scale, 1)); }
+
+/* Контент popup-редактора (рендерится в ST-диалоге, не в нашем окне). */
+.uris-text-editor { display: flex; flex-direction: column; }
+.uris-text-editor-title { font-weight: 600; margin-bottom: 6px; }
+.uris-text-editor .maximized_textarea { width: 100%; min-height: 45vh; resize: vertical; }
+
+/* ── Уведомления (вкладка «Настройки»): этап = тумблер + звук + ▶ ── */
+.uris-notify-row { display: flex; align-items: center; gap: 8px; margin: 4px 0; }
+.uris-notify-row .checkbox_label { flex: 1 1 auto; min-width: 0; margin: 0; }
+.uris-notify-row .uris-notify-select { flex: 0 0 130px; min-width: 0; padding: 2px 4px; font-size: var(--uris-font-sm); }

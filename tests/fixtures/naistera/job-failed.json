@@ -1,0 +1,5 @@
+{
+  "job_id": "job_0123456789abcdef",
+  "status": "failed",
+  "error": "content policy violation"
+}

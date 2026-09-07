@@ -1,0 +1,16 @@
+[
+  {
+    "name": "flux",
+    "category": "image",
+    "output_modalities": ["image"],
+    "capabilities": ["size", "quality", "resolution"],
+    "resolutions": ["1K", "2K"],
+    "quality": ["standard", "high"],
+    "max_reference_images": 0
+  },
+  {
+    "name": "text-model",
+    "category": "text",
+    "output_modalities": ["text"]
+  }
+]

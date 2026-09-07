@@ -1,0 +1,7 @@
+{
+  "operation": "edit",
+  "path": "/v1/images/edits",
+  "status": "future",
+  "implemented": false,
+  "references": "model-specific; verify before enabling"
+}
