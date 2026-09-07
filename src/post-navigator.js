@@ -22,6 +22,47 @@ export const POST_FILTER = {
 
 const VALID_FILTERS = new Set(Object.values(POST_FILTER));
 
+// Reasoning (CoT) block tags treated as invisible content. `<think>` is the
+// prefix of ST's default "Think XML" template and of the DeepSeek/Gemini ones;
+// the rest cover common wrappers. ST's configured template is not exposed to
+// extensions via getContext(), so this stays a constant: it guards against
+// empty content, it does not replicate ST's parser. An UNCLOSED block (stream
+// aborted mid-thinking) hides everything after its opening tag — ST's
+// auto-parse requires the closing suffix and leaves the raw text in msg.mes.
+const REASONING_TAGS = ['think', 'thinking', 'reasoning', 'thought', 'scratchpad'];
+const CLOSED_REASONING_RE = new RegExp(`<(${REASONING_TAGS.join('|')})>[\\s\\S]*?</\\1>`, 'g');
+const OPEN_REASONING_RE = new RegExp(`<(${REASONING_TAGS.join('|')})>`);
+const EMPTY_BODY_PLACEHOLDER = '...';
+
+/**
+ * Message text as visible to generation: reasoning blocks removed (including
+ * an unterminated one from an aborted stream) and ST's empty-body placeholder
+ * folded to ''. Deliberately NOT part of matchesFilter: content-based
+ * navigation filtering would make getLastPostIndex() fall back to an OLDER
+ * post and silently generate for it — callers skip instead.
+ * @param {object|null} msg ST chat message
+ * @returns {string} trimmed visible content ('' when none)
+ */
+export function visiblePostContent(msg) {
+    let text = String(msg?.mes ?? '');
+    text = text.replace(CLOSED_REASONING_RE, '');
+    const open = text.search(OPEN_REASONING_RE);
+    if (open !== -1) text = text.slice(0, open);
+    text = text.trim();
+    return text === EMPTY_BODY_PLACEHOLDER ? '' : text;
+}
+
+/**
+ * Generation eligibility on top of the role filter: system/hidden posts never
+ * generate, and a post without visible content (empty, '...' placeholder, or
+ * reasoning-only from an aborted stream) must not start a paid run.
+ * @param {object|null} msg ST chat message
+ * @returns {boolean}
+ */
+export function isGenerationEligible(msg) {
+    return !!msg && !msg.is_system && !msg.is_hidden && visiblePostContent(msg).length > 0;
+}
+
 function getChat() {
     return getCtx().chat || [];
 }

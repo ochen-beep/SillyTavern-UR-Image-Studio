@@ -534,3 +534,87 @@ test('bindEvents without onStopAll does not subscribe GENERATION_STOPPED', () =>
     unbindEvents();
 });
 
+// ── visible-content guard (aborted-CoT posts must not start automation) ──
+
+test('GENERATION_ENDED does not trigger automation on a reasoning-only post from an aborted stream', () => {
+    // Reproduces the abort-mid-CoT case: ST saves the partial message
+    // (<think> without closing suffix) and emits GENERATION_ENDED — Stage 1
+    // must not run on invisible content.
+    testCtx.chat = [{ mes: 'u1', is_user: true }, { mes: '<think>partial reasoning never closed', is_user: false }];
+    let called = null;
+    bindEvents({ onAutomation: ({ msgId }) => { called = msgId; } });
+    makeLastListeners.GENERATION_ENDED();
+    assert.equal(called, null, 'reasoning-only post must not start automation');
+    unbindEvents();
+});
+
+test('reasoning-only last post does not fall back to an older AI post', () => {
+    // The skip must be a hard stop, not a filter miss: if the empty post fell
+    // out of matchesFilter, getLastPostIndex() would return post #1 and
+    // automation would silently regenerate an OLD post.
+    testCtx.chat = [
+        { mes: 'old scene', is_user: false },
+        { mes: '<think>aborted', is_user: false },
+    ];
+    let called = null;
+    bindEvents({ onAutomation: ({ msgId }) => { called = msgId; } });
+    makeLastListeners.GENERATION_ENDED();
+    assert.equal(called, null, 'must skip entirely — no fallback to the older post');
+    unbindEvents();
+});
+
+test('GENERATION_ENDED still triggers when visible content precedes an unterminated think block', () => {
+    testCtx.chat = [{ mes: 'Scene setup <think>partial', is_user: false }];
+    let called = null;
+    bindEvents({ onAutomation: ({ msgId }) => { called = msgId; } });
+    makeLastListeners.GENERATION_ENDED();
+    assert.equal(called, 0);
+    unbindEvents();
+});
+
+test('empty and placeholder posts do not trigger automation', () => {
+    testCtx.chat = [{ mes: 'u1', is_user: true }, { mes: '   ', is_user: false }];
+    let called = null;
+    bindEvents({ onAutomation: ({ msgId }) => { called = msgId; } });
+    makeLastListeners.GENERATION_ENDED();
+    assert.equal(called, null, 'whitespace-only post must not start automation');
+    testCtx.chat = [{ mes: 'u1', is_user: true }, { mes: '...', is_user: false }];
+    makeLastListeners.GENERATION_ENDED();
+    assert.equal(called, null, "ST's '...' placeholder must not start automation");
+    unbindEvents();
+});
+
+test('system and hidden posts do not trigger automation', () => {
+    testCtx.chat = [{ mes: 'u1', is_user: true }, { mes: 'sys text', is_system: true }];
+    let called = null;
+    bindEvents({ onAutomation: ({ msgId }) => { called = msgId; } });
+    makeLastListeners.GENERATION_ENDED();
+    assert.equal(called, null, 'is_system post must not start automation');
+    testCtx.chat = [{ mes: 'u1', is_user: true }, { mes: 'hidden text', is_hidden: true }];
+    makeLastListeners.GENERATION_ENDED();
+    assert.equal(called, null, 'is_hidden post must not start automation');
+    unbindEvents();
+});
+
+test('user-only flow: empty user post does not trigger automation', () => {
+    state.settings.generationFlow = POST_FILTER.USER_ONLY;
+    state.generationFlow = POST_FILTER.USER_ONLY;
+    testCtx.chat = [{ mes: '   ', is_user: true }];
+    let called = null;
+    bindEvents({ onAutomation: ({ msgId }) => { called = msgId; } });
+    listeners.MESSAGE_SENT();
+    assert.equal(called, null);
+    unbindEvents();
+});
+
+test('closed think block does not block automation (ST parsed the reasoning, mes is clean)', () => {
+    // When auto-parse succeeds ST strips the block from mes itself; the guard
+    // must not reject posts merely because a complete reasoning block existed.
+    testCtx.chat = [{ mes: 'u1', is_user: true }, { mes: 'Real scene text', is_user: false }];
+    let called = null;
+    bindEvents({ onAutomation: ({ msgId }) => { called = msgId; } });
+    makeLastListeners.GENERATION_ENDED();
+    assert.equal(called, 1);
+    unbindEvents();
+});
+

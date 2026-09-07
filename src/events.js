@@ -10,7 +10,7 @@
 import { state, getCtx, log, warn, error } from './core.js';
 import { recordDiagnosticEvent, hashDiagnosticId } from './diagnostic-events.js';
 import { loadChatConfig, applyChatConfigToState } from './chat-binding.js';
-import { POST_FILTER, setFilter, getLastPostIndex, setCurrentMsgId } from './post-navigator.js';
+import { POST_FILTER, setFilter, getLastPostIndex, setCurrentMsgId, isGenerationEligible } from './post-navigator.js';
 
 let _bound = false;
 let _onAutomation = null;      // callback: ({chatId,msgId,messageText,templateId,requestedAction}) => Promise<void>
@@ -50,6 +50,12 @@ export function bindEvents(handlers) {
         const isUser = !!msg.is_user;
         if (filter === POST_FILTER.AI_ONLY && isUser) return;
         if (filter === POST_FILTER.USER_ONLY && !isUser) return;
+        // An abort mid-CoT leaves an unterminated reasoning block in msg.mes
+        // (ST's auto-parse needs the closing suffix) — that must not start a
+        // paid Stage 1 run on invisible content. Checked here, not in
+        // matchesFilter: content-based filtering would make getLastPostIndex()
+        // fall back to an OLDER post and silently generate for it.
+        if (!isGenerationEligible(msg)) return;
         const automationMode = state.settings.automationMode || 'manual';
         if (automationMode === 'manual') return;
         // getContext() returns a fresh snapshot per call — scalar fields like

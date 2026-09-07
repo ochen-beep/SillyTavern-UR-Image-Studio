@@ -22,6 +22,8 @@ const {
     getLastPostIndex,
     getPostInfo,
     setCurrentMsgId,
+    visiblePostContent,
+    isGenerationEligible,
 } = await import('../src/post-navigator.js');
 
 beforeEach(() => {
@@ -154,4 +156,55 @@ test('invalid filter falls back to ai-only', () => {
     setFilter('nonsense');
     assert.equal(getFilter(), POST_FILTER.AI_ONLY);
     assert.deepEqual(getFilteredIndexes(), [1]);
+});
+
+// ── visiblePostContent / isGenerationEligible ──
+
+test('visiblePostContent: plain text passes through trimmed', () => {
+    assert.equal(visiblePostContent({ mes: '  Scene text.  ' }), 'Scene text.');
+    assert.equal(visiblePostContent({ mes: '' }), '');
+    assert.equal(visiblePostContent(null), '');
+    assert.equal(visiblePostContent({}), '');
+});
+
+test('visiblePostContent: closed reasoning block is invisible', () => {
+    assert.equal(visiblePostContent({ mes: '<think>chain of thought</think>' }), '');
+    assert.equal(visiblePostContent({ mes: '<think>\nCoT\n</think>Scene text' }), 'Scene text');
+});
+
+test('visiblePostContent: unterminated reasoning block hides the rest (aborted stream)', () => {
+    // Model cut off mid-thinking: no closing suffix, so ST's auto-parse leaves
+    // the raw text in mes — everything after the opening tag is invisible.
+    assert.equal(visiblePostContent({ mes: '<think>partial reasoning never closed' }), '');
+    assert.equal(visiblePostContent({ mes: '<think>partial' }), '');
+    assert.equal(visiblePostContent({ mes: 'Scene <think>partial reasoning…' }), 'Scene');
+});
+
+test('visiblePostContent: all known reasoning wrappers are stripped', () => {
+    for (const tag of ['think', 'thinking', 'reasoning', 'thought', 'scratchpad']) {
+        assert.equal(visiblePostContent({ mes: `<${tag}>x</${tag}>` }), '', tag);
+        assert.equal(visiblePostContent({ mes: `<${tag}>x` }), '', tag);
+    }
+});
+
+test('visiblePostContent: ST empty-body placeholder folds to empty', () => {
+    assert.equal(visiblePostContent({ mes: '...' }), '');
+    assert.equal(visiblePostContent({ mes: ' ... ' }), '');
+});
+
+test('isGenerationEligible: system and hidden posts are never eligible', () => {
+    assert.equal(isGenerationEligible({ mes: 'text', is_system: true }), false);
+    assert.equal(isGenerationEligible({ mes: 'text', is_hidden: true }), false);
+});
+
+test('isGenerationEligible: role flags stay in matchesFilter — user posts can be eligible', () => {
+    // Generation flow (ai-only etc.) is applied separately by the caller.
+    assert.equal(isGenerationEligible({ mes: 'text', is_user: true }), true);
+});
+
+test('isGenerationEligible: requires visible content', () => {
+    assert.equal(isGenerationEligible({ mes: 'Scene text' }), true);
+    assert.equal(isGenerationEligible({ mes: '' }), false);
+    assert.equal(isGenerationEligible({ mes: '<think>only reasoning' }), false);
+    assert.equal(isGenerationEligible(null), false);
 });
