@@ -50,7 +50,9 @@ export async function showLightbox(items, index = 0, { chatId = null, root = nul
             || (i === start ? await ensureCardDimensions(chatIdResolved, item) : FALLBACK_DIMENSIONS);
         dataSource.push({
             src: item.src,
-            msrc: item.src,
+            // Placeholder for the open animation: the small variant when the
+            // grid has one, otherwise the full image (browser-cached anyway).
+            msrc: item.thumbPath || item.src,
             width: dims.width,
             height: dims.height,
             alt: item.prompt || 'Изображение из галереи',
