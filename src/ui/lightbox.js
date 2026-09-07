@@ -1,116 +1,144 @@
 // @ts-check
 /**
- * Lightbox: fullscreen image viewer + swipe/keyboard for navigation/closing.
+ * Lightbox: PhotoSwipe-based fullscreen viewer.
  *
- * Single keydown listener on document, stored in _onKey and removed in close()
- * ALWAYS (previously only removed on Escape → leak when navigating/closing with cross).
+ * Gestures (pinch zoom, double-tap, pan, swipe navigation, vertical-drag-to-
+ * close, wheel zoom, keyboard) are PhotoSwipe's; this module maps gallery
+ * items to the dataSource and wires the four gallery actions as custom
+ * toolbar buttons. All actions stay in gallery-actions.js — single source of
+ * truth shared with the grid.
+ *
+ * Behavior parity with the previous hand-rolled viewer:
+ * - copy prompt / save as reference keep the viewer open (ST dialogs are
+ *   native <dialog> in the top layer, so they render above PhotoSwipe);
+ * - regenerate / delete close it when the action completes, so the re-rendered
+ *   grid shows the new state;
+ * - focus returns to the trigger (PhotoSwipe `returnFocus`).
+ *
+ * Do NOT add lockBodyScroll here: PhotoSwipe runs its own scroll lock, and
+ * two independent locks release in the wrong order, leaving <body> frozen.
  */
+import PhotoSwipe from '../vendor/photoswipe.esm.js';
 import { copyPrompt, saveAsReference, regenerate, deleteImage } from './gallery-actions.js';
-import { escapeHtml, getCtx } from '../core.js';
-import { lockBodyScroll, unlockBodyScroll } from './window.js';
+import { getCtx } from '../core.js';
+import { cardDimensions, ensureCardDimensions, FALLBACK_DIMENSIONS } from '../image-dimensions.js';
 
-let _items = [];   // [{src, prompt, style}]
-let _index = 0;
-let _onKey = null;  // reference for removeEventListener
-let _chatId = null;
-let _root = null;   // optional gallery root for post-action re-render
-let _previousFocus = null;  // element to return focus to when the dialog closes
+let _active = null;  // open PhotoSwipe instance; a new open closes the previous one
 
-export function showLightbox(items, index = 0, { chatId = null, root = null } = {}) {
+/**
+ * Open the fullscreen viewer for gallery items.
+ *
+ * @param {Array<{id:string, src:string, prompt?:string, style?:string, width?:number, height?:number}>} items
+ * @param {number} [index]
+ * @param {{chatId?: string|null, root?: HTMLElement|null}} [options]
+ */
+export async function showLightbox(items, index = 0, { chatId = null, root = null } = {}) {
     if (!items?.length) return;
-    _items = items; _index = Math.max(0, Math.min(items.length - 1, index));
-    _chatId = chatId ?? getCtx().chatId ?? null;
-    _root = root;
-    _previousFocus = document.activeElement;
-    lockBodyScroll();
-    render();
+    _active?.close();
+    const chatIdResolved = chatId ?? getCtx().chatId ?? null;
+    const start = Math.max(0, Math.min(items.length - 1, index));
+
+    // PhotoSwipe requires dimensions up front (layout + open animation).
+    // The requested slide is probed synchronously (persisted on the card, so
+    // this cost is paid once per image); the rest get the fallback box and are
+    // probed in the background below.
+    const thumbs = collectThumbElements(root, items);
+    const dataSource = [];
+    for (let i = 0; i < items.length; i++) {
+        const item = items[i];
+        const dims = cardDimensions(item)
+            || (i === start ? await ensureCardDimensions(chatIdResolved, item) : FALLBACK_DIMENSIONS);
+        dataSource.push({
+            src: item.src,
+            // Placeholder for the open animation: the small variant when the
+            // grid has one, otherwise the full image (browser-cached anyway).
+            msrc: item.thumbPath || item.src,
+            width: dims.width,
+            height: dims.height,
+            alt: item.prompt || 'Изображение из галереи',
+            // Grid thumbnails are square-cropped (aspect-ratio:1 + cover);
+            // thumbCropped makes the open animation clip instead of squashing.
+            thumbCropped: true,
+            ...(thumbs[i] ? { element: thumbs[i] } : {}),
+        });
+    }
+
+    const pswp = new PhotoSwipe({
+        dataSource,
+        index: start,
+        bgOpacity: 0.9,
+        wheelToZoom: true,
+        errorMsg: 'Не удалось загрузить изображение',
+        mainClass: 'uris-pswp',
+    });
+    _active = pswp;
+    pswp.on('destroy', () => { if (_active === pswp) _active = null; });
+
+    registerActionButtons(pswp, { items, chatId: chatIdResolved, root });
+    pswp.init();
+    localizeDefaultUi(pswp);
+
+    // Fill in real dimensions for the remaining slides; entries update before
+    // the user typically reaches them, and probes persist on the cards.
+    for (let i = 0; i < items.length; i++) {
+        if (i === start) continue;
+        ensureCardDimensions(chatIdResolved, items[i])
+            .then(dims => { dataSource[i].width = dims.width; dataSource[i].height = dims.height; })
+            .catch(() => { /* fallback box already in place */ });
+    }
 }
 
-function render() {
-    document.querySelector('.uris-lightbox')?.remove();
-    const item = _items[_index];
-    const lb = document.createElement('div');
-    lb.className = 'uris-lightbox';
-    lb.setAttribute('role', 'dialog');
-    lb.setAttribute('aria-modal', 'true');
-    lb.setAttribute('aria-label', 'Просмотр изображения');
-    // ✕ and counter are direct children of the backdrop (inset:0), not content: always in the corner
-    // of the screen regardless of where/size the content is (fix for mobile bug).
-    lb.innerHTML = `
-        <div class="uris-lb-counter">${_index + 1} / ${_items.length}</div>
-        <button class="uris-lb-close" type="button" title="Закрыть (Esc)" aria-label="Закрыть">✕</button>
-        <div class="uris-lb-content">
-            <img alt="" class="uris-lb-img">
-            <div class="uris-lb-info">
-                ${item.style ? `<div class="uris-lb-style">🎨 ${escapeHtml(item.style)}</div>` : ''}
-                <div class="uris-lb-prompt">${escapeHtml(item.prompt || '')}</div>
-            </div>
-            <div class="uris-lb-actions">
-                <button class="uris-lb-act" data-act="copy" title="Копировать промпт" aria-label="Копировать промпт"><i class="fa-solid fa-copy"></i></button>
-                <button class="uris-lb-act" data-act="saveRef" title="Сохранить как референс" aria-label="Сохранить как референс"><i class="fa-solid fa-bookmark"></i></button>
-                <button class="uris-lb-act" data-act="regen" title="Перегенерировать" aria-label="Перегенерировать"><i class="fa-solid fa-rotate-right"></i></button>
-                <button class="uris-lb-act uris-lb-act-danger" data-act="del" title="Удалить" aria-label="Удалить"><i class="fa-solid fa-trash"></i></button>
-            </div>
-            ${_items.length > 1 ? `<button class="uris-lb-nav prev" type="button" aria-label="Предыдущее">‹</button><button class="uris-lb-nav next" type="button" aria-label="Следующее">›</button>` : ''}
-        </div>`;
-    lb.querySelector('.uris-lb-img').src = item.src;
-    document.body.appendChild(lb);
-    // Move focus into the dialog so keyboard users land inside it, not on the
-    // trigger behind the backdrop.
-    lb.tabIndex = -1;
-    try { lb.focus(); } catch { /* focus unavailable */ }
-    // Click on the darkened background (not on content/controls) — closes. Gives
-    // mobile users a reliable exit, even if ✕ is hard to reach.
-    lb.addEventListener('click', (e) => { if (e.target === lb) close(); });
-    lb.querySelector('.uris-lb-close').addEventListener('click', close);
-    lb.querySelector('.uris-lb-nav.prev')?.addEventListener('click', prev);
-    lb.querySelector('.uris-lb-nav.next')?.addEventListener('click', next);
-    lb.querySelector('[data-act="copy"]')?.addEventListener('click', () => copyPrompt(item));
-    lb.querySelector('[data-act="saveRef"]')?.addEventListener('click', () => saveAsReference(item));
-    lb.querySelector('[data-act="regen"]')?.addEventListener('click', async () => {
-        await regenerate(item, _root, null);
-        // After regeneration the items list is stale; close so the grid re-render shows the new image.
-        close();
+/** QuerySelector the grid thumbnail (the card image button) for every item. */
+function collectThumbElements(root, items) {
+    if (!root?.querySelectorAll) return [];
+    return items.map(item => {
+        if (!item?.id) return null;
+        return root.querySelector(`.uris-card[data-id="${CSS.escape(String(item.id))}"] .uris-card-img`) || null;
     });
-    lb.querySelector('[data-act="del"]')?.addEventListener('click', async () => {
-        await deleteImage(item, _chatId, _root);
-        // The card may be hidden/removed; close the lightbox.
-        close();
-    });
+}
 
-    // Single keydown listener on document: Escape/←/→. Removed in close() and on re-render.
-    if (_onKey) document.removeEventListener('keydown', _onKey);
-    _onKey = (e) => {
-        if (e.key === 'Escape') close();
-        else if (e.key === 'ArrowLeft') prev();
-        else if (e.key === 'ArrowRight') next();
-    };
-    document.addEventListener('keydown', _onKey);
-
-    // swipe: down — close, left/right — navigate
-    let sx = 0, sy = 0;
-    lb.addEventListener('touchstart', (e) => { sx = e.touches[0].clientX; sy = e.touches[0].clientY; }, { passive: true });
-    lb.addEventListener('touchend', (e) => {
-        const dx = e.changedTouches[0].clientX - sx;
-        const dy = e.changedTouches[0].clientY - sy;
-        if (Math.abs(dy) > Math.abs(dx) && dy > 80) close();
-        else if (Math.abs(dx) > 60) {
-            if (dx < 0) next();
-            else prev();
+/** Wire the gallery actions as toolbar buttons after close/zoom/arrows/counter. */
+function registerActionButtons(pswp, ctx) {
+    const buttons = [
+        { name: 'uris-copy', order: 30, icon: 'fa-copy', title: 'Копировать промпт', danger: false, run: item => copyPrompt(item) },
+        { name: 'uris-save-ref', order: 31, icon: 'fa-bookmark', title: 'Сохранить как референс', danger: false, run: item => saveAsReference(item) },
+        { name: 'uris-regen', order: 32, icon: 'fa-rotate-right', title: 'Перегенерировать', danger: false, run: async item => { await regenerate(item, ctx.root, null); pswp.close(); } },
+        { name: 'uris-del', order: 33, icon: 'fa-trash', title: 'Удалить', danger: true, run: async item => { await deleteImage(item, ctx.chatId, ctx.root); pswp.close(); } },
+    ];
+    pswp.on('uiRegister', () => {
+        for (const button of buttons) {
+            pswp.ui.registerElement({
+                name: button.name,
+                order: button.order,
+                isButton: true,
+                tagName: 'button',
+                className: 'uris-pswp-act' + (button.danger ? ' uris-pswp-act-danger' : ''),
+                title: button.title,
+                ariaLabel: button.title,
+                html: `<i class="fa-solid ${button.icon}" aria-hidden="true"></i>`,
+                appendTo: 'bar',
+                onClick: () => {
+                    const item = ctx.items[pswp.currIndex];
+                    if (item) void button.run(item);
+                },
+            });
         }
-    }, { passive: true });
+    });
 }
 
-function prev() { if (_items.length > 1) { _index = (_index - 1 + _items.length) % _items.length; render(); } }
-function next() { if (_items.length > 1) { _index = (_index + 1) % _items.length; render(); } }
-
-function close() {
-    if (_onKey) { document.removeEventListener('keydown', _onKey); _onKey = null; }
-    document.querySelector('.uris-lightbox')?.remove();
-    unlockBodyScroll();
-    const prev = _previousFocus;
-    _previousFocus = null;
-    if (prev && typeof prev.focus === 'function') {
-        try { prev.focus(); } catch { /* focus unavailable */ }
+/** Stock UI titles are English; ST users get Russian. */
+function localizeDefaultUi(pswp) {
+    const titles = [
+        ['.pswp__button--close', 'Закрыть (Esc)'],
+        ['.pswp__button--arrow--prev', 'Предыдущее (←)'],
+        ['.pswp__button--arrow--next', 'Следующее (→)'],
+        ['.pswp__button--zoom', 'Во весь экран'],
+    ];
+    for (const [selector, title] of titles) {
+        const el = pswp.element?.querySelector(selector);
+        if (el) {
+            el.title = title;
+            el.setAttribute('aria-label', title);
+        }
     }
 }

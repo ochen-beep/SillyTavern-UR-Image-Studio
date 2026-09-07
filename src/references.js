@@ -142,6 +142,16 @@ function validDimension(value) {
     return Number.isSafeInteger(value) && value > 0;
 }
 
+function validQuality(value) {
+    return typeof value === 'number' && value > 0 && value < 1;
+}
+
+/** Resolve an output version label for the effective optimization parameters. */
+function resolveVersion(options, maxEdge) {
+    if (typeof options.version === 'string' && options.version.trim()) return options.version.trim();
+    return maxEdge === MAX_EDGE ? OPTIMIZATION_VERSION : `${OPTIMIZATION_VERSION}-${maxEdge}`;
+}
+
 async function inputToBlob(input) {
     if (typeof input === 'string') {
         if (!/^data:image\//i.test(input)) throw imageError('input must be an image input');
@@ -220,12 +230,21 @@ function hasAlpha(context, width, height) {
  * Browser-native reference optimizer. Browser encoder/EXIF behavior is left to
  * the platform decoder and must be manually checked on target browsers. Node
  * tests use the _test seam instead of emulating a browser DOM.
+ *
+ * Options: maxEdge caps the long edge (default MAX_EDGE=1024), quality /
+ * qualityAlpha override the opaque/alpha encoder quality, version overrides
+ * the reported optimizationVersion label (thumbnails use their own label so
+ * reference re-optimization never matches on them).
  */
 export async function optimizeReferenceImage(input, options = {}) {
     const seam = options._test || {};
     let bitmap = null;
     let canvas = null;
     try {
+        const maxEdge = validDimension(options.maxEdge) ? options.maxEdge : MAX_EDGE;
+        const webpPhotoQuality = validQuality(options.quality) ? options.quality : WEBP_PHOTO_QUALITY;
+        const webpAlphaQuality = validQuality(options.qualityAlpha) ? options.qualityAlpha : WEBP_ALPHA_QUALITY;
+        const jpegQuality = validQuality(options.quality) ? options.quality : JPEG_QUALITY;
         const source = await inputToBlob(input);
         const sourceMime = String(source.type || '').toLowerCase();
         if (!/^image\//.test(sourceMime)) throw imageError('input must be an image input');
@@ -236,7 +255,7 @@ export async function optimizeReferenceImage(input, options = {}) {
         const sourceWidth = bitmap.width;
         const sourceHeight = bitmap.height;
         if (!validDimension(sourceWidth) || !validDimension(sourceHeight)) throw imageError('invalid image dimensions');
-        const scale = Math.min(1, MAX_EDGE / Math.max(sourceWidth, sourceHeight));
+        const scale = Math.min(1, maxEdge / Math.max(sourceWidth, sourceHeight));
         const width = Math.max(1, Math.round(sourceWidth * scale));
         const height = Math.max(1, Math.round(sourceHeight * scale));
 
@@ -247,8 +266,8 @@ export async function optimizeReferenceImage(input, options = {}) {
         const alpha = hasAlpha(context, width, height);
         const encode = seam.toBlob || ((mime, quality) => canvasBlob(canvas, mime, quality));
         const candidates = alpha
-            ? [['image/webp', WEBP_ALPHA_QUALITY], ['image/png', undefined]]
-            : [['image/webp', WEBP_PHOTO_QUALITY], ['image/jpeg', JPEG_QUALITY]];
+            ? [['image/webp', webpAlphaQuality], ['image/png', undefined]]
+            : [['image/webp', webpPhotoQuality], ['image/jpeg', jpegQuality]];
         const valid = [];
         for (const [mime, quality] of candidates) {
             try {
@@ -274,7 +293,7 @@ export async function optimizeReferenceImage(input, options = {}) {
             height,
             sourceBytes: source.size,
             optimizedBytes: selected.size,
-            optimizationVersion: OPTIMIZATION_VERSION,
+            optimizationVersion: resolveVersion(options, maxEdge),
         };
     } catch (error) {
         throw error instanceof Error && error.message.startsWith('optimizeReferenceImage:')

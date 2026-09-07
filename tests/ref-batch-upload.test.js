@@ -200,3 +200,59 @@ test('загрузка: правка имени в строке попадает
     await document.querySelector('#urisBatchOk').click();
     assert.equal(created[0].name, 'Произвольное имя');
 });
+
+// ── Crop ──
+
+test('кроп: «Обрезать» подменяет источник строки на blob (ingest получает blob)', async () => {
+    const { document, mod } = await loadModule();
+    const base = makeDeps();
+    const cropped = new Blob([new Uint8Array([9, 9, 9])], { type: 'image/png' });
+    const cropCalls = [];
+    const deps = {
+        ...base.deps,
+        crop: async (opts) => {
+            cropCalls.push(opts.source);
+            return { blob: cropped, width: 100, height: 100 };
+        },
+    };
+    const file = png('photo.png');
+    mod.openBatchUploadDialog({ files: [file], deps });
+    await document.querySelector('.uris-batch-crop').click();
+    await document.querySelector('#urisBatchOk').click();
+
+    assert.equal(cropCalls.length, 1);
+    assert.equal(cropCalls[0], file, 'в кроп уходит исходный файл строки');
+    assert.equal(base.created.length, 1);
+    assert.equal(base.created[0].mime, 'image/png', 'metadata из blob (заглушка ingest возвращает file.type/blob.type)');
+});
+
+test('кроп: отмена и «Без обрезки» оставляют исходный файл источником', async () => {
+    const { document, mod } = await loadModule();
+    const base = makeDeps();
+    const ingested = [];
+    const file = png('keep.png');
+    const deps = {
+        ...base.deps,
+        ingest: async (source, id) => { ingested.push(source); return { imagePath: `/p/${id}.png`, metadata: {} }; },
+        crop: async () => null,
+    };
+    mod.openBatchUploadDialog({ files: [file], deps });
+    await document.querySelector('.uris-batch-crop').click();
+    await document.querySelector('#urisBatchOk').click();
+    assert.deepEqual(ingested, [file], 'отмена кропа не меняет источник');
+
+    // skip: true — то же самое
+    const second = await loadModule();
+    const base2 = makeDeps();
+    const ingested2 = [];
+    const deps2 = {
+        ...base2.deps,
+        ingest: async (source, id) => { ingested2.push(source); return { imagePath: `/p/${id}.png`, metadata: {} }; },
+        crop: async () => ({ skip: true }),
+    };
+    const file2 = png('keep2.png');
+    second.mod.openBatchUploadDialog({ files: [file2], deps: deps2 });
+    await second.document.querySelector('.uris-batch-crop').click();
+    await second.document.querySelector('#urisBatchOk').click();
+    assert.deepEqual(ingested2, [file2], '«Без обрезки» не подменяет источник');
+});

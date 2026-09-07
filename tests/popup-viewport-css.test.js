@@ -36,12 +36,14 @@ function ruleBlock(selector) {
     return css.slice(open + 1, close);
 }
 
-test('uris-lightbox: явные top/left/width/height вместо inset: 0', () => {
-    const block = ruleBlock('.uris-lightbox {');
-    assert.match(block, /top:\s*0/, 'lightbox должен быть привязан top: 0');
-    assert.match(block, /left:\s*0/, 'lightbox должен быть привязан left: 0');
+test('pswp-лайтбокс: явные высоты и z-index уровня наших оверлеев', () => {
+    // Вендорный photoswipe.css ставит .pswp { position: fixed; height: 100% }.
+    // В ST mobile (body fixed, html вырожден) height: 100% ненадёжна — наш
+    // адаптационный блок переопределяет высоту рецептом 100vh → 100dvh и
+    // фиксирует z-index на уровне .uris-picker-overlay (100000; окно 99999).
+    const block = ruleBlock('.pswp.uris-pswp {');
     assert.match(block, /height:\s*100vh[^;]*;\s*height:\s*100dvh/, 'нужны явные height 100vh/100dvh (dvh — progressive enhancement после vh)');
-    assert.doesNotMatch(block, /inset:\s*0/, 'inset: 0 запрещён: в ST mobile (body fixed) он схлопывает бэкдроп в высоту 0');
+    assert.match(block, /z-index:\s*100000/, 'просмотрщик должен быть на уровне наших оверлеев (100000), иначе откроется под окном (99999)');
 });
 
 test('uris-picker-overlay: явные top/left/width/height вместо inset: 0', () => {

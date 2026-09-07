@@ -641,80 +641,25 @@
     border-radius: var(--uris-radius-card); overflow: hidden; position: relative;
     border: 1px solid var(--uris-border-soft);
 }
+/* Картинка-кнопка: клик/тап открывает просмотрщик (expand-кнопка выпилена).
+   Настоящий <button> — клавиатура (Tab/Enter) и роль accessibility; сбрасываем
+   кнопочные дефолты, чтобы выглядела как прежний div. */
 .uris-card-img {
-    width: 100%; aspect-ratio: 1; background-size: cover; background-position: center; cursor: pointer;
+    display: block; width: 100%; aspect-ratio: 1; position: relative;
+    border: 0; margin: 0; padding: 0; background: none; cursor: pointer;
+    font: inherit; color: inherit;
 }
+.uris-card-img img { display: block; width: 100%; height: 100%; object-fit: cover; }
 .uris-saved-badge { position: absolute; top: 4px; right: 4px; font-size: var(--uris-font-sm); }
 .uris-card-actions { display: flex; justify-content: space-around; padding: 4px; background: rgba(0,0,0,.3); }
 .uris-card-btn { background: none; border: none; color: var(--uris-text-mut); cursor: pointer; padding: 6px; font-size: var(--uris-font); }
 .uris-card-btn:hover { color: var(--uris-text-strong); }
 .uris-gallery-empty { text-align: center; color: var(--uris-text-dim); padding: 40px 0; }
+/* Сентинел чанковой догрузки: нулевую высоту IntersectionObserver ловит плохо. */
+.uris-gallery-sentinel { height: 1px; }
 
-/* ── Lightbox ──
-   Бэкдроп на полный viewport. Контент центрируем MARGIN:AUTO,
-   а не flex-центрированием родителя: когда контент влезает — по центру,
-   когда нет — прилипает к верху, а overflow:auto даёт скролл. Так верх
-   (где кнопка закрытия) НЕ уезжает за экран — главный фикс мобильного бага.
-   dvh/dvw — progressive enhancement над vh/vw (после второй декларации).
-   ВАЖНО: НЕ inset:0, а явные top/left + width/height. SillyTavern mobile
-   (mobile-styles.css, @media ≤1000px) ставит body { position: fixed } —
-   из-за этого контейнер fixed-потомков получает высоту 0 (html вырождается),
-   inset:0 даёт нулевой бэкдроп, а привязка bottom улетает ЗА верх экрана.
-   Явные top:0 + width:100% + height:100dvh работают и в обычном, и в
-   ST-мобильном окружении (проверено тестом tests/manual/popup-mobile-repro.html). */
-.uris-lightbox {
-    position: fixed; top: 0; left: 0;
-    width: 100%; height: 100vh; height: 100dvh;
-    z-index: 100000;
-    background: rgba(0,0,0,.9);
-    display: flex;
-    overflow: auto;
-    -webkit-overflow-scrolling: touch;
-    box-sizing: border-box;
-    padding: env(safe-area-inset-top, 0) env(safe-area-inset-right, 0) env(safe-area-inset-bottom, 0) env(safe-area-inset-left, 0);
-}
-.uris-lb-content {
-    position: relative; margin: auto;
-    max-width: 92vw; max-width: 92dvw;
-    max-height: 92vh; max-height: 92dvh;
-    display: flex; flex-direction: column; align-items: center; justify-content: center;
-    min-height: 0;
-}
-.uris-lb-img {
-    max-width: 100%; max-height: 80vh; max-height: 80dvh;
-    object-fit: contain; min-width: 0; min-height: 0;
-    flex: 0 1 auto;            /* сжимается, не растягивается — колонка помещается */
-}
-.uris-lb-info { max-width: 100%; margin-top: 8px; flex: 0 0 auto; min-height: 0; }
-.uris-lb-prompt { font-size: calc(12px * var(--uris-font-scale, 1)); opacity: .7; max-height: 80px; overflow-y: auto; overflow-wrap: break-word; }
-.uris-lb-actions {
-    display: flex; gap: 8px; justify-content: center;
-    padding: 10px 12px; background: rgba(0, 0, 0, 0.4);
-    border-radius: 8px; margin-top: 10px; flex: 0 0 auto;
-}
-.uris-lb-act {
-    background: rgba(255, 255, 255, 0.1); border: none; color: #fff;
-    width: 38px; height: 38px; border-radius: 6px; cursor: pointer;
-    font-size: calc(16px * var(--uris-font-scale, 1)); display: flex; align-items: center; justify-content: center;
-    transition: background 0.15s;
-}
-.uris-lb-act:hover { background: rgba(255, 255, 255, 0.22); }
-.uris-lb-act-danger:hover { background: var(--uris-err-hover); }
-.uris-lb-nav { position: absolute; top: 50%; transform: translateY(-50%); font-size: calc(40px * var(--uris-font-scale, 1)); cursor: pointer; user-select: none; border: 0; background: transparent; padding: 0; font-family: inherit; color: #fff; }
-.uris-lb-nav.prev { left: 10px; } .uris-lb-nav.next { right: 10px; }
-/* Счётчик и ✕ — прямые дети бэкдропа (inset:0), позиция относительно экрана,
-   а не относительно контента. Безопасные отступы + 44px тап-таргет → всегда
-   в углу экрана и доступны на мобильном/в компактном режиме. */
-.uris-lb-counter { position: absolute; top: max(env(safe-area-inset-top, 0px), 10px); left: 50%; transform: translateX(-50%); pointer-events: none; }
-.uris-lb-close {
-    position: absolute; top: max(env(safe-area-inset-top, 0px), 6px); right: max(env(safe-area-inset-right, 0px), 6px);
-    width: 44px; height: 44px;
-    display: flex; align-items: center; justify-content: center;
-    font-size: calc(22px * var(--uris-font-scale, 1)); cursor: pointer; z-index: 2; color: #fff;
-    border: 0; background: transparent; padding: 0; font-family: inherit;
-}
-.uris-lb-close:focus-visible, .uris-lb-nav:focus-visible, .uris-lb-act:focus-visible { outline: 2px solid #fff; outline-offset: 2px; }
-.uris-lb-nav { z-index: 2; }
+/* ── Lightbox убран ── просмотрщик галереи переехал на PhotoSwipe:
+   вендорный CSS .pswp-* и адаптация .pswp.uris-pswp — в конце файла. */
 
 /* ── Mobile ── */
 /* Mobile: окно заполняет viewport EXCEPT ST-бары (#top-bar, #send_form),
@@ -758,50 +703,6 @@
 }
 @media (max-width: 479px) {
     .uris-gallery-grid { grid-template-columns: 1fr; }
-}
-
-/* ── Lightbox: mobile portrait ──
-   На узком экране центрированные controls недосягаемы большим пальцем
-   (top: 50% для nav, info/actions под картинкой могут уйти под address bar).
-   Решение из Material 3 / Apple HIG / shadcn consensus: bottom-anchored.
-   svh (small viewport) — картинка гарантированно влезает даже при показанном
-   URL-баре, без jitter от dvh. Controls прижимаются к нижнему краю поверх
-   safe-area. Сохраняем centered image (flex-column) — только controls едут. */
-@media (max-width: 768px) {
-    .uris-lb-content {
-        /* Уменьшаем, чтобы освободить место под bottom-anchored controls. */
-        max-height: 86svh; max-height: 86vh;
-        justify-content: flex-start;       /* image к верху, actions к низу */
-    }
-    .uris-lb-img {
-        max-height: 65svh; max-height: 65vh;
-    }
-    /* Side nav уходит вниз: thumb-reach. Превращаем ‹ › в нижнюю пару кнопок. */
-    .uris-lb-nav {
-        top: auto; transform: none;
-        bottom: max(env(safe-area-inset-bottom, 0px), 12px);
-        width: 44px; height: 44px;
-        display: flex; align-items: center; justify-content: center;
-        font-size: calc(28px * var(--uris-font-scale, 1));
-        background: rgba(0,0,0,0.45); border-radius: 8px;
-    }
-    .uris-lb-nav.prev { left: max(env(safe-area-inset-left, 0px), 10px); }
-    .uris-lb-nav.next { right: max(env(safe-area-inset-right, 0px), 10px); }
-    /* Actions toolbar — уже под картинкой, добавляем safe-area bottom padding. */
-    .uris-lb-actions {
-        margin-bottom: env(safe-area-inset-bottom, 0);
-    }
-    .uris-lb-act { width: 44px; height: 44px; font-size: calc(18px * var(--uris-font-scale, 1)); }
-    /* ✕ чуть крупнее и отодвигается от верхнего края на safe-area. */
-    .uris-lb-close { width: 48px; height: 48px; font-size: calc(24px * var(--uris-font-scale, 1)); }
-}
-@supports not (height: 100svh) {
-    @media (max-width: 768px) {
-        /* WebView без svh (Android < Chromium 108 / старый Safari) — деградируем
-           на vh, остаётся рабочий centered layout. */
-        .uris-lb-content { max-height: 86vh; }
-        .uris-lb-img { max-height: 65vh; }
-    }
 }
 
 /* ── Settings panel: source picker ── */
@@ -1805,3 +1706,531 @@
 .uris-notify-row { display: flex; align-items: center; gap: 8px; margin: 4px 0; }
 .uris-notify-row .checkbox_label { flex: 1 1 auto; min-width: 0; margin: 0; }
 .uris-notify-row .uris-notify-select { flex: 0 0 130px; min-width: 0; padding: 2px 4px; font-size: var(--uris-font-sm); }
+
+/*! PhotoSwipe main CSS by Dmytro Semenov | photoswipe.com */
+
+.pswp {
+  --pswp-bg: #000;
+  --pswp-placeholder-bg: #222;
+  
+
+  --pswp-root-z-index: 100000;
+  
+  --pswp-preloader-color: rgba(79, 79, 79, 0.4);
+  --pswp-preloader-color-secondary: rgba(255, 255, 255, 0.9);
+  
+  /* defined via js:
+  --pswp-transition-duration: 333ms; */
+  
+  --pswp-icon-color: #fff;
+  --pswp-icon-color-secondary: #4f4f4f;
+  --pswp-icon-stroke-color: #4f4f4f;
+  --pswp-icon-stroke-width: 2px;
+
+  --pswp-error-text-color: var(--pswp-icon-color);
+}
+
+
+/*
+	Styles for basic PhotoSwipe (pswp) functionality (sliding area, open/close transitions)
+*/
+
+.pswp {
+	position: fixed;
+	top: 0;
+	left: 0;
+	width: 100%;
+	height: 100%;
+	z-index: var(--pswp-root-z-index);
+	display: none;
+	touch-action: none;
+	outline: 0;
+	opacity: 0.003;
+	contain: layout style size;
+	-webkit-tap-highlight-color: rgba(0, 0, 0, 0);
+}
+
+/* Prevents focus outline on the root element,
+  (it may be focused initially) */
+.pswp:focus {
+  outline: 0;
+}
+
+.pswp * {
+  box-sizing: border-box;
+}
+
+.pswp img {
+  max-width: none;
+}
+
+.pswp--open {
+	display: block;
+}
+
+.pswp,
+.pswp__bg {
+	transform: translateZ(0);
+	will-change: opacity;
+}
+
+.pswp__bg {
+  opacity: 0.005;
+	background: var(--pswp-bg);
+}
+
+.pswp,
+.pswp__scroll-wrap {
+	overflow: hidden;
+}
+
+.pswp__scroll-wrap,
+.pswp__bg,
+.pswp__container,
+.pswp__item,
+.pswp__content,
+.pswp__img,
+.pswp__zoom-wrap {
+	position: absolute;
+	top: 0;
+	left: 0;
+	width: 100%;
+	height: 100%;
+}
+
+.pswp__img,
+.pswp__zoom-wrap {
+	width: auto;
+	height: auto;
+}
+
+.pswp--click-to-zoom.pswp--zoom-allowed .pswp__img {
+	cursor: -webkit-zoom-in;
+	cursor: -moz-zoom-in;
+	cursor: zoom-in;
+}
+
+.pswp--click-to-zoom.pswp--zoomed-in .pswp__img {
+	cursor: move;
+	cursor: -webkit-grab;
+	cursor: -moz-grab;
+	cursor: grab;
+}
+
+.pswp--click-to-zoom.pswp--zoomed-in .pswp__img:active {
+  cursor: -webkit-grabbing;
+  cursor: -moz-grabbing;
+  cursor: grabbing;
+}
+
+/* :active to override grabbing cursor */
+.pswp--no-mouse-drag.pswp--zoomed-in .pswp__img,
+.pswp--no-mouse-drag.pswp--zoomed-in .pswp__img:active,
+.pswp__img {
+	cursor: -webkit-zoom-out;
+	cursor: -moz-zoom-out;
+	cursor: zoom-out;
+}
+
+
+/* Prevent selection and tap highlights */
+.pswp__container,
+.pswp__img,
+.pswp__button,
+.pswp__counter {
+	-webkit-user-select: none;
+	-moz-user-select: none;
+	-ms-user-select: none;
+	user-select: none;
+}
+
+.pswp__item {
+	/* z-index for fade transition */
+	z-index: 1;
+	overflow: hidden;
+}
+
+.pswp__hidden {
+	display: none !important;
+}
+
+/* Allow to click through pswp__content element, but not its children */
+.pswp__content {
+  pointer-events: none;
+}
+.pswp__content > * {
+  pointer-events: auto;
+}
+
+
+/*
+
+  PhotoSwipe UI
+
+*/
+
+/*
+	Error message appears when image is not loaded
+	(JS option errorMsg controls markup)
+*/
+.pswp__error-msg-container {
+  display: grid;
+}
+.pswp__error-msg {
+	margin: auto;
+	font-size: 1em;
+	line-height: 1;
+	color: var(--pswp-error-text-color);
+}
+
+/*
+class pswp__hide-on-close is applied to elements that
+should hide (for example fade out) when PhotoSwipe is closed
+and show (for example fade in) when PhotoSwipe is opened
+ */
+.pswp .pswp__hide-on-close {
+	opacity: 0.005;
+	will-change: opacity;
+	transition: opacity var(--pswp-transition-duration) cubic-bezier(0.4, 0, 0.22, 1);
+	z-index: 10; /* always overlap slide content */
+	pointer-events: none; /* hidden elements should not be clickable */
+}
+
+/* class pswp--ui-visible is added when opening or closing transition starts */
+.pswp--ui-visible .pswp__hide-on-close {
+	opacity: 1;
+	pointer-events: auto;
+}
+
+/* <button> styles, including css reset */
+.pswp__button {
+	position: relative;
+	display: block;
+	width: 50px;
+	height: 60px;
+	padding: 0;
+	margin: 0;
+	overflow: hidden;
+	cursor: pointer;
+	background: none;
+	border: 0;
+	box-shadow: none;
+	opacity: 0.85;
+	-webkit-appearance: none;
+	-webkit-touch-callout: none;
+}
+
+.pswp__button:hover,
+.pswp__button:active,
+.pswp__button:focus {
+  transition: none;
+  padding: 0;
+  background: none;
+  border: 0;
+  box-shadow: none;
+  opacity: 1;
+}
+
+.pswp__button:disabled {
+  opacity: 0.3;
+  cursor: auto;
+}
+
+.pswp__icn {
+  fill: var(--pswp-icon-color);
+  color: var(--pswp-icon-color-secondary);
+}
+
+.pswp__icn {
+  position: absolute;
+  top: 14px;
+  left: 9px;
+  width: 32px;
+  height: 32px;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.pswp__icn-shadow {
+  stroke: var(--pswp-icon-stroke-color);
+  stroke-width: var(--pswp-icon-stroke-width);
+  fill: none;
+}
+
+.pswp__icn:focus {
+	outline: 0;
+}
+
+/*
+	div element that matches size of large image,
+	large image loads on top of it,
+	used when msrc is not provided
+*/
+div.pswp__img--placeholder,
+.pswp__img--with-bg {
+	background: var(--pswp-placeholder-bg);
+}
+
+.pswp__top-bar {
+	position: absolute;
+	left: 0;
+	top: 0;
+	width: 100%;
+	height: 60px;
+	display: flex;
+  flex-direction: row;
+  justify-content: flex-end;
+	z-index: 10;
+
+	/* allow events to pass through top bar itself */
+	pointer-events: none !important;
+}
+.pswp__top-bar > * {
+  pointer-events: auto;
+  /* this makes transition significantly more smooth,
+     even though inner elements are not animated */
+  will-change: opacity;
+}
+
+
+/*
+
+  Close button
+
+*/
+.pswp__button--close {
+  margin-right: 6px;
+}
+
+
+/*
+
+  Arrow buttons
+
+*/
+.pswp__button--arrow {
+  position: absolute;
+  top: 0;
+  width: 75px;
+  height: 100px;
+  top: 50%;
+  margin-top: -50px;
+}
+
+.pswp__button--arrow:disabled {
+  display: none;
+  cursor: default;
+}
+
+.pswp__button--arrow .pswp__icn {
+  top: 50%;
+  margin-top: -30px;
+  width: 60px;
+  height: 60px;
+  background: none;
+  border-radius: 0;
+}
+
+.pswp--one-slide .pswp__button--arrow {
+  display: none;
+}
+
+/* hide arrows on touch screens */
+.pswp--touch .pswp__button--arrow {
+  visibility: hidden;
+}
+
+/* show arrows only after mouse was used */
+.pswp--has_mouse .pswp__button--arrow {
+  visibility: visible;
+}
+
+.pswp__button--arrow--prev {
+  right: auto;
+  left: 0px;
+}
+
+.pswp__button--arrow--next {
+  right: 0px;
+}
+.pswp__button--arrow--next .pswp__icn {
+  left: auto;
+  right: 14px;
+  /* flip horizontally */
+  transform: scale(-1, 1);
+}
+
+/*
+
+  Zoom button
+
+*/
+.pswp__button--zoom {
+  display: none;
+}
+
+.pswp--zoom-allowed .pswp__button--zoom {
+  display: block;
+}
+
+/* "+" => "-" */
+.pswp--zoomed-in .pswp__zoom-icn-bar-v {
+  display: none;
+}
+
+
+/*
+
+  Loading indicator
+
+*/
+.pswp__preloader {
+  position: relative;
+  overflow: hidden;
+  width: 50px;
+  height: 60px;
+  margin-right: auto;
+}
+
+.pswp__preloader .pswp__icn {
+  opacity: 0;
+  transition: opacity 0.2s linear;
+  animation: pswp-clockwise 600ms linear infinite;
+}
+
+.pswp__preloader--active .pswp__icn {
+  opacity: 0.85;
+}
+
+@keyframes pswp-clockwise {
+  0% { transform: rotate(0deg); }
+  100% { transform: rotate(360deg); }
+}
+
+
+/*
+
+  "1 of 10" counter
+
+*/
+.pswp__counter {
+  height: 30px;
+  margin-top: 15px;
+  margin-inline-start: 20px;
+  font-size: 14px;
+  line-height: 30px;
+  color: var(--pswp-icon-color);
+  text-shadow: 1px 1px 3px var(--pswp-icon-color-secondary);
+  opacity: 0.85;
+}
+
+.pswp--one-slide .pswp__counter {
+  display: none;
+}
+
+/* ════ URIS: адаптация PhotoSwipe к SillyTavern ════
+   1) ST mobile (mobile-styles.css, @media ≤1000px) ставит body { position: fixed },
+   из-за этого html вырождается по высоте и вендорная height: 100% у fixed-элемента
+   ненадёжна. Рецепт тот же, что у наших оверлеев: явные 100vh → 100dvh.
+   2) z-index: вендорный дефолт --pswp-root-z-index = 100000 — уровень наших
+   оверлеев; фиксируем явно, чтобы апгрейд вендора не уронил просмотрщик под
+   окно расширения (99999). ST-попапы — <dialog> в top layer, они всегда выше. */
+.pswp.uris-pswp {
+    height: 100vh;
+    height: 100dvh;
+    z-index: 100000;
+}
+
+/* Кнопки действий галереи в top bar (иконки Font Awesome вместо SVG).
+   Базовая геометрия — у .pswp__button (44×44, тап-таргет соблюдён). */
+.pswp__button.uris-pswp-act {
+    color: #fff;
+    font-size: calc(16px * var(--uris-font-scale, 1));
+    opacity: .9;
+}
+.pswp__button.uris-pswp-act:hover { opacity: 1; background: rgba(255, 255, 255, 0.12); }
+.pswp__button.uris-pswp-act-danger:hover { background: var(--uris-err-hover); }
+.pswp__button.uris-pswp-act:focus-visible { outline: 2px solid #fff; outline-offset: -2px; }
+@media (max-width: 768px) {
+    .pswp__button.uris-pswp-act { font-size: calc(18px * var(--uris-font-scale, 1)); }
+}
+
+.croppr-container * {
+  user-select: none;
+  -moz-user-select: none;
+  -webkit-user-select: none;
+  -ms-user-select: none;
+  box-sizing: border-box;
+  -webkit-box-sizing: border-box;
+  -moz-box-sizing: border-box;
+}
+
+.croppr-container img {
+  vertical-align: middle;
+  max-width: 100%;
+}
+
+.croppr {
+  position: relative;
+  display: inline-block;
+}
+
+.croppr-overlay {
+  background: rgba(0,0,0,0.5);
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  z-index: 1;
+  cursor: crosshair;
+}
+
+.croppr-region {
+  border: 1px dashed rgba(0, 0, 0, 0.5);
+  position: absolute;
+  z-index: 3;
+  cursor: move;
+  top: 0;
+}
+
+.croppr-imageClipped {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  z-index: 2;
+  pointer-events: none;
+}
+
+.croppr-handle {
+  border: 1px solid black;
+  background-color: white;
+  width: 10px;
+  height: 10px;
+  position: absolute;
+  z-index: 4;
+  top: 0;
+}
+/* ════ URIS: crop dialog (Croppr) ════
+   Поверх открытого PhotoSwipe (save-as-reference из просмотрщика):
+   pswp = 100000, наши оверлеи = 100000 (решает DOM-порядок), кроп = 100100. */
+.uris-crop-overlay { z-index: 100100; }
+.uris-crop-dialog { max-width: min(92vw, 640px); }
+.uris-crop-stage {
+    position: relative;
+    max-height: 60vh;
+    max-height: 60dvh;
+    overflow: hidden;
+    text-align: center;
+    background: repeating-conic-gradient(rgba(255,255,255,.06) 0% 25%, transparent 0% 50%) 50% / 16px 16px;
+    touch-action: none; /* жестами управляет Croppr, не скролл */
+}
+.uris-crop-stage img { max-width: 100%; max-height: 60vh; max-height: 60dvh; }
+.uris-crop-presets { justify-content: center; }
+.uris-batch-crop {
+    background: none; border: none; color: var(--uris-text-mut); cursor: pointer;
+    padding: 6px; font-size: var(--uris-font);
+}
+.uris-batch-crop:hover { color: var(--uris-text-strong); }

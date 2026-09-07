@@ -191,3 +191,30 @@ test('reconcileCards scans every distinct folder referenced by cards plus the le
     assert.equal(cards.find(c => c.id === 'l').status, 'ready');
     assert.equal(cards.find(c => c.id === 'gone').status, 'missing');
 });
+
+test('persists natural dimensions on the card; bytes-like keys stay stripped', async () => {
+    const { addCard, updateCard } = await import('../src/gallery-index.js');
+    const card = await addCard({
+        id: 'dims', imagePath: 'user/images/UR%20Image%20Studio/dims.png', prompt: 'sized',
+        width: 800, height: 600,
+    });
+    assert.deepEqual({ width: card.width, height: card.height }, { width: 800, height: 600 });
+
+    const updated = await updateCard('dims', { width: 1024, height: 768 });
+    assert.deepEqual({ width: updated.width, height: updated.height }, { width: 1024, height: 768 });
+    const stored = JSON.stringify(context.extensionSettings);
+    assert.equal(stored.includes('"bytes"'), false);
+});
+
+test('persists the grid thumbnail path next to the full image path', async () => {
+    const { addCard, updateCard } = await import('../src/gallery-index.js');
+    const card = await addCard({
+        id: 'thumb', imagePath: 'user/images/UR%20Image%20Studio/full.png', prompt: 'p',
+    });
+    assert.equal(card.thumbPath, undefined, 'карточка без миниатюры не должна получать пустой thumbPath');
+
+    const updated = await updateCard('thumb', {
+        thumbPath: 'user/images/URIS_Thumbs/full_thumb.webp',
+    });
+    assert.equal(updated.thumbPath, 'user/images/URIS_Thumbs/full_thumb.webp');
+});

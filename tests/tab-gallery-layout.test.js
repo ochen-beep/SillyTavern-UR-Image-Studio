@@ -34,3 +34,12 @@ test('gallery clear uses compact, right-aligned toolbar styling', () => {
     assert.match(clear, /min-height\s*:\s*32px/);
     assert.match(clear, /flex\s*:\s*0\s+0\s+auto/);
 });
+
+test('gallery card loads the small variant lazily; grid renders in chunks', () => {
+    const markup = read('src/ui/tab-gallery.js');
+    assert.match(markup, /it\.thumbPath \|\| it\.src/, 'сетка должна ходить в миниатюру, если она есть');
+    assert.match(markup, /loading="lazy"/, 'миниатюры обязаны лениво грузиться');
+    assert.match(markup, /decoding="async"/);
+    assert.match(markup, /CHUNK_SIZE = \d+/, 'чанковый рендер для больших галерей');
+    assert.match(markup, /uris-gallery-sentinel/, 'сентинел дозагрузки');
+});

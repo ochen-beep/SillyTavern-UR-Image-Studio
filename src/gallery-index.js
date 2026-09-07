@@ -18,6 +18,13 @@ const ALLOWED = [
     'id', 'imagePath', 'prompt', 'negativePrompt', 'connectionId', 'routeId', 'modelId',
     'generationContract', 'aspectRatio', 'imageSize', 'quality', 'referenceIds', 'provenance',
     'status', 'createdAt', 'updatedAt', 'sourceMsgId', 'style', 'refs', 'refsSig', 'stage2Snapshot',
+    // Natural pixel dimensions: PhotoSwipe needs them before opening (open
+    // animation, layout). Legacy cards may miss them — image-dimensions.js
+    // probes lazily and persists here.
+    'width', 'height',
+    // Small variant for the grid (native-image-storage.THUMBNAIL_FOLDER);
+    // the lightbox always opens the full imagePath.
+    'thumbPath',
     'hidden',
 ];
 

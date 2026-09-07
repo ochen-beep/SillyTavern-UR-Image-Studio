@@ -8,8 +8,19 @@ import {
     nativeImagePathFromBasename,
 } from './native-image-path.js';
 import { formatForMime, formatForMimeOrDefault, sanitizeUploadFilename } from './st-upload-format.js';
+import { optimizeReferenceImage } from './references.js';
 
 export { NATIVE_GALLERY_FOLDER };
+
+/**
+ * Gallery thumbnails live in their OWN folder, never referenced by a card's
+ * imagePath: gallery-index.reconcileCards auto-imports every unknown file from
+ * scanned folders as a phantom card, and it scans only folders mentioned by
+ * cards — this folder is never scanned, so thumbnails stay invisible to it.
+ */
+export const THUMBNAIL_FOLDER = 'URIS_Thumbs';
+const THUMBNAIL_MAX_EDGE = 512;
+const THUMBNAIL_WEBP_QUALITY = 0.78;
 
 function getCtx() {
     return globalThis.SillyTavern?.getContext?.() ?? {};
@@ -124,6 +135,29 @@ async function materializedUpload(blob, options) {
     const metadata = await blobMetadata(blob);
     const imagePath = await uploadPayload(await blobPayload(blob), options);
     return options.withMetadata ? { imagePath, output: metadata } : imagePath;
+}
+
+/** Generate and upload a small thumbnail for an already-stored gallery image. */
+export async function makeThumbnailForPath(imagePath, { filename, signal, timeoutMs, _optimize } = {}) {
+    const response = await fetch(imagePath, { signal });
+    if (!response.ok) throw new Error(`Thumbnail source fetch failed (${response.status})`);
+    const blob = await response.blob();
+    if (blob.type && !/^image\//i.test(blob.type)) throw new Error('Thumbnail source is not an image');
+    const optimize = _optimize || optimizeReferenceImage;
+    const optimized = await optimize(blob, {
+        maxEdge: THUMBNAIL_MAX_EDGE,
+        quality: THUMBNAIL_WEBP_QUALITY,
+        version: `thumb-v1-${THUMBNAIL_MAX_EDGE}`,
+    });
+    const base = String(filename || '').replace(/\.[^.]+$/, '') || `thumb_${Date.now()}`;
+    // uploadPayload sanitizes the whole filename and the server derives the
+    // extension from `format` — pass a bare base name only.
+    return uploadPayload(await blobPayload(optimized.blob), {
+        filename: `${sanitizeUploadFilename(base)}_thumb`,
+        ch_name: THUMBNAIL_FOLDER,
+        signal,
+        timeoutMs,
+    });
 }
 
 /** Materialize a normalized provider result then upload it to the native gallery. */
