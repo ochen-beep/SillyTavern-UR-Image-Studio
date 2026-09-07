@@ -249,6 +249,9 @@ export async function generateImageRequest(imageConnId, request, onStatus, signa
         recordDiagnosticEvent({ event: 'materialize-result', stage: 'stage2', requestId: request.requestId, outcome: 'uploaded', details: { imagePathClass: typeof imagePath === 'string' ? imagePath.split('/').slice(0, 2).join('/') : null, bytes: outputMeta.bytes ?? null, mimeType: outputMeta.mimeType ?? null, width: outWidth, height: outHeight, aspectRatio: outputAspect, requestedAspectRatio: snapshot.aspectRatio } });
         const galleryEntry = await addCard({
             imagePath,
+            // Top-level natural dimensions (image-dimensions.js consumes these);
+            // provenance.output keeps a sanitized copy for diagnostics only.
+            ...(outWidth && outHeight ? { width: outWidth, height: outHeight } : {}),
             prompt: snapshot.prompt,
             connectionId: imageConnId,
             routeId: route.id,
