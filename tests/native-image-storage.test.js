@@ -406,3 +406,44 @@ test('deleteGalleryCard degrades to hide when the file path is shared by another
     assert.equal(all.find(c => c.id === 's1').hidden, true, 's1 hidden instead');
     assert.equal(all.find(c => c.id === 's2').hidden, false, 's2 untouched');
 });
+
+test('makeThumbnailForPath uploads a small webp variant into the dedicated thumbs folder', async () => {
+    const calls = [];
+    globalThis.fetch = async (url, options) => {
+        calls.push({ url, options });
+        if (url === 'user/images/UR%20Image%20Studio/big.png') {
+            return { ok: true, blob: async () => new Blob(['image-bytes'], { type: 'image/png' }) };
+        }
+        return { ok: true, json: async () => ({ path: 'user/images/URIS_Thumbs/uris_req_thumb.webp' }) };
+    };
+    const { makeThumbnailForPath } = await import('../src/native-image-storage.js');
+    const optimizeCalls = [];
+
+    const thumbPath = await makeThumbnailForPath('user/images/UR%20Image%20Studio/big.png', {
+        filename: 'uris_req',
+        _optimize: async (input, opts) => {
+            optimizeCalls.push(opts);
+            return { blob: new Blob(['thumb-bytes'], { type: 'image/webp' }) };
+        },
+    });
+
+    assert.equal(thumbPath, 'user/images/URIS_Thumbs/uris_req_thumb.webp');
+    assert.equal(optimizeCalls[0].maxEdge, 512);
+    assert.match(optimizeCalls[0].version, /^thumb-v1-/);
+    const upload = calls.find(call => call.url === '/api/images/upload');
+    const body = JSON.parse(upload.options.body);
+    assert.equal(body.ch_name, 'URIS_Thumbs', 'миниатюры живут в отдельной папке, которую reconcile никогда не сканирует');
+    assert.equal(body.filename, 'uris_req_thumb');
+    assert.equal(body.format, 'webp');
+});
+
+test('makeThumbnailForPath rejects a broken thumbnail source without uploading', async () => {
+    const calls = [];
+    globalThis.fetch = async (url) => {
+        calls.push(url);
+        return { ok: false, status: 404 };
+    };
+    const { makeThumbnailForPath } = await import('../src/native-image-storage.js');
+    await assert.rejects(() => makeThumbnailForPath('user/images/UR%20Image%20Studio/gone.png', {}));
+    assert.equal(calls.length, 1, 'после неудачного fetch загрузки быть не должно');
+});

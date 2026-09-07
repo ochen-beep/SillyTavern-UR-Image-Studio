@@ -4,8 +4,8 @@ import { state } from './core.js';
 import { resolveConnection } from './connections.js';
 import { resolveDispatchPlan } from './dispatch-plan.js';
 import { invokeImageProvider, validateImageProviderInvocation } from './image-provider-registry.js';
-import { materializeImageResult, getCharacterImageFolder } from './native-image-storage.js';
-import { addCard } from './gallery-index.js';
+import { materializeImageResult, getCharacterImageFolder, makeThumbnailForPath } from './native-image-storage.js';
+import { addCard, updateCard } from './gallery-index.js';
 import { providerError } from './providers/image-base.js';
 import { summarizeReference } from './references.js';
 import { getDiagnosticSessionId, hashDiagnosticId, recordDiagnosticEvent } from './diagnostic-events.js';
@@ -267,6 +267,15 @@ export async function generateImageRequest(imageConnId, request, onStatus, signa
         });
         await updatePendingBrowserRequest(request.requestId, { status: 'ready', error: null, cardId: galleryEntry.id, imagePath });
         recordDiagnosticEvent({ event: 'gallery-write', stage: 'stage2', requestId: request.requestId, outcome: 'ready', details: { galleryId: galleryEntry.id } });
+        // Grid thumbnail, best-effort and fire-and-forget: a failure leaves the
+        // card rendering the full image (the grid falls back), it never blocks
+        // or fails the paid generation result.
+        makeThumbnailForPath(imagePath, { filename: `uris_${request.requestId}` })
+            .then(thumbPath => updateCard(galleryEntry.id, { thumbPath }))
+            .catch(thumbError => recordDiagnosticEvent({
+                event: 'thumbnail-error', stage: 'stage2', requestId: request.requestId,
+                outcome: 'error', details: { message: thumbError?.message || String(thumbError) },
+            }));
         return { ...result, galleryEntry };
     } catch (error) {
         recordDiagnosticEvent({ event: 'materialize-error', level: 'error', stage: 'stage2', requestId: request.requestId, outcome: 'error', details: { errorName: error?.name || null, errorCode: error?.code || null } });

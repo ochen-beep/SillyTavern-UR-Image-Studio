@@ -22,6 +22,9 @@ const ALLOWED = [
     // animation, layout). Legacy cards may miss them — image-dimensions.js
     // probes lazily and persists here.
     'width', 'height',
+    // Small variant for the grid (native-image-storage.THUMBNAIL_FOLDER);
+    // the lightbox always opens the full imagePath.
+    'thumbPath',
     'hidden',
 ];
 

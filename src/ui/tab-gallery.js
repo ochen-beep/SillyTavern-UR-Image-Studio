@@ -7,6 +7,11 @@ import { getCtx, escapeHtml, showConfirmModal } from '../core.js';
 import { getGallery, clearGallery } from '../storage.js';
 import { showLightbox } from './lightbox.js';
 
+// Gallery grid renders in chunks: the first batch mounts immediately, the rest
+// append when the sentinel scrolls into view (no virtualization needed at this
+// list size, but a 500-image chat must not drop 500 <img> at once).
+const CHUNK_SIZE = 60;
+
 export async function render(root) {
     const chatId = getCtx().chatId;
     const items = await getGallery(chatId);
@@ -17,11 +22,15 @@ export async function render(root) {
                 <span id="urisGalleryCount">${items.length}</span>
                 <button class="uris-btn uris-btn-danger uris-gallery-clear" id="urisGalleryClear"><i class="fa-solid fa-trash"></i> Очистить</button>
             </div>
-            <div class="uris-gallery-grid" id="urisGalleryGrid">
-                ${items.length ? items.map((it, i) => card(it, i)).join('') : emptyState()}
-            </div>
+            <div class="uris-gallery-grid" id="urisGalleryGrid"></div>
         </div>`;
-    await bindCards(root, items, chatId);
+    const grid = root.querySelector('#urisGalleryGrid');
+    if (!items.length) {
+        grid.innerHTML = emptyState();
+    } else {
+        await appendChunk(grid, items, 0, chatId);
+        await mountChunkLoader(root, grid, items, chatId);
+    }
     if (root.__urisTabId && root.__urisTabId !== 'gallery') return;
     root.querySelector('#urisGalleryClear').addEventListener('click', async () => {
         if (await showConfirmModal('Очистить галерею этого чата?')) {
@@ -39,12 +48,14 @@ function card(it, i) {
         : '';
     // The image itself is the view trigger (the former expand button is gone);
     // a real <button> keeps Tab/Enter working. Dimensions prevent layout shift
-    // and let the lightbox animate from this thumbnail.
+    // and let the lightbox animate from this thumbnail. Grid loads the small
+    // variant when one exists — the lightbox always opens the full image.
+    const src = it.thumbPath || it.src;
     const dims = Number(it.width) > 0 && Number(it.height) > 0
         ? ` width="${Number(it.width)}" height="${Number(it.height)}"`
         : '';
     return `<div class="uris-card" data-id="${it.id}" data-idx="${i}">
-        <button type="button" class="uris-card-img" data-act="view" title="Просмотр" aria-label="Просмотр"><img src="${escapeHtml(it.src)}" alt="" loading="lazy" decoding="async"${dims}>${badge}</button>
+        <button type="button" class="uris-card-img" data-act="view" title="Просмотр" aria-label="Просмотр"><img src="${escapeHtml(src)}" alt="" loading="lazy" decoding="async"${dims}>${badge}</button>
         <div class="uris-card-actions">
             <button class="uris-card-btn" data-act="regen" title="Перегенерировать" aria-label="Перегенерировать"><i class="fa-solid fa-rotate-right"></i></button>
             <button class="uris-card-btn" data-act="copy" title="Копировать промпт" aria-label="Копировать промпт"><i class="fa-solid fa-copy"></i></button>
@@ -55,15 +66,58 @@ function card(it, i) {
     </div>`;
 }
 
+/** Append one chunk of cards and bind only the newly added ones. */
+async function appendChunk(grid, items, from, chatId) {
+    const to = Math.min(items.length, from + CHUNK_SIZE);
+    grid.insertAdjacentHTML('beforeend', items.slice(from, to).map((it, i) => card(it, from + i)).join(''));
+    await bindCards(grid, items, chatId, from, to);
+}
+
+/**
+ * Keep appending chunks while the sentinel is visible (fast scrolling, short
+ * viewports). Without IntersectionObserver everything renders immediately.
+ */
+async function mountChunkLoader(root, grid, items, chatId) {
+    if (grid.querySelectorAll('.uris-card').length >= items.length) return;
+    const sentinel = document.createElement('div');
+    sentinel.className = 'uris-gallery-sentinel';
+    grid.insertAdjacentElement('afterend', sentinel);
+    const appendNext = async () => {
+        const from = grid.querySelectorAll('.uris-card').length;
+        if (from >= items.length) {
+            observer?.disconnect();
+            sentinel.remove();
+            return;
+        }
+        await appendChunk(grid, items, from, chatId);
+        if (grid.querySelectorAll('.uris-card').length >= items.length) {
+            observer?.disconnect();
+            sentinel.remove();
+        }
+    };
+    const observer = typeof IntersectionObserver === 'function'
+        ? new IntersectionObserver(entries => { if (entries.some(entry => entry.isIntersecting)) void appendNext(); })
+        : null;
+    if (!observer) {
+        while (grid.querySelectorAll('.uris-card').length < items.length) await appendNext();
+        sentinel.remove();
+        return;
+    }
+    observer.observe(sentinel);
+}
+
 function emptyState() {
     return '<div class="uris-gallery-empty">Нет генераций. Перейдите во вкладку «Генерация».</div>';
 }
 
-async function bindCards(root, items, chatId) {
+async function bindCards(scopeEl, items, chatId, from = 0, to = items.length) {
     const { copyPrompt, saveAsReference, regenerate, deleteImage } = await import('./gallery-actions.js');
-    root.querySelectorAll('.uris-card').forEach(cardEl => {
-        const id = cardEl.dataset.id;
+    scopeEl.querySelectorAll('.uris-card').forEach(cardEl => {
         const idx = parseInt(cardEl.dataset.idx, 10);
+        if (idx < from || idx >= to) return;       // outside this chunk
+        if (cardEl.dataset.bound === '1') return;  // already bound (idempotent)
+        cardEl.dataset.bound = '1';
+        const id = cardEl.dataset.id;
         const it = () => items.find(x => x.id === id);
         cardEl.querySelector('[data-act="view"]')?.addEventListener('click', (e) => {
             e.stopPropagation(); showLightbox(items, idx, { chatId, root });

@@ -655,6 +655,8 @@
 .uris-card-btn { background: none; border: none; color: var(--uris-text-mut); cursor: pointer; padding: 6px; font-size: var(--uris-font); }
 .uris-card-btn:hover { color: var(--uris-text-strong); }
 .uris-gallery-empty { text-align: center; color: var(--uris-text-dim); padding: 40px 0; }
+/* Сентинел чанковой догрузки: нулевую высоту IntersectionObserver ловит плохо. */
+.uris-gallery-sentinel { height: 1px; }
 
 /* ── Lightbox убран ── просмотрщик галереи переехал на PhotoSwipe:
    вендорный CSS .pswp-* и адаптация .pswp.uris-pswp — в конце файла. */

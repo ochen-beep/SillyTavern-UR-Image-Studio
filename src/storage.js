@@ -145,6 +145,9 @@ export async function deleteGalleryCard(chatId, id, { deleteFile = false } = {})
         if (!deleted) {
             log('Gallery card removed but native file deletion was not confirmed', id);
         }
+        // The thumbnail lives in its own folder and is owned by this card only;
+        // best-effort — a stale thumbnail costs a little disk, nothing else.
+        if (card.thumbPath) await deleteNativeImageFile(card.thumbPath);
         log('Deleted gallery card and file', id);
         return true;
     }

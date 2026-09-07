@@ -205,3 +205,16 @@ test('persists natural dimensions on the card; bytes-like keys stay stripped', a
     const stored = JSON.stringify(context.extensionSettings);
     assert.equal(stored.includes('"bytes"'), false);
 });
+
+test('persists the grid thumbnail path next to the full image path', async () => {
+    const { addCard, updateCard } = await import('../src/gallery-index.js');
+    const card = await addCard({
+        id: 'thumb', imagePath: 'user/images/UR%20Image%20Studio/full.png', prompt: 'p',
+    });
+    assert.equal(card.thumbPath, undefined, 'карточка без миниатюры не должна получать пустой thumbPath');
+
+    const updated = await updateCard('thumb', {
+        thumbPath: 'user/images/URIS_Thumbs/full_thumb.webp',
+    });
+    assert.equal(updated.thumbPath, 'user/images/URIS_Thumbs/full_thumb.webp');
+});
