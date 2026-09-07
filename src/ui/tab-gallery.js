@@ -7,11 +7,6 @@ import { getCtx, escapeHtml, showConfirmModal } from '../core.js';
 import { getGallery, clearGallery } from '../storage.js';
 import { showLightbox } from './lightbox.js';
 
-// Escape for CSS url('...') — otherwise a path with a quote breaks background-image.
-function cssUrl(s) {
-    return String(s == null ? '' : s).replace(/['"]/g, (c) => '%' + c.charCodeAt(0).toString(16));
-}
-
 export async function render(root) {
     const chatId = getCtx().chatId;
     const items = await getGallery(chatId);
@@ -42,10 +37,15 @@ function card(it, i) {
     const gotoBtn = it.sourceMsgId != null
         ? `<button class="uris-card-btn" data-act="goto" title="Перейти к посту-источнику" aria-label="Перейти к посту-источнику"><i class="fa-solid fa-arrow-up-right-from-square"></i></button>`
         : '';
+    // The image itself is the view trigger (the former expand button is gone);
+    // a real <button> keeps Tab/Enter working. Dimensions prevent layout shift
+    // and let the lightbox animate from this thumbnail.
+    const dims = Number(it.width) > 0 && Number(it.height) > 0
+        ? ` width="${Number(it.width)}" height="${Number(it.height)}"`
+        : '';
     return `<div class="uris-card" data-id="${it.id}" data-idx="${i}">
-        <div class="uris-card-img" style="background-image:url('${cssUrl(it.src)}')">${badge}</div>
+        <button type="button" class="uris-card-img" data-act="view" title="Просмотр" aria-label="Просмотр"><img src="${escapeHtml(it.src)}" alt="" loading="lazy" decoding="async"${dims}>${badge}</button>
         <div class="uris-card-actions">
-            <button class="uris-card-btn" data-act="view" title="Просмотр" aria-label="Просмотр"><i class="fa-solid fa-expand"></i></button>
             <button class="uris-card-btn" data-act="regen" title="Перегенерировать" aria-label="Перегенерировать"><i class="fa-solid fa-rotate-right"></i></button>
             <button class="uris-card-btn" data-act="copy" title="Копировать промпт" aria-label="Копировать промпт"><i class="fa-solid fa-copy"></i></button>
             ${gotoBtn}

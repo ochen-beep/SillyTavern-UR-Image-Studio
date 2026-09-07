@@ -14,8 +14,9 @@
 </head>
 <body>
     <div id="fakeChat">
-        <p>Эмуляция мобильного SillyTavern. Нажмите кнопку — откроется lightbox.</p>
-        <p>На узком экране картинка не должна выходить за края, кнопки ✕ / ‹ / › должны быть доступны.</p>
+        <p>Эмуляция мобильного SillyTavern. Нажмите кнопку — откроется просмотрщик PhotoSwipe.</p>
+        <p>Проверить: pinch-зум и double-tap, свайпы влево/вправо (навигация) и вниз (закрытие),
+           кнопки действий в top bar — доступны с большого пальца, картинка не выходит за края.</p>
     </div>
     <button id="openBtn">Открыть lightbox</button>
     <script type="module">
@@ -33,6 +34,8 @@
         document.getElementById('openBtn').addEventListener('click', () => {
             showLightbox([{
                 src: wideSrc,
+                width: 1600,
+                height: 900,
                 style: 'test style',
                 prompt: 'Vertical manga page with an unpredictable, highly asymmetrical layout of [4 to 5] panels. Panels must vary drastically in size, angle and orientation, avoiding a repetitive stacked look. The composition is driven by a chaotic arrangement where small inset panels cross over the borders of larger panels, creating layered depth.'
             }]);
