@@ -26,6 +26,15 @@ import { cardDimensions, ensureCardDimensions, FALLBACK_DIMENSIONS } from '../im
 let _active = null;  // open PhotoSwipe instance; a new open closes the previous one
 
 /**
+ * Open the fullscreen viewer for a single image (reference editor preview,
+ * generation preview chips). No thumbnail element — the viewer fades in.
+ */
+export function showSingleImage({ src, width, height, prompt }) {
+    if (!src) return;
+    return showLightbox([{ src, width, height, prompt }], 0, {});
+}
+
+/**
  * Open the fullscreen viewer for gallery items.
  *
  * @param {Array<{id:string, src:string, prompt?:string, style?:string, width?:number, height?:number}>} items

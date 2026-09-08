@@ -7,6 +7,13 @@ import { getCtx, escapeHtml, showConfirmModal } from '../core.js';
 import { getGallery, clearGallery } from '../storage.js';
 import { showLightbox } from './lightbox.js';
 
+// Test-only viewer seam: fake-dom tests cannot load PhotoSwipe, so the click
+// regression test swaps the viewer for a capture stub (same pattern as
+// setRefStoreForTests in refs-library.js).
+let _viewer = { showLightbox };
+export function setViewerForTests(viewer) { _viewer = viewer; }
+export function resetViewerForTests() { _viewer = { showLightbox }; }
+
 // Gallery grid renders in chunks: the first batch mounts immediately, the rest
 // append when the sentinel scrolls into view (no virtualization needed at this
 // list size, but a 500-image chat must not drop 500 <img> at once).
@@ -28,7 +35,7 @@ export async function render(root) {
     if (!items.length) {
         grid.innerHTML = emptyState();
     } else {
-        await appendChunk(grid, items, 0, chatId);
+        await appendChunk(grid, root, items, 0, chatId);
         await mountChunkLoader(root, grid, items, chatId);
     }
     if (root.__urisTabId && root.__urisTabId !== 'gallery') return;
@@ -67,10 +74,15 @@ function card(it, i) {
 }
 
 /** Append one chunk of cards and bind only the newly added ones. */
-async function appendChunk(grid, items, from, chatId) {
+async function appendChunk(grid, root, items, from, chatId) {
     const to = Math.min(items.length, from + CHUNK_SIZE);
-    grid.insertAdjacentHTML('beforeend', items.slice(from, to).map((it, i) => card(it, from + i)).join(''));
-    await bindCards(grid, items, chatId, from, to);
+    // Wrapper-div + appendChild instead of insertAdjacentHTML: same result in
+    // browsers (appendChild moves the node), and parseable by the fake-dom
+    // test harness. Iterate a snapshot — appendChild mutates wrapper.children.
+    const wrapper = document.createElement('div');
+    wrapper.innerHTML = items.slice(from, to).map((it, i) => card(it, from + i)).join('');
+    for (const node of [...wrapper.children]) grid.appendChild(node);
+    await bindCards(grid, root, items, chatId, from, to);
 }
 
 /**
@@ -81,7 +93,7 @@ async function mountChunkLoader(root, grid, items, chatId) {
     if (grid.querySelectorAll('.uris-card').length >= items.length) return;
     const sentinel = document.createElement('div');
     sentinel.className = 'uris-gallery-sentinel';
-    grid.insertAdjacentElement('afterend', sentinel);
+    grid.parentElement?.insertBefore(sentinel, grid.nextSibling);
     const appendNext = async () => {
         const from = grid.querySelectorAll('.uris-card').length;
         if (from >= items.length) {
@@ -89,7 +101,7 @@ async function mountChunkLoader(root, grid, items, chatId) {
             sentinel.remove();
             return;
         }
-        await appendChunk(grid, items, from, chatId);
+        await appendChunk(grid, root, items, from, chatId);
         if (grid.querySelectorAll('.uris-card').length >= items.length) {
             observer?.disconnect();
             sentinel.remove();
@@ -110,7 +122,11 @@ function emptyState() {
     return '<div class="uris-gallery-empty">Нет генераций. Перейдите во вкладку «Генерация».</div>';
 }
 
-async function bindCards(scopeEl, items, chatId, from = 0, to = items.length) {
+// root — корень ВКЛАДКИ (#urisBody), он нужен обработчикам для refreshRoot и
+// просмотра; scopeEl — контейнер сетки, в котором ищутся карточки. Это разные
+// элементы: смешение их давало «root is not defined» на клике по картинке
+// (обработчики молча падали с ReferenceError — просмотр не открывался).
+async function bindCards(scopeEl, root, items, chatId, from = 0, to = items.length) {
     const { copyPrompt, saveAsReference, regenerate, deleteImage } = await import('./gallery-actions.js');
     scopeEl.querySelectorAll('.uris-card').forEach(cardEl => {
         const idx = parseInt(cardEl.dataset.idx, 10);
@@ -120,7 +136,7 @@ async function bindCards(scopeEl, items, chatId, from = 0, to = items.length) {
         const id = cardEl.dataset.id;
         const it = () => items.find(x => x.id === id);
         cardEl.querySelector('[data-act="view"]')?.addEventListener('click', (e) => {
-            e.stopPropagation(); showLightbox(items, idx, { chatId, root });
+            e.stopPropagation(); _viewer.showLightbox(items, idx, { chatId, root });
         });
         cardEl.querySelector('[data-act="copy"]')?.addEventListener('click', async (e) => {
             e.stopPropagation(); await copyPrompt(it());

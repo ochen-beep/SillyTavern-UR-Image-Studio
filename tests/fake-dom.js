@@ -73,6 +73,13 @@ export function makeFakeDocument() {
             matches(sel) {
                 if (sel.startsWith('.')) return this.classList.contains(sel.slice(1));
                 if (sel.startsWith('#')) return this.id === sel.slice(1);
+                // Атрибутный селектор [name] / [name="value"] — данные-атрибуты
+                // (data-act="view" и т.п.) в карточках и чипах.
+                const attrMatch = sel.match(/^\[([a-zA-Z-]+)(?:="([^"]*)")?\]$/);
+                if (attrMatch) {
+                    const value = this.attributes[attrMatch[1]];
+                    return attrMatch[2] === undefined ? value !== undefined : value === attrMatch[2];
+                }
                 return this.tagName === sel;
             },
             closest(sel) {
@@ -88,12 +95,18 @@ export function makeFakeDocument() {
                     const cls = sel.slice(1);
                     return findFirst(this, n => n.classList.contains(cls));
                 }
+                if (sel.startsWith('[')) {
+                    return findFirst(this, n => n.matches(sel));
+                }
                 return findFirst(this, n => n.tagName === sel);
             },
             querySelectorAll(sel) {
                 if (sel.startsWith('.')) {
                     const cls = sel.slice(1);
                     return findAll(this, n => n.classList.contains(cls));
+                }
+                if (sel.startsWith('[')) {
+                    return findAll(this, n => n.matches(sel));
                 }
                 return findAll(this, n => n.tagName === sel);
             },
