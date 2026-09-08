@@ -168,6 +168,11 @@ export function makeFakeDocument() {
     const document = {
         createElement(tagName) { return createNode(tagName); },
         createTextNode(text) { return { nodeType: 3, textContent: String(text), outerHTML: escapeHtml(String(text)) }; },
+        // Документ-уровневые слушатели (keydown в оверлеях): только хранение,
+        // диспетчеризация глобальных событий тестам не нужна.
+        _docListeners: [],
+        addEventListener(type, fn, options) { this._docListeners.push({ type, fn }); },
+        removeEventListener(type, fn, options) { this._docListeners = this._docListeners.filter(l => l.type !== type || l.fn !== fn); },
         querySelector(sel) { return root.querySelector(sel); },
         querySelectorAll(sel) { return root.querySelectorAll(sel); },
         getElementById(id) { return root.querySelector('#' + id); },

@@ -72,17 +72,18 @@ test('.uris-folder-editor-swatch palette wraps', () => {
         'folder editor palette must wrap swatches');
 });
 
-test('.uris-editor-preview-wrap positions replace control at bottom-right', () => {
+test('.uris-editor-preview-wrap positions preview actions at bottom-right', () => {
     const css = readCss();
     const wrap = ruleBodyFor(css, '.uris-editor-preview-wrap');
     assert.ok(wrap, '.uris-editor-preview-wrap rule not found in style.css');
     assert.match(wrap, /position\s*:\s*relative/, 'preview wrapper must establish positioning context');
 
-    const replace = ruleBodyFor(css, '.uris-editor-preview-wrap .uris-ed-replace');
-    assert.ok(replace, 'scoped replace control rule not found in style.css');
-    assert.match(replace, /position\s*:\s*absolute/, 'replace control must be positioned over the preview');
-    assert.match(replace, /right\s*:\s*[^;]+/, 'replace control must set a right offset');
-    assert.match(replace, /bottom\s*:\s*[^;]+/, 'replace control must set a bottom offset');
+    // Обрезка и замена живут в общем контейнере поверх угла превью.
+    const actions = ruleBodyFor(css, '.uris-editor-preview-actions');
+    assert.ok(actions, 'preview actions container rule not found in style.css');
+    assert.match(actions, /position\s*:\s*absolute/, 'actions must be positioned over the preview');
+    assert.match(actions, /right\s*:\s*[^;]+/, 'actions must set a right offset');
+    assert.match(actions, /bottom\s*:\s*[^;]+/, 'actions must set a bottom offset');
 });
 
 test('.uris-folder-editor-swatch-on has an active state', () => {

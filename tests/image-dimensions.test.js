@@ -42,13 +42,24 @@ test('ensureCardDimensions degrades to fallback on probe failure', async () => {
     assert.deepEqual(dims, FALLBACK_DIMENSIONS);
 });
 
-test('ensureCardDimensions skips probe without id or src', async () => {
+test('ensureCardDimensions probes id-less items (no persist) and bails without src', async () => {
     const { ensureCardDimensions, FALLBACK_DIMENSIONS } = await import('../src/image-dimensions.js');
+    // src есть, id нет (одиночные открытия из Референсов/Генерации): проб идёт,
+    // persist пропускается — иначе просмотрщик получает квадратную заглушку
+    // и «корежит» картинку.
+    const item = { src: 'user/images/Test/one.png' };
+    const persisted = [];
+    const dims = await ensureCardDimensions('chat-1', item, {
+        _probe: async () => ({ width: 800, height: 600 }),
+        _persist: async (id, patch) => persisted.push([id, patch]),
+    });
+    assert.deepEqual(dims, { width: 800, height: 600 });
+    assert.equal(item.width, 800);
+    assert.deepEqual(persisted, [], 'без id некуда писать — persist не вызывается');
+
+    // src нет вообще — только заглушка.
     let probed = 0;
     assert.deepEqual(await ensureCardDimensions('chat-1', { id: 'a' }, {
-        _probe: () => { probed += 1; return { width: 1, height: 1 }; },
-    }), FALLBACK_DIMENSIONS);
-    assert.deepEqual(await ensureCardDimensions('chat-1', { src: 'p' }, {
         _probe: () => { probed += 1; return { width: 1, height: 1 }; },
     }), FALLBACK_DIMENSIONS);
     assert.equal(probed, 0);

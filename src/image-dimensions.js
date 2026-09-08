@@ -58,6 +58,8 @@ async function decodeImageDimensions(url, signal) {
 
 /**
  * Resolve card dimensions, probing (and persisting) them when unknown.
+ * Works for id-less items too (single-image opens from References and
+ * Generation): the probe still runs, only the persist step is skipped.
  * Never throws for a broken image: degrades to FALLBACK_DIMENSIONS so the
  * viewer can still open. AbortError propagates — the caller owns cancellation.
  *
@@ -69,16 +71,18 @@ async function decodeImageDimensions(url, signal) {
 export async function ensureCardDimensions(chatId, item, options = {}) {
     const known = cardDimensions(item);
     if (known) return known;
-    if (!item?.id || !item?.src) return FALLBACK_DIMENSIONS;
+    if (!item?.src) return FALLBACK_DIMENSIONS;
     const probe = options._probe || decodeImageDimensions;
-    const persist = options._persist || ((id, dims) => updateGalleryEntry(chatId, id, dims));
+    const persist = options._persist || (item.id ? ((id, dims) => updateGalleryEntry(chatId, id, dims)) : null);
     try {
         const dims = await probe(item.src, options.signal);
         if (!validDimension(dims?.width) || !validDimension(dims?.height)) return FALLBACK_DIMENSIONS;
         const clean = { width: dims.width, height: dims.height };
         item.width = clean.width;
         item.height = clean.height;
-        try { await persist(item.id, clean); } catch { /* dimensions are an optimization, never a feature gate */ }
+        if (persist && item.id) {
+            try { await persist(item.id, clean); } catch { /* dimensions are an optimization, never a feature gate */ }
+        }
         return clean;
     } catch (error) {
         if (error?.name === 'AbortError') throw error;

@@ -19,7 +19,7 @@
  * two independent locks release in the wrong order, leaving <body> frozen.
  */
 import PhotoSwipe from '../vendor/photoswipe.esm.js';
-import { copyPrompt, saveAsReference, regenerate, deleteImage } from './gallery-actions.js';
+import { copyItemText, saveAsReference, regenerate, deleteImage } from './gallery-actions.js';
 import { getCtx } from '../core.js';
 import { cardDimensions, ensureCardDimensions, FALLBACK_DIMENSIONS } from '../image-dimensions.js';
 
@@ -28,10 +28,12 @@ let _active = null;  // open PhotoSwipe instance; a new open closes the previous
 /**
  * Open the fullscreen viewer for a single image (reference editor preview,
  * generation preview chips). No thumbnail element — the viewer fades in.
+ * Everything besides src/width/height (name, aliases, description, prompt…)
+ * lands on the item and feeds the copy-text menu.
  */
-export function showSingleImage({ src, width, height, prompt }) {
+export function showSingleImage({ src, width, height, ...text }) {
     if (!src) return;
-    return showLightbox([{ src, width, height, prompt }], 0, {});
+    return showLightbox([{ src, width, height, ...text }], 0, {});
 }
 
 /**
@@ -109,7 +111,7 @@ function collectThumbElements(root, items) {
 /** Wire the gallery actions as toolbar buttons after close/zoom/arrows/counter. */
 function registerActionButtons(pswp, ctx) {
     const buttons = [
-        { name: 'uris-copy', order: 30, icon: 'fa-copy', title: 'Копировать промпт', danger: false, run: item => copyPrompt(item) },
+        { name: 'uris-copy', order: 30, icon: 'fa-copy', title: 'Копировать текст', danger: false, run: item => copyItemText(item) },
         { name: 'uris-save-ref', order: 31, icon: 'fa-bookmark', title: 'Сохранить как референс', danger: false, run: item => saveAsReference(item) },
         { name: 'uris-regen', order: 32, icon: 'fa-rotate-right', title: 'Перегенерировать', danger: false, run: async item => { await regenerate(item, ctx.root, null); pswp.close(); } },
         { name: 'uris-del', order: 33, icon: 'fa-trash', title: 'Удалить', danger: true, run: async item => { await deleteImage(item, ctx.chatId, ctx.root); pswp.close(); } },

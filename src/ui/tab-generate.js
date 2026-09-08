@@ -731,8 +731,21 @@ export function bindGenerate(root) {
             // (зум/пан PhotoSwipe). Крестик удаления остаётся приоритетным.
             const chip = e.target.closest('.uris-ref-chip-preview');
             const img = chip?.querySelector('img');
-            if (img?.getAttribute('src')) {
-                showSingleImage({ src: img.getAttribute('src'), prompt: chip.title || '' });
+            const src = img?.getAttribute('src');
+            if (chip && src) {
+                const ref = getRefSync(chip.dataset.refId);
+                if (ref?.imagePath) {
+                    showSingleImage({
+                        src: ref.imagePath,
+                        width: ref.width,
+                        height: ref.height,
+                        name: ref.name,
+                        aliases: ref.aliases,
+                        description: ref.description,
+                    });
+                } else {
+                    showSingleImage({ src, prompt: chip.title || '' });
+                }
             }
             return;
         }
