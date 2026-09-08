@@ -739,6 +739,8 @@ export function bindGenerate(root) {
                         src: ref.imagePath,
                         width: ref.width,
                         height: ref.height,
+                        actions: 'ref',
+                        refId: ref.id,
                         name: ref.name,
                         aliases: ref.aliases,
                         description: ref.description,

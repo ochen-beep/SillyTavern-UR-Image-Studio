@@ -4,13 +4,15 @@
  * (tab-gallery.js) and the lightbox (lightbox.js). Extracted from tab-gallery.js
  * to avoid duplication and keep a single source of truth.
  */
-import { getCtx, showConfirmModal, showInputModal, log, saveSettings, abortGeneration, escapeHtml } from '../core.js';
+import { getCtx, showConfirmModal, showInputModal, log, saveSettings, abortGeneration, escapeHtml, uid } from '../core.js';
 import { setStatus } from './window.js';
 import { lockBodyScroll, unlockBodyScroll } from './window.js';
-import { deleteGalleryCard } from '../storage.js';
+import { addToGallery, deleteGalleryCard } from '../storage.js';
+import { updateCard } from '../gallery-index.js';
+import { makeThumbnailForPath, uploadGeneratedImage, getCharacterImageFolder } from '../native-image-storage.js';
 import { runStage2 } from '../pipeline.js';
 import { createRef, createReferenceFromGalleryCard, listRefs, updateRef } from '../refs-library.js';
-import { imageToDataUrl, ingestReferenceImage } from '../references.js';
+import { imageToDataUrl, ingestReferenceImage, blobToDataUrl } from '../references.js';
 import { openCropDialog } from './crop-dialog.js';
 import { recordUrisError } from '../error-pool.js';
 
@@ -268,6 +270,82 @@ async function uploadCroppedEntry(it) {
     const crop = await openCropDialog({ source: dataUrl });
     if (!crop) return null;
     return await ingestReferenceImage(crop.blob, `npc_capture_${Date.now()}`);
+}
+
+/**
+ * Кроп картинки из галереи (действие просмотрщика): результат — НОВАЯ карточка
+ * в галерее этого чата (историю не переписываем), с унаследованным промптом и
+ * best-effort миниатюрой.
+ *
+ * @returns {Promise<boolean>} true — карточка создана (просмотрщик можно закрыть)
+ */
+export async function cropGalleryImage(item, chatId, root, deps = {}) {
+    if (!item?.src) return false;
+    const doCrop = deps.crop || openCropDialog;
+    const doUpload = deps.upload || uploadGeneratedImage;
+    const doAdd = deps.add || addToGallery;
+    const doThumb = deps.thumb || makeThumbnailForPath;
+    try {
+        const crop = await doCrop({ source: item.src });
+        if (!crop) return false;
+        const toDataUrl = deps.dataUrl || blobToDataUrl;
+        const dataUrl = await toDataUrl(crop.blob);
+        const folder = getCharacterImageFolder();
+        const imagePath = await doUpload(dataUrl, { filename: `uris_crop_${Date.now()}`, ch_name: folder });
+        const card = await doAdd(chatId, {
+            imagePath,
+            prompt: item.prompt || '',
+            style: item.style || '',
+            aspectRatio: item.aspectRatio,
+            imageSize: item.imageSize,
+            quality: item.quality,
+            provenance: { sourceMsgId: item.sourceMsgId ?? null, croppedFrom: item.id || null },
+            status: 'ready',
+        });
+        // Миниатюра — best-effort: без неё сетка рендерит полный файл.
+        doThumb(imagePath, { filename: `uris_crop_${card.id}` })
+            .then(thumbPath => updateCard(card.id, { thumbPath }))
+            .catch(() => {});
+        toastr?.success('Обрезанная копия добавлена в галерею');
+        if (root) refreshRoot(root);
+        return true;
+    } catch (err) {
+        recordUrisError({ scope: 'Галерея', message: 'Кроп: ' + (err?.message || err) });
+        toastr?.error('Кроп не удался: ' + err.message);
+        return false;
+    }
+}
+
+/**
+ * Кроп референса (действие просмотрщика в режиме «референс»): результат —
+ * новый файл в хранилище, запись референса переключается на него.
+ *
+ * @returns {Promise<boolean>} true — референс обновлён (просмотрщик можно закрыть)
+ */
+export async function cropReference(item, deps = {}) {
+    const refId = item?.__refId;
+    if (!refId || !item?.src) return false;
+    const doCrop = deps.crop || openCropDialog;
+    const doIngest = deps.ingest || ingestReferenceImage;
+    const doUpdate = deps.update || updateRef;
+    try {
+        const crop = await doCrop({ source: item.src });
+        if (!crop) return false;
+        const optimized = await doIngest(crop.blob, `ref_${refId}`);
+        try {
+            await doUpdate(refId, { imagePath: optimized.imagePath, ...optimized.metadata });
+        } catch (mutationError) {
+            throw new Error(`${mutationError.message}; orphaned upload: ${optimized.imagePath}`);
+        }
+        toastr?.success('Референс обрезан');
+        // Обновить активную вкладку (Референсы/Генерация) под просмотрщиком.
+        import('./tabs.js').then(m => m.refreshActive()).catch(() => {});
+        return true;
+    } catch (err) {
+        recordUrisError({ scope: 'Референсы', message: 'Кроп референса: ' + (err?.message || err) });
+        toastr?.error('Кроп не удался: ' + err.message);
+        return false;
+    }
 }
 
 async function showRefPicker(title, refs) {
