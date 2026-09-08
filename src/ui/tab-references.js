@@ -39,6 +39,13 @@ let _folderSearchQuery = '';
 // therefore a 480px container threshold roughly corresponds to 768px media query
 // in the typical case. This is a deliberate trade-off, not a bug: testing showed
 // that simply aligning to 768 breaks valid 600px desktop tests (project contract).
+//
+// Interaction with the UI-scale zoom (--uris-scale, style.css): zoom shrinks the
+// container's LAYOUT px (clientWidth reads visual/zoom), so scale >100% reaches
+// this breakpoint earlier and <100% later — identically on desktop and in the
+// mobile fullscreen mode. Deliberate single semantics: dense scale → compact
+// layout. Visual-px math, if ever needed, goes through visualWidth()
+// (src/ui/zoom.js), not by dividing by the state value.
 const REFS_MOBILE_BREAK = 480;
 
 export function render(root) {

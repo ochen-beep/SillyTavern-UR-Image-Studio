@@ -1,0 +1,103 @@
+<!doctype html>
+<!--
+    Живая проверка масштаба интерфейса (--uris-scale) в мобильном fullscreen:
+    зум вкладок/тела НЕ должен переполнять окно ни на какой шкале, а вкладка
+    «Референсы» (настоящий tab-references.js) меняет раскладку по layout-px
+    (>100% → стек раньше, <100% → десктоп-раскладка в полноэкранном окне).
+
+    Запуск: python -m http.server 8931 → /tests/manual/ui-scale-zoom-check.html
+
+    Файл сам себе оболочка: без параметров рисует панель с iframe 390×800
+    (внутри iframe честно срабатывают @media ≤768px и ST mobile-стили),
+    ?embed=1 — режим подопытного. Кнопки 75–150% и URL-параметр ?scale=1.5
+    переключают --uris-scale с перерендером; метрики и вердикты — в панели
+    и в window.__metrics iframe.
+-->
+<html lang="ru">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>URIS — UI scale zoom check</title>
+    <link rel="stylesheet" href="st-assets/st-style.css?v=1">
+    <link rel="stylesheet" href="st-assets/st-mobile.css?v=1">
+    <link rel="stylesheet" href="../../style.css?v=zoom1">
+    <style>
+        html { --uris-st-top: 40px; --uris-st-bottom: 120px; }
+        #top-bar { position: fixed; top: 0; left: 0; right: 0; height: 40px; background: #222244; z-index: 3005; }
+        #send_form { position: fixed; bottom: 0; left: 0; right: 0; height: 120px; background: #222244; z-index: 30; }
+        /* Оболочка (верхняя страница) */
+        body.shell { background: #14181f; color: #ddd; font: 14px/1.5 system-ui, sans-serif; margin: 0; padding: 16px; }
+        body.shell #top-bar, body.shell #send_form, body.shell #urisWindow { display: none; }
+        .shell-bar { display: flex; gap: 8px; align-items: center; margin-bottom: 10px; flex-wrap: wrap; }
+        .shell-bar button { padding: 6px 14px; cursor: pointer; }
+        .shell-bar button.current { outline: 2px solid #7c4; }
+        #shellFrame { border: 1px solid #444; background: #000; }
+        #shellOut { white-space: pre; font: 12px/1.5 ui-monospace, monospace; background: #0b0e13; border: 1px solid #333; padding: 10px; margin-top: 10px; max-width: 900px; overflow: auto; }
+    </style>
+</head>
+<body class="mobile">
+    <div id="top-bar">ST #top-bar</div>
+    <div id="send_form">ST #send_form</div>
+
+    <div id="urisWindow" class="uris-window uris-mobile">
+        <div class="uris-header" id="urisHeader">
+            <span class="uris-title">🎨 UR Image Studio</span>
+            <div class="uris-header-actions">
+                <button class="uris-icon-btn uris-error-badge" hidden>ERR <span class="uris-error-count">0</span></button>
+                <button class="uris-icon-btn" id="urisClose">✕</button>
+            </div>
+        </div>
+        <div class="uris-error-panel" id="urisErrorPanel" hidden></div>
+        <div class="uris-tabs" id="urisTabs">
+            <button class="uris-tab">API</button>
+            <button class="uris-tab uris-tab-active">Референсы</button>
+            <button class="uris-tab">Генерация</button>
+            <button class="uris-tab">Галерея</button>
+            <button class="uris-tab">Шаблоны</button>
+        </div>
+        <div class="uris-body" id="urisBody"></div>
+    </div>
+
+    <script type="module">
+        // ── Оболочка: iframe-подопытный + панель метрик ──
+        if (!window.frameElement) {
+            document.body.classList.add('shell');
+            const bar = document.createElement('div');
+            bar.className = 'shell-bar';
+            bar.innerHTML = '<b>Масштаб:</b> ' + [0.75, 1, 1.25, 1.5]
+                .map(v => `<button data-scale="${v}">${Math.round(v * 100)}%</button>`).join('');
+            const frame = document.createElement('iframe');
+            frame.id = 'shellFrame';
+            frame.width = 390; frame.height = 800;
+            const out = document.createElement('div');
+            out.id = 'shellOut';
+            document.body.append(bar, frame, out);
+            const url = new URL(location.href);
+            url.searchParams.set('embed', '1');
+            frame.src = url.toString();
+
+            const report = () => {
+                const m = frame.contentWindow?.__metrics;
+                if (!m) { out.textContent = 'iframe ещё рендерится…'; return; }
+                const fails = Object.entries(m.checks).filter(([, v]) => !v).map(([k]) => k);
+                out.textContent = JSON.stringify(m, null, 2) +
+                    `\n\nВЕРДИКТ: ${fails.length ? 'FAIL → ' + fails.join(', ') : 'PASS'}`;
+                for (const btn of bar.querySelectorAll('button')) {
+                    btn.classList.toggle('current', Number(btn.dataset.scale) === m.scaleNumber);
+                }
+            };
+            bar.addEventListener('click', e => {
+                const btn = e.target.closest('button[data-scale]');
+                if (btn) frame.contentWindow.__setScale(Number(btn.dataset.scale));
+            });
+            frame.addEventListener('load', () => {
+                frame.contentWindow.addEventListener('metrics', report);
+                setTimeout(report, 1500);
+                setInterval(report, 1000);
+            });
+        } else {
+            await import('./ui-scale-zoom-check-child.js');
+        }
+    </script>
+</body>
+</html>

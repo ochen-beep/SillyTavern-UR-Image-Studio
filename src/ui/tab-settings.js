@@ -18,6 +18,22 @@ import { refreshActive } from './tabs.js';
 
 const percent = (scale) => String(Math.round(scale * 100));
 
+/**
+ * Whether the engine supports standardized CSS zoom — the carrier of --uris-scale.
+ * Firefox Android <126 and ancient WebViews don't: the zoom rule in style.css is
+ * ignored there, so the slider would spin idle — it is rendered disabled instead.
+ * Environments without CSS.supports (test fakes, exotic embedders) count as
+ * supported: no reason to punish an unknown environment preemptively.
+ */
+function zoomSupported() {
+    try {
+        if (typeof CSS === 'undefined' || typeof CSS.supports !== 'function') return true;
+        return CSS.supports('zoom', '1.5') === true;
+    } catch {
+        return true;
+    }
+}
+
 /** @param {HTMLElement} root */
 export function render(root) {
     if (!state.settings) {
@@ -26,6 +42,7 @@ export function render(root) {
     }
     const scale = normalizeUiScale(state.settings.uiScale);
     const fontScale = normalizeFontScale(state.settings.fontScale);
+    const zoomOk = zoomSupported();
     root.innerHTML = `
         <div class="uris-settings">
             <section class="uris-settings-section">
@@ -33,11 +50,13 @@ export function render(root) {
                 <div class="uris-field">
                     <label for="urisUiScale">Масштаб интерфейса</label>
                     <div class="uris-row uris-scale-row">
-                        <input type="range" id="urisUiScale" min="${percent(UI_SCALE_MIN)}" max="${percent(UI_SCALE_MAX)}" step="${percent(UI_SCALE_STEP)}" value="${percent(scale)}">
+                        <input type="range" id="urisUiScale" min="${percent(UI_SCALE_MIN)}" max="${percent(UI_SCALE_MAX)}" step="${percent(UI_SCALE_STEP)}" value="${percent(scale)}"${zoomOk ? '' : ' disabled'}>
                         <span class="uris-scale-value" id="urisUiScaleValue">${percent(scale)}%</span>
-                        <button type="button" class="uris-btn uris-btn-ghost" id="urisUiScaleReset" title="Вернуть ${percent(UI_SCALE_DEFAULT)}%">Сброс</button>
+                        <button type="button" class="uris-btn uris-btn-ghost" id="urisUiScaleReset" title="Вернуть ${percent(UI_SCALE_DEFAULT)}%"${zoomOk ? '' : ' disabled'}>Сброс</button>
                     </div>
-                    <small class="uris-hint">Масштаб содержимого окна: вкладок и рабочей области целиком (текст, отступы, контролы). Шапка окна и мобильный полноэкранный режим остаются 100%.</small>
+                    ${zoomOk
+                        ? '<small class="uris-hint">Масштаб содержимого окна: вкладок и рабочей области целиком (текст, отступы, контролы). Работает и в мобильном полноэкранном режиме; шапка окна — 100%.</small>'
+                        : '<small class="uris-hint">Браузер не поддерживает масштабирование интерфейса (CSS zoom) — используйте «Размер шрифта»: он действует на любых устройствах.</small>'}
                 </div>
                 <div class="uris-field">
                     <label for="urisFontScale">Размер шрифта</label>

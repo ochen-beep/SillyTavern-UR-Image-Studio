@@ -185,3 +185,66 @@ test('render without loaded settings shows a fallback hint', () => {
     render(root);
     assert.match(root.textContent, /не загружены/);
 });
+
+test('uiScale slider is disabled with a hint when the engine has no CSS zoom', () => {
+    // Firefox Android <126 / старые WebView: zoom-правило в style.css там
+    // игнорируется, слайдер без гейта крутился бы вхолостую.
+    const hadCss = 'CSS' in globalThis;
+    const originalCss = globalThis.CSS;
+    globalThis.CSS = { supports: () => false };
+    try {
+        const root = makeRoot();
+        render(root);
+        assert.equal(root.querySelector('#urisUiScale').disabled, true, 'слайдер масштаба должен быть задизейблен');
+        assert.equal(root.querySelector('#urisUiScaleReset').disabled, true, 'кнопка сброса тоже');
+        assert.match(root.textContent, /CSS zoom/, 'подсказка объясняет причину');
+        assert.match(root.textContent, /Размер шрифта/, 'подсказка уводит на работающий регулятор');
+        // Слайдер шрифта остаётся живым — он не зависит от zoom.
+        assert.equal(root.querySelector('#urisFontScale').disabled, false);
+    } finally {
+        if (hadCss) globalThis.CSS = originalCss;
+        else delete globalThis.CSS;
+    }
+});
+
+test('uiScale slider stays enabled when CSS zoom is supported', () => {
+    const hadCss = 'CSS' in globalThis;
+    const originalCss = globalThis.CSS;
+    globalThis.CSS = { supports: (prop, val) => prop === 'zoom' && val === '1.5' };
+    try {
+        const root = makeRoot();
+        render(root);
+        assert.equal(root.querySelector('#urisUiScale').disabled, false);
+        assert.equal(root.querySelector('#urisUiScaleReset').disabled, false);
+        // Старая оговорка «мобильный полноэкранный режим остаётся 100%» удалена:
+        // подсказка теперь сообщает, что fullscreen масштабируется.
+        assert.match(root.textContent, /Работает и в мобильном полноэкранном режиме/);
+        assert.doesNotMatch(root.textContent, /остаются 100%/);
+    } finally {
+        if (hadCss) globalThis.CSS = originalCss;
+        else delete globalThis.CSS;
+    }
+});
+
+test('launcher mode select: reflects stored mode, persists and notifies via uris:launcher-mode-changed', async () => {
+    // launchMode отсутствует в settings (старые saves) — рендер дефолтит в bar.
+    delete state.settings.launcherMode;
+    const root = makeRoot();
+    render(root);
+    const sel = root.querySelector('#uris_launcher_mode_tab');
+    assert.ok(sel, 'селект «Кнопка запуска» должен рендериться во вкладке «Настройки»');
+    assert.equal(sel.value, 'bar');
+
+    const events = [];
+    const origDispatch = globalThis.window.dispatchEvent;
+    globalThis.window.dispatchEvent = (ev) => { events.push(ev?.type); };
+    try {
+        sel.value = 'floating';
+        await sel.dispatchEvent({ type: 'change', target: sel });
+    } finally {
+        globalThis.window.dispatchEvent = origDispatch;
+    }
+    assert.equal(state.settings.launcherMode, 'floating');
+    assert.ok(saveCalls > 0, 'изменение должно сохраняться');
+    assert.ok(events.includes('uris:launcher-mode-changed'), 'index.js перемонтирует лаунчеры по этому событию');
+});

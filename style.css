@@ -220,11 +220,24 @@
    zoom (csswg-drafts#5623, Chromium 128) gBCR возвращает масштабированные
    значения — зум корневого окна сломал бы эту математику. Шапка окна —
    системный «chrome», не масштабируется (как титульная строка VS Code).
-   Старые WebView без поддержки zoom просто игнорируют правило (масштаб 100%).
+   Действует и в мобильном полноэкранном режиме (.uris-mobile): по
+   стандартизованной модели (css-viewport-1) доступное пространство containing
+   block'а зумлённого элемента делится на его zoom, поэтому вкладки/тело
+   продолжают заполнять #urisWindow ровно на любой шкале — компенсирующие
+   width/height не нужны (см. tests/ui-scale-css.test.js).
+   Замеры в layout-px смещаются ровно на 1/zoom (clientWidth = визуал/zoom):
+   брейкпоинты (REFS_MOBILE_BREAK и media-правила) срабатывают раньше при
+   >100% и позже при <100% — одинаково на десктопе и мобилке. Это осознанная
+   семантика «плотный масштаб → компактная раскладка», не баг; пересчёт в
+   визуальные px — только через effectiveZoom()/visualWidth() (src/ui/zoom.js),
+   не делением на --uris-scale (не учтёт зум предков от темы/другого ST-
+   расширения). Движки без zoom (Firefox Android <126, старые WebView)
+   игнорируют правило (масштаб 100%); слайдер настроек там дизейблится
+   по CSS.supports('zoom') — см. tab-settings.js.
    Правило стоит ПОСЛЕ канонического .uris-body: CSS-парсеры тестов берут
    первое вхождение `.uris-body {` в файле. */
-.uris-window:not(.uris-mobile) .uris-tabs,
-.uris-window:not(.uris-mobile) .uris-body { zoom: var(--uris-scale, 1); }
+.uris-window .uris-tabs,
+.uris-window .uris-body { zoom: var(--uris-scale, 1); }
 
 /* ── Поля ── */
 .uris-row { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; flex-wrap: wrap; }
