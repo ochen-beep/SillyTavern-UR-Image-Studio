@@ -85,11 +85,22 @@ export async function showLightbox(items, index = 0, { chatId = null, root = nul
         wheelToZoom: true,
         errorMsg: 'Не удалось загрузить изображение',
         mainClass: 'uris-pswp',
+        // Меньше вендорных дефолтов (333 мс на всё): при drag/pinch-закрытии
+        // пользователь уже завершил движение сам, и вторая фаза уезжания
+        // читается как лаг. Договорённость: дисмисс ≤150 мс, показ/зум ≤300.
+        // Порог вендора — ≤50 мс отключает анимацию, поэтому 100 — «быстрый
+        // хвост», не обрубание. prefers-reduced-motion вендор обрабатывает
+        // сам (showHideAnimationType 'none' обнуляет длительность независимо
+        // от этих значений). Контракт: tests/lightbox-animation.test.js.
+        hideAnimationDuration: 100,
+        showAnimationDuration: 250,
+        zoomAnimationDuration: 250,
     });
     _active = pswp;
     pswp.on('destroy', () => { if (_active === pswp) _active = null; });
     // После свайп/pinch-закрытия просмотрщик визуально «уезжает» мгновенно,
-    // а его полноэкранный корень ещё ~333 мс живёт (closing animation) и
+    // а его полноэкранный корень ещё живёт всю closing animation (100 мс —
+    // hideAnimationDuration в опциях выше; вендорный дефолт был 333) и
     // перехватывает указатели: первый тап пользователя умирал в невидимом
     // корне (pswp на закрытии делает preventDefault), срабатывал только
     // второй. Отпускаем тапы к странице с самого начала закрытия.
