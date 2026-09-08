@@ -19,6 +19,7 @@ import {
 } from '../refs-library.js';
 import { effectiveReferenceCap } from '../reference-limits.js';
 import { showPoolPicker } from './tab-references.js';
+import { showSingleImage } from './lightbox.js';
 import { bindDetailsToggle, getAccordionOpen } from './accordion-state.js';
 import { editTextModal } from './text-editor.js';
 import { resolveChatConfigSnapshot } from '../pipeline-config.js';
@@ -725,9 +726,18 @@ export function bindGenerate(root) {
     // Effective reference controls: remove from preview (add moved to + tile inside renderLivePreview).
     root.querySelector('#urisRefsPreview')?.addEventListener('click', async (e) => {
         const btn = e.target.closest('.uris-effective-ref-remove');
-        if (!btn) return;
-        const chip = btn.closest('.uris-ref-chip-preview');
-        const refId = chip?.dataset.refId;
+        if (!btn) {
+            // Тап по самому тайлу референса — открыть картинку на весь экран
+            // (зум/пан PhotoSwipe). Крестик удаления остаётся приоритетным.
+            const chip = e.target.closest('.uris-ref-chip-preview');
+            const img = chip?.querySelector('img');
+            if (img?.getAttribute('src')) {
+                showSingleImage({ src: img.getAttribute('src'), prompt: chip.title || '' });
+            }
+            return;
+        }
+        const chipEl = btn.closest('.uris-ref-chip-preview');
+        const refId = chipEl?.dataset.refId;
         if (!refId) return;
         await applyReferenceCorrection(root, refId, false);
     });

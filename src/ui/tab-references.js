@@ -14,6 +14,7 @@ import {
 import { ingestReferenceImage } from '../references.js';
 import { openBatchUploadDialog } from './ref-batch-upload.js';
 import { openCropDialog } from './crop-dialog.js';
+import { showSingleImage } from './lightbox.js';
 import { refreshActive, getActiveTab } from './tabs.js';
 import { lockBodyScroll, unlockBodyScroll } from './window.js';
 import { recordUrisError } from '../error-pool.js';
@@ -299,11 +300,13 @@ async function _renderOverlay(root, folders) {
                 <button class="uris-refs-overlay-close" title="Закрыть" aria-label="Закрыть">✕</button>
             </div>
                 <div class="uris-refs-overlay-body">
-                    <div class="uris-editor-preview-wrap">
+                <div class="uris-editor-preview-wrap">
+                    <button type="button" class="uris-editor-preview-btn" title="Открыть на весь экран" aria-label="Открыть на весь экран">
                         <img src="${escapeHtml(ref.imagePath)}" class="uris-editor-preview" alt="">
-                        <button class="uris-btn uris-btn-subtle uris-ed-replace"><i class="fa-solid fa-image"></i> Заменить картинку</button>
-                    </div>
-                    <input type="file" class="uris-ed-file" accept="image/*" hidden>
+                    </button>
+                    <button class="uris-btn uris-btn-subtle uris-ed-replace"><i class="fa-solid fa-image"></i> Заменить картинку</button>
+                </div>
+                <input type="file" class="uris-ed-file" accept="image/*" hidden>
 
                 <label class="uris-ed-label">Имя</label>
                 <input class="text_pole uris-ed-name" value="${escapeHtml(ref.name || '')}">
@@ -507,7 +510,9 @@ async function _renderMobileCard(root) {
     }).join('');
     body.innerHTML = `
         <div class="uris-editor-preview-wrap">
-            <img src="${escapeHtml(ref.imagePath)}" class="uris-editor-preview" alt="">
+            <button type="button" class="uris-editor-preview-btn" title="Открыть на весь экран" aria-label="Открыть на весь экран">
+                <img src="${escapeHtml(ref.imagePath)}" class="uris-editor-preview" alt="">
+            </button>
             <button class="uris-btn uris-btn-subtle uris-ed-replace"><i class="fa-solid fa-image"></i> Заменить картинку</button>
         </div>
         <input type="file" class="uris-ed-file" accept="image/*" hidden>
@@ -537,6 +542,16 @@ function _bindEditorBody(root, host, ref, folders, opts = {}) {
     const aliasesInput = host.querySelector('.uris-ed-aliases');
     const descInput = host.querySelector('.uris-ed-desc');
     const bindingModeInput = host.querySelector('.uris-ed-binding-mode');
+    // Превью — тоже «картинка по клику»: полный экран с зумом (Galaxy-зум
+    // PhotoSwipe), без привязки к сетке — анимация fade.
+    host.querySelector('.uris-editor-preview-btn')?.addEventListener('click', () => {
+        showSingleImage({
+            src: ref.imagePath,
+            width: ref.width,
+            height: ref.height,
+            prompt: ref.description || ref.name || '',
+        });
+    });
     // Text fields (name/aliases/desc) persist on change (blur/commit); folders
     // and image replace persist immediately in their own handlers. There is no
     // explicit "Save" button - flashSaved confirms each autosave instead.
