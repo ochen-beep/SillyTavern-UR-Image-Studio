@@ -161,7 +161,7 @@ async function inputToBlob(input) {
     throw imageError('input must be a File, Blob, or image data URL');
 }
 
-async function blobToDataUrl(blob) {
+export async function blobToDataUrl(blob) {
     return await new Promise((resolve, reject) => {
         const reader = new FileReader();
         reader.onload = () => resolve(reader.result);

@@ -550,12 +550,15 @@ function _bindEditorBody(root, host, ref, folders, opts = {}) {
     const bindingModeInput = host.querySelector('.uris-ed-binding-mode');
     // Превью — тоже «картинка по клику»: полный экран с зумом (PhotoSwipe),
     // без привязки к сетке — анимация fade. Текстовые поля референса едут
-    // вместе с ним в меню копирования.
+    // вместе с ним в меню копирования; actions:'ref' включает референсные
+    // действия просмотрщика (копировать/обрезать) вместо галерейных.
     host.querySelector('.uris-editor-preview-btn')?.addEventListener('click', () => {
         showSingleImage({
             src: ref.imagePath,
             width: ref.width,
             height: ref.height,
+            actions: 'ref',
+            refId: ref.id,
             name: ref.name,
             aliases: ref.aliases,
             description: ref.description,

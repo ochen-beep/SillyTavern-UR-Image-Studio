@@ -19,7 +19,7 @@
  * two independent locks release in the wrong order, leaving <body> frozen.
  */
 import PhotoSwipe from '../vendor/photoswipe.esm.js';
-import { copyItemText, saveAsReference, regenerate, deleteImage } from './gallery-actions.js';
+import { copyItemText, cropGalleryImage, cropReference, saveAsReference, regenerate, deleteImage } from './gallery-actions.js';
 import { getCtx } from '../core.js';
 import { cardDimensions, ensureCardDimensions, FALLBACK_DIMENSIONS } from '../image-dimensions.js';
 
@@ -29,11 +29,15 @@ let _active = null;  // open PhotoSwipe instance; a new open closes the previous
  * Open the fullscreen viewer for a single image (reference editor preview,
  * generation preview chips). No thumbnail element — the viewer fades in.
  * Everything besides src/width/height (name, aliases, description, prompt…)
- * lands on the item and feeds the copy-text menu.
+ * lands on the item and feeds the copy-text menu. `actions: 'ref'` switches
+ * the toolbar to reference actions (copy/crop) instead of the gallery set.
  */
-export function showSingleImage({ src, width, height, ...text }) {
+export function showSingleImage({ src, width, height, actions, refId, ...text }) {
     if (!src) return;
-    return showLightbox([{ src, width, height, ...text }], 0, {});
+    const item = { src, width, height, ...text };
+    if (actions) item.__actions = actions;
+    if (refId) item.__refId = refId;
+    return showLightbox([item], 0, {});
 }
 
 /**
@@ -108,13 +112,23 @@ function collectThumbElements(root, items) {
     });
 }
 
-/** Wire the gallery actions as toolbar buttons after close/zoom/arrows/counter. */
+/**
+ * Wire the toolbar buttons. Two modes: gallery items get the full set
+ * (copy / crop → new card / save-as-ref / regen / delete); reference items
+ * (actions: 'ref', from References and Generation) get copy + crop — regen and
+ * delete make no sense for a reference and the record lives in the editor.
+ */
 function registerActionButtons(pswp, ctx) {
-    const buttons = [
+    const refMode = ctx.items.some(item => item.__actions === 'ref');
+    const buttons = refMode ? [
         { name: 'uris-copy', order: 30, icon: 'fa-copy', title: 'Копировать текст', danger: false, run: item => copyItemText(item) },
-        { name: 'uris-save-ref', order: 31, icon: 'fa-bookmark', title: 'Сохранить как референс', danger: false, run: item => saveAsReference(item) },
-        { name: 'uris-regen', order: 32, icon: 'fa-rotate-right', title: 'Перегенерировать', danger: false, run: async item => { await regenerate(item, ctx.root, null); pswp.close(); } },
-        { name: 'uris-del', order: 33, icon: 'fa-trash', title: 'Удалить', danger: true, run: async item => { await deleteImage(item, ctx.chatId, ctx.root); pswp.close(); } },
+        { name: 'uris-crop', order: 31, icon: 'fa-crop-simple', title: 'Обрезать референс', danger: false, run: async item => { if (await cropReference(item)) pswp.close(); } },
+    ] : [
+        { name: 'uris-copy', order: 30, icon: 'fa-copy', title: 'Копировать текст', danger: false, run: item => copyItemText(item) },
+        { name: 'uris-crop', order: 31, icon: 'fa-crop-simple', title: 'Обрезать (в новую карточку)', danger: false, run: async item => { if (await cropGalleryImage(item, ctx.chatId, ctx.root)) pswp.close(); } },
+        { name: 'uris-save-ref', order: 32, icon: 'fa-bookmark', title: 'Сохранить как референс', danger: false, run: item => saveAsReference(item) },
+        { name: 'uris-regen', order: 33, icon: 'fa-rotate-right', title: 'Перегенерировать', danger: false, run: async item => { await regenerate(item, ctx.root, null); pswp.close(); } },
+        { name: 'uris-del', order: 34, icon: 'fa-trash', title: 'Удалить', danger: true, run: async item => { await deleteImage(item, ctx.chatId, ctx.root); pswp.close(); } },
     ];
     pswp.on('uiRegister', () => {
         for (const button of buttons) {
