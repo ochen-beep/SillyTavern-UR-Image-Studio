@@ -2232,12 +2232,37 @@ div.pswp__img--placeholder,
     position: relative;
     max-height: 60vh;
     max-height: 60dvh;
-    overflow: hidden;
+    overflow: visible; /* ручки кропа выступают за края картинки — не срезать их хит-зоны */
     text-align: center;
     background: repeating-conic-gradient(rgba(255,255,255,.06) 0% 25%, transparent 0% 50%) 50% / 16px 16px;
     touch-action: none; /* жестами управляет Croppr, не скролл */
 }
 .uris-crop-stage img { max-width: 100%; max-height: 60vh; max-height: 60dvh; }
+
+/* ── Ручки кропа: тач-таргеты вместо вендорных 10×10 px ──
+   У вендора ручка — 10×10 px, и события висят прямо на ней: палец промахивается,
+   тап рядом с углом попадает в оверлей, который немедленно начинает НОВЫЙ кроп
+   с 1×1 бокса — выбранная рамка «слетает». Расширяем сам ЭЛЕМЕНТ (хит-зона =
+   его бокс; redraw() центрирует ручку по offsetWidth, так что она остаётся
+   отцентрованной на углу), а визуальный квадрат рисуем ::after по центру.
+   Ручки у краёв картинки выступают наружу — поэтому у stage overflow: visible. */
+.uris-crop-stage .croppr-handle {
+    width: 30px; height: 30px;
+    background: transparent; border: 0;
+    touch-action: none;
+}
+.uris-crop-stage .croppr-handle::after {
+    content: ''; position: absolute; left: 50%; top: 50%;
+    width: 14px; height: 14px; transform: translate(-50%, -50%);
+    background: #fff; border: 1px solid rgba(0, 0, 0, 0.55); border-radius: 3px;
+    box-shadow: 0 1px 4px rgba(0, 0, 0, 0.45);
+    box-sizing: border-box;
+}
+/* Палец против курсора: на тач-устройствах хит-зона — 44px (Apple HIG / Material). */
+@media (pointer: coarse) {
+    .uris-crop-stage .croppr-handle { width: 44px; height: 44px; }
+    .uris-crop-stage .croppr-handle::after { width: 18px; height: 18px; }
+}
 .uris-crop-presets { justify-content: center; }
 .uris-batch-crop {
     background: none; border: none; color: var(--uris-text-mut); cursor: pointer;
