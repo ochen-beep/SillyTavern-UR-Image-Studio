@@ -9,8 +9,8 @@
  *
  * Chrome is the mobile-safe .uris-picker-overlay family (explicit top/left +
  * width/height — see the .uris-picker-overlay comment in style.css);
- * .uris-crop-overlay raises z-index to 100100 so the dialog can open above an
- * open PhotoSwipe viewer (save-as-reference flow).
+ * .uris-crop-overlay raises the layer to --uris-z-modal-top so the dialog can
+ * open above an open PhotoSwipe viewer (save-as-reference flow).
  *
  * Result: `{ blob, width, height }` on crop, `{ skip: true }` when the user
  * chose "use as is" (allowSkip), `null` on cancel.

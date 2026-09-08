@@ -36,7 +36,7 @@ export function textFieldsFor(item) {
 
 /**
  * Копирование текста сущности: одно поле — мгновенно, несколько — меню выбора.
- * Меню открывается и поверх просмотрщика (z-index 100100).
+ * Меню открывается и поверх просмотрщика (слой --uris-z-modal-top).
  */
 export async function copyItemText(item, deps = {}) {
     const fields = textFieldsFor(item);

@@ -2,6 +2,14 @@
 
 Дата: 2026-09-08 · База: main @ d191a58 (v0.7.0)
 
+> **⚠ v0.8.5 — z-index в этом плане устарел.** Числа 99999/100000/100100 ниже
+> взяты как есть на момент планирования; в v0.8.5 все слои переведены на
+> переменные `--uris-z-*` в `:root` style.css и опущены ниже хрома SillyTavern
+> (причина: 99999+ перекрывал топ-бар/drawers/диалоги ST и чужие расширения).
+> Новая лестница: окно 2990 < ghost 2991 < модалки 3500 < лайтбокс 5000 <
+> кроп/копи-меню 5100. См. CHANGELOG v0.8.5 и тест слоёв в
+> `tests/popup-viewport-css.test.js`. Устаревшие места помечены `⚠ v0.8.5`.
+
 Цели:
 
 1. **Зум/пан** при просмотре галереи — канонический жестовый UX на мобильном
@@ -57,6 +65,8 @@ top-level полей нет, а старые/reconcile-карточки (`proven
           position: fixed; top: 0; left: 0;
           width: 100%; height: 100vh; height: 100dvh;
           z-index: 100000; /* .uris-window = 99999, свои оверлеи = 100000 */
+          /* ⚠ v0.8.5: уровни пересмотрены — теперь var(--uris-z-lightbox) = 5000,
+             окно 2990; вендорный --pswp-root-z-index перенаправлен туда же (см. :root) */
       }
       ```
 - [ ] 2.3 Переписать `src/ui/lightbox.js` (экспорт `showLightbox(items, index,
@@ -90,6 +100,8 @@ top-level полей нет, а старые/reconcile-карточки (`proven
       width/height вместо inset:0» перенести с `.uris-lightbox` на `.pswp` +
       добавить проверку `z-index: 100000`; `tests/manual/lightbox-mobile.html`
       — проверить/поправить вызов (сигнатура showLightbox та же).
+      *(⚠ v0.8.5: проверка реализована на `var(--uris-z-lightbox)` вместо
+      литерала — см. тест слоёв в `popup-viewport-css.test.js`.)*
 - [ ] 2.7 Ручная проверка: десктоп (колесо к курсору, double-click, drag-пан,
       Esc/стрелки), мобайл (pinch, double-tap, swipe-навигация, swipe-down
       закрытие), ST-мобильный `body{position:fixed}` (нулевой бэкдроп),
@@ -133,6 +145,7 @@ top-level полей нет, а старые/reconcile-карточки (`proven
       `Promise<{blob, width, height} | null>`. Хром — `.uris-picker-overlay`/
       `.uris-picker-dialog` (проверен на ST-мобиле), `z-index: 100100` (может
       открываться поверх открытого PhotoSwipe при «сохранить как референс»).
+      *(⚠ v0.8.5: это `var(--uris-z-modal-top)` = 5100.)*
       Пресеты: Свободно / 1:1 / 3:4 (тайлы пула — 3:4). ОК → canvas-crop
       выделенной области → Blob; Отмена → null. Croppr сам держит touch.
 - [ ] 4.3 `src/ui/ref-batch-upload.js` (главный поток — ВСЕ загрузки референсов
@@ -169,7 +182,7 @@ top-level полей нет, а старые/reconcile-карточки (`proven
 | Риск | Защита |
 |---|---|
 | ST-мобила `body{position:fixed}`: нулевой вьюпорт у pswp | Переопределение `.pswp` по рецепту `.uris-lightbox` + тест-инвариант 2.6 |
-| pswp (дефолт z-index 1600) под окном расширения (99999) | `.pswp { z-index: 100000 }` в 2.2 |
+| pswp (дефолт z-index 1600) под окном расширения (99999) | `.pswp { z-index: 100000 }` в 2.2. *(⚠ v0.8.5: оба числа устарели — pswp на `var(--uris-z-lightbox)` = 5000, окно 2990)* |
 | ST-confirm не виден над лайтбоксом | Не будет: `<dialog>` в top layer всегда сверху (popup.css ST без z-index). Проверить toastr; при необходимости поднять `#toast-container` |
 | Фантомные карточки от миниатюр в reconcile | Папка `URIS_Thumbs`, никогда не сканируется (см. 3.2) |
 | Смешение scroll-lock'ов | `lockBodyScroll` для pswp не вызывается (2.3) |
