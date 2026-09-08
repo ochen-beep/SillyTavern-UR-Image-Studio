@@ -88,6 +88,14 @@ export async function showLightbox(items, index = 0, { chatId = null, root = nul
     });
     _active = pswp;
     pswp.on('destroy', () => { if (_active === pswp) _active = null; });
+    // После свайп/pinch-закрытия просмотрщик визуально «уезжает» мгновенно,
+    // а его полноэкранный корень ещё ~333 мс живёт (closing animation) и
+    // перехватывает указатели: первый тап пользователя умирал в невидимом
+    // корне (pswp на закрытии делает preventDefault), срабатывал только
+    // второй. Отпускаем тапы к странице с самого начала закрытия.
+    pswp.on('closingAnimationStart', () => {
+        pswp.element.style.pointerEvents = 'none';
+    });
 
     registerActionButtons(pswp, { items, chatId: chatIdResolved, root });
     pswp.init();
