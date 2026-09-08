@@ -103,6 +103,10 @@ export function syncPanelVisibility() {
     if (!state.settings.collapsed) applyMobileClass(el);
     const launcher = document.getElementById('uris_launcher');
     if (launcher) launcher.classList.toggle('uris_launcher_active', !state.settings.collapsed);
+    // FAB синхронизируется по id напрямую (как launcher выше) — без импорта
+    // floating-launcher.js, чтобы не создавать цикл (FAB импортирует window.js).
+    const fab = document.getElementById('uris_fab');
+    if (fab) fab.classList.toggle('uris_fab_active', !state.settings.collapsed);
 }
 
 // ── Mobile mode: full-screen panel ──
@@ -133,6 +137,19 @@ function applyMobileClass(el) {
 // the variables are not set → CSS fallback 0px → window occupies the full viewport.
 const ST_TOPBAR_SEL = '#top-bar';
 const ST_SENDFORM_SEL = '#send_form';
+
+// Сколько пикселей вьюпорта сверху перекрыто топ-баром ST. Бар рисуется НАД
+// окном (3005 против --uris-z-window, см. :root в style.css), поэтому окно,
+// запаркованное в верхнюю полосу, уезжает под него и становится некликабельным —
+// drag/restore клэмпят top ниже этой границы (та же причина, что у FAB в DS Comments).
+function getStTopInsetPx() {
+    const topBar = document.querySelector(ST_TOPBAR_SEL);
+    if (!topBar) return 0;
+    const r = topBar.getBoundingClientRect();
+    const bottom = r.bottom > 0 ? Math.min(r.bottom, window.innerHeight) : 0;
+    return Number.isFinite(bottom) && bottom > 0 ? bottom : 0;
+}
+export { getStTopInsetPx };
 function measureStChrome() {
     const root = document.documentElement;
     if (!root) return;
@@ -189,7 +206,7 @@ function restoreGeometry(el) {
     const w = Math.min(Math.max(320, g.width), vw);
     const h = Math.min(Math.max(360, g.height), vh);
     const left = Math.max(0, Math.min(g.left, vw - 100));
-    const top = Math.max(0, Math.min(g.top, vh - 100));
+    const top = Math.max(getStTopInsetPx(), Math.min(g.top, vh - 100));
     el.style.left = left + 'px'; el.style.top = top + 'px';
     el.style.width = w + 'px'; el.style.height = h + 'px';
     el.style.right = 'auto'; el.style.bottom = 'auto';
@@ -348,7 +365,7 @@ function startDrag(e, el) {
     const move = (ev) => {
         const np = point(ev);
         el.style.left = Math.max(0, np.x - dx) + 'px';
-        el.style.top = Math.max(0, np.y - dy) + 'px';
+        el.style.top = Math.max(getStTopInsetPx(), np.y - dy) + 'px';
         el.style.right = 'auto'; el.style.bottom = 'auto';
     };
     const up = () => {

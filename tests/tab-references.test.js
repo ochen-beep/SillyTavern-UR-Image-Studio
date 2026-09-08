@@ -26,14 +26,17 @@ function makeLocalforage() {
 }
 
 let _chatMetadata = {};
+// Стабильный контекст: folderPrefs (extensionSettings) должны переживать вызов
+// getCtx(), как в реальном приложении.
+const _ctx = {
+    extensionSettings: {},
+    saveSettingsDebounced: () => {},
+    saveMetadata: () => {},
+    getRequestHeaders: () => ({}),
+    get chatMetadata() { return _chatMetadata; },
+};
 globalThis.SillyTavern = {
-    getContext: () => ({
-        extensionSettings: {},
-        saveSettingsDebounced: () => {},
-        saveMetadata: () => {},
-        getRequestHeaders: () => ({}),
-        get chatMetadata() { return _chatMetadata; },
-    }),
+    getContext: () => _ctx,
     libs: { localforage: makeLocalforage() },
 };
 globalThis.toastr = undefined;
@@ -49,6 +52,7 @@ globalThis.FileReader = class FileReader {
 beforeEach(() => {
     memoryStore.clear();
     _chatMetadata = {};
+    _ctx.extensionSettings = {};
     resetRefStoreForTests();
     setRefStoreForTests(makeReferenceStore());
 });
@@ -224,11 +228,16 @@ test('render: mobile folders screen contains All, Without folder, and existing f
     root.removeChild(el);
 });
 
-test('showPoolPicker: card in two folders shows under each', async () => {
+test('showPoolPicker: strip shows all/none + «Все папки», full list lives in the search sheet', async () => {
     const { document, root } = makeFakeDocument();
     globalThis.document = document;
     globalThis.document.body = root;
-
+    // Предыдущие тесты подменяют getContext на нестабильную версию; здесь нужен
+    // стабильный контекст — saveFolderPrefs обязан дожить до рендера пикера.
+    globalThis.SillyTavern = {
+        getContext: () => _ctx,
+        libs: { localforage: makeLocalforage() },
+    };
     // Patch remove() for fake DOM nodes (needed by showPoolPicker overlay)
     const origCreateElement = document.createElement.bind(document);
     document.createElement = (tag) => {
@@ -237,51 +246,47 @@ test('showPoolPicker: card in two folders shows under each', async () => {
         return node;
     };
 
-    const { createFolder, createRef } = await import('../src/refs-library.js');
+    const { createFolder, createRef, saveFolderPrefs } = await import('../src/refs-library.js');
 
     const f1 = await createFolder('One');
     const f2 = await createFolder('Two');
     const multiRef = await createRef({ name: 'Multi', imagePath: '/m.png', folders: [f1.id, f2.id] });
     await createRef({ name: 'Only1', imagePath: '/o.png', folders: [f1.id] });
+    // Избранное попадает чипом в ленту, обычные папки — только через шит.
+    saveFolderPrefs({ pinned: [f1.id] });
 
-    // Re-import to get a fresh module with the updated filterRefsByFolder import
     const mod = await import('../src/ui/tab-references.js');
-    const { showPoolPicker } = mod;
-
-    const p = showPoolPicker({ title: 'Test', multi: true });
-
-    // Wait for the async function to finish setting up the DOM (await listRefs/listFolders)
+    const p = mod.showPoolPicker({ title: 'Test', multi: true });
     await new Promise(resolve => setTimeout(resolve, 10));
 
-    // After appending to body, find folder chips and pool tiles
-    const chips = [...document.querySelectorAll('.uris-folder-chip')];
-    const f1Chip = chips.find(c => c.dataset.folder === f1.id);
-    assert.ok(f1Chip, 'f1 chip exists');
-    f1Chip?.click();
+    // Лента: Все / Без папки / f1 (избранное) / «Все папки». f2 в ленте нет.
+    const chips = [...document.querySelectorAll('.uris-folder-chip')].filter(c => c.dataset.folder);
+    assert.ok(chips.find(c => c.dataset.folder === f1.id), 'favorite folder is a strip chip');
+    assert.ok(!chips.find(c => c.dataset.folder === f2.id), 'non-favorite folder is not in the strip');
 
-    const tiles1 = [...document.querySelectorAll('.uris-pick-tile')].map(t => t.dataset.refId);
-    assert.ok(tiles1.length >= 1, 'f1 filter shows at least one card');
-    assert.ok(tiles1.includes(multiRef.id), 'f1 filter shows the multi-folder card');
-    assert.ok(tiles1.length === 2, 'f1 filter shows both cards (multi + only1)');
+    // Выбор f2 через шит: «Все папки» → строка с поиском → клик по папке.
+    document.querySelector('.uris-picker-more')?.click();
+    await new Promise(resolve => setTimeout(resolve, 0));
+    const sheetRows = [...document.querySelectorAll('.uris-fs-row')].filter(row => row.dataset.folderId);
+    assert.ok(sheetRows.find(row => row.dataset.folderId === f2.id), 'sheet lists the non-favorite folder');
+    await sheetRows.find(row => row.dataset.folderId === f2.id).click();
+    await new Promise(resolve => setTimeout(resolve, 0));
+    assert.equal(document.querySelector('.uris-folder-sheet'), null, 'pick-one sheet closes on pick');
 
-    // Switch filter to f2
-    const f2Chip = chips.find(c => c.dataset.folder === f2.id);
-    assert.ok(f2Chip, 'f2 chip exists');
-    f2Chip?.click();
-
+    // Фильтр применился: сетка отфильтрована.
     const tiles2 = [...document.querySelectorAll('.uris-pick-tile')].map(t => t.dataset.refId);
-    assert.ok(tiles2.length >= 1, 'f2 filter shows at least one card');
     assert.ok(tiles2.includes(multiRef.id), 'f2 filter shows the multi-folder card');
-    assert.ok(tiles2.length === 1, 'f2 filter shows only the multi-folder card');
+    assert.equal(tiles2.length, 1, 'f2 filter shows only the multi-folder card');
 
-    // Cancel to resolve the promise
+    // Чип f1 в ленте по-прежнему работает как фильтр.
+    const f1Chip = [...document.querySelectorAll('.uris-folder-chip')].filter(c => c.dataset.folder).find(c => c.dataset.folder === f1.id);
+    await f1Chip?.click();
+    const tiles1 = [...document.querySelectorAll('.uris-pick-tile')].map(t => t.dataset.refId);
+    assert.equal(tiles1.length, 2, 'f1 filter shows both cards (multi + only1)');
+
     document.querySelector('.uris-pick-cancel')?.click();
     const result = await p;
     assert.deepStrictEqual(result, [], 'cancelled picker returns empty array');
-
-    // Cleanup: remove overlay if still present
-    const overlay = document.querySelector('.uris-picker-overlay');
-    if (overlay && overlay.parentNode) overlay.parentNode.removeChild(overlay);
 });
 
 test('hidden resize callbacks do not coerce zero width into a render width', async () => {
@@ -322,8 +327,57 @@ test('render: desktop layout has sidebar, main, and overlay-host as row siblings
     root.removeChild(el);
 });
 
-test('render: editor text fields autosave on change (desktop)', async () => {
+test('editor: папки — чип + шит; выбор и снятие персистятся в референс', async () => {
     const { document, root } = makeFakeDocument();
+    globalThis.document = document;
+    globalThis.document.body = root;
+    globalThis.SillyTavern = { getContext: () => _ctx, libs: { localforage: makeLocalforage() } };
+
+    const { createFolder, createRef, getRef } = await import('../src/refs-library.js');
+    const f1 = await createFolder('NPC');
+    const f2 = await createFolder('Misc');
+    const char = await createRef({ name: 'Char', imagePath: '/char.png', folders: [f1.id] });
+    const { render } = await import('../src/ui/tab-references.js');
+    const el = makeTabEl(document, 600);
+    root.appendChild(el);
+    await render(el);
+
+    // _activeFolderFilter — модульное состояние: предыдущие тесты оставляют
+    // фильтр «none». Явно возвращаем «Все карточки».
+    await [...el.querySelectorAll('.uris-folder-item')].find(item => item.dataset.folder === 'all').click();
+    await new Promise(resolve => setTimeout(resolve, 0));
+
+    const tile = [...el.querySelectorAll('.uris-pool-tile')].find(t => t.dataset.refId === char.id);
+    await tile.click();
+    await new Promise(resolve => setTimeout(resolve, 0));
+
+    const host = el.querySelector('.uris-fp-host');
+    assert.ok(host, 'в редакторе есть folder field');
+    assert.equal([...host.querySelectorAll('.uris-fp-chip')].length, 1, 'выбранная папка показана чипом');
+    assert.equal(el.querySelectorAll('.uris-multifolder-toggle').length, 0, 'стены тогглов больше нет');
+
+    // «+ Папка» → шит → выбор второй папки → персист в референс.
+    host.querySelector('.uris-fp-add').click();
+    await new Promise(resolve => setTimeout(resolve, 0));
+    const row = [...document.querySelectorAll('.uris-fs-row')].filter(r => r.dataset.folderId)
+        .find(r => r.dataset.folderId === f2.id);
+    await row.click();
+    await new Promise(resolve => setTimeout(resolve, 0));
+    assert.deepEqual([...(await getRef(char.id)).folders].sort(), [f1.id, f2.id].sort(), 'выбор в шите сохранён');
+    document.querySelector('.uris-folder-sheet-done')?.click();
+    await new Promise(resolve => setTimeout(resolve, 0));
+
+    // × на чипе снимает папку (после ре-рендера редактора).
+    const chipX = [...el.querySelectorAll('.uris-fp-chip-x')].find(x => x.dataset.folderId === f2.id);
+    assert.ok(chipX, 'чип второй папки в перерисованном редакторе');
+    await chipX.click();
+    await new Promise(resolve => setTimeout(resolve, 0));
+    assert.deepEqual(await (await getRef(char.id)).folders, [f1.id], '× снял папку');
+
+    root.removeChild(el);
+});
+
+test('render: editor text fields autosave on change (desktop)', async () => {    const { document, root } = makeFakeDocument();
     globalThis.document = document;
     globalThis.document.body = root;
 

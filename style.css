@@ -8,6 +8,21 @@
 :root {
     --uris-label-w: 90px;
 
+    /* ── Слои (z-index) ──
+       Ориентиры SillyTavern: левый nav-drawer 3000, топ-бар 3005, легаси-диалоги
+       #dialogue_popup 9999; новые <dialog>-попапы ST живут в top layer и выше
+       любого z-index. Всё хозяйство URIS — ниже 9999: окно живёт под хромом ST
+       (не перекрывает таверну и чужие расширения), модалки — над хромом, но под
+       диалогами, просмотрщик — иммерсивный. Порядок строгий:
+       window < fab < ghost < modal < lightbox < modal-top (кроп/копи-меню
+       поверх pswp). Контракт закреплён в tests/popup-viewport-css.test.js. */
+    --uris-z-window: 2990;
+    --uris-z-fab: 2991;
+    --uris-z-ghost: 2992;
+    --uris-z-modal: 3500;
+    --uris-z-lightbox: 5000;
+    --uris-z-modal-top: 5100;
+
     /* Поверхности (нейтральный серый) */
     --uris-bg: #1c1c1c;
     --uris-surface-header: #141414;
@@ -84,6 +99,46 @@
 #uris_launcher { cursor: pointer; user-select: none; }
 #uris_launcher.uris_launcher_active { background: var(--uris-accent); }
 
+/* ── Плавающая кнопка (FAB) ──
+   Перенос из DS Comments. Слой --uris-z-fab НАД окном (2991 > 2990), как у
+   DSC: FAB остаётся кликабельным тогглом поверх открытого окна и мобильного
+   fullscreen-оверлея. При этом модалки (3500) и лайтбокс (5000) перекрывают
+   его димом. Топ-бар ST (3005) всё же выше FAB — drag/restore клэмпят позицию
+   ниже него (floating-launcher.js). */
+.uris_fab {
+    position: fixed; z-index: var(--uris-z-fab);
+    width: 36px; height: 36px; border-radius: 50%;
+    display: flex; align-items: center; justify-content: center;
+    background: var(--uris-surface-btn);
+    border: 1px solid var(--uris-border);
+    color: var(--uris-text-strong);
+    font-size: 16px;
+    box-shadow: 0 4px 16px rgba(0,0,0,.5);
+    cursor: pointer; user-select: none;
+    touch-action: none; -webkit-tap-highlight-color: transparent;
+    transition: background 0.15s, border-color 0.15s;
+}
+@media (hover: hover) {
+    .uris_fab:hover { background: var(--uris-accent-soft); border-color: var(--uris-accent-line); }
+}
+.uris_fab:focus-visible { outline: 2px solid var(--uris-accent); outline-offset: 2px; }
+.uris_fab.uris_fab_active {
+    background: var(--uris-accent-hover);
+    border-color: var(--uris-accent-line);
+    color: var(--uris-accent);
+}
+.uris_fab.uris_fab_dragging { transition: none !important; cursor: grabbing !important; will-change: left, top; }
+
+/* Пульс генерации — на обоих лаунчерах (класс вешает floating-launcher.js по
+   событиям uris:stage2-start/end). */
+.uris_fab.uris_generating, #uris_launcher.uris_generating {
+    animation: uris-pulse 1.4s ease-in-out infinite; will-change: transform;
+}
+@keyframes uris-pulse { 0%, 100% { transform: scale(1); } 50% { transform: scale(1.12); } }
+@media (prefers-reduced-motion: reduce) {
+    .uris_fab.uris_generating, #uris_launcher.uris_generating { animation: none; opacity: 0.8; will-change: auto; }
+}
+
 /* ── Плавающее окно ── */
 .uris-window {
     position: fixed; top: 80px; right: 20px;
@@ -99,7 +154,7 @@
     background: var(--uris-bg);
     color: var(--SmartThemeBodyColor, var(--uris-text-strong));
     border: 1px solid var(--SmartThemeBorderColor, var(--uris-border-soft));
-    border-radius: 10px; z-index: 99999;
+    border-radius: 10px; z-index: var(--uris-z-window);
     display: flex; flex-direction: column;
     box-shadow: 0 10px 40px rgba(0,0,0,.5);
     overflow: hidden;
@@ -1105,7 +1160,7 @@
 .uris-extra-chip.uris-draggable { touch-action: none; cursor: grab; }
 .uris-extra-chip.uris-dragging { opacity: .4; }
 .uris-drag-ghost {
-    position: fixed; top: 0; left: 0; margin: 0; pointer-events: none; z-index: 100000;
+    position: fixed; top: 0; left: 0; margin: 0; pointer-events: none; z-index: var(--uris-z-ghost);
     opacity: .92; box-shadow: 0 6px 18px rgba(0,0,0,.5); border-radius: 6px; overflow: hidden;
     will-change: transform;
 }
@@ -1334,24 +1389,120 @@
     color: var(--uris-err); background: var(--uris-err-soft); border-color: var(--uris-err-line);
 }
 
-/* Multi-folder toggle grid */
-.uris-multifolder-grid {
-    display: grid; grid-template-columns: 1fr 1fr; gap: 4px;
-    margin-bottom: 8px;
-}
-.uris-multifolder-toggle {
-    display: flex; align-items: center; gap: 6px;
-    padding: 6px 8px; border-radius: var(--uris-radius);
+/* ── Folder field (чипы выбранных папок + шит с поиском) ──
+   Заменяет старую сетку .uris-multifolder-toggle, которая при 50+ папок
+   превращалась в стену тогглов: выбранное теперь — чипы, полный список —
+   в шите .uris-folder-sheet с поиском. */
+.uris-fp-chips { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; }
+.uris-fp-chip {
+    display: inline-flex; align-items: center; gap: 6px;
+    padding: 3px 4px 3px 9px; border-radius: var(--uris-radius-pill);
     background: var(--uris-surface-btn); border: 1px solid var(--uris-border-soft);
-    color: var(--uris-text-mut); cursor: pointer; text-align: left;
-    font-size: var(--uris-font-sm); transition: all .12s;
+    color: var(--uris-text-strong); font-size: var(--uris-font-sm);
 }
-.uris-multifolder-toggle.on {
-    background: var(--uris-surface-card); color: var(--uris-text-strong);
-    border-color: var(--uris-border);
+.uris-fp-chip-name { max-width: 120px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.uris-fp-chip-x {
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 20px; height: 20px; padding: 0; border: 0; border-radius: 50%;
+    background: transparent; color: var(--uris-text-mut); cursor: pointer;
 }
-.uris-multifolder-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.uris-multifolder-check { font-size: var(--uris-font-xs); color: var(--uris-accent); }
+.uris-fp-chip-x:hover { color: var(--uris-err); background: var(--uris-surface-btn); }
+.uris-fp-add {
+    display: inline-flex; align-items: center; gap: 6px;
+    padding: 3px 12px; border-radius: var(--uris-radius-pill);
+    background: transparent; border: 1px dashed var(--uris-border);
+    color: var(--uris-text-mut); cursor: pointer; font-size: var(--uris-font-sm);
+    transition: color .12s, border-color .12s;
+}
+.uris-fp-add:hover { color: var(--uris-accent); border-color: var(--uris-accent); }
+
+/* Шит выбора папок (наследует .uris-picker-dialog; на мобиле — bottom-sheet) */
+.uris-folder-sheet-search { padding-bottom: 8px; border-bottom: 1px solid var(--uris-border-soft); }
+.uris-folder-sheet-search .text_pole { width: 100%; box-sizing: border-box; }
+.uris-folder-sheet-list {
+    display: flex; flex-direction: column; gap: 2px;
+    max-height: 46vh; overflow-y: auto; margin: 8px 0 4px;
+    -webkit-overflow-scrolling: touch;
+}
+.uris-fs-row {
+    display: flex; align-items: center; gap: 8px; width: 100%;
+    padding: 7px 10px; border: 0; border-radius: var(--uris-radius);
+    background: none; color: var(--uris-text-mut); cursor: pointer;
+    text-align: left; font-size: var(--uris-font-sm);
+    transition: background .12s, color .12s;
+}
+.uris-fs-row:hover { color: var(--uris-text-strong); background: var(--uris-surface-btn); }
+.uris-fs-row-on { color: var(--uris-text-strong); }
+.uris-fs-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.uris-fs-check { color: var(--uris-accent); font-size: var(--uris-font-xs); }
+.uris-fs-create { color: var(--uris-accent); }
+.uris-fs-create:hover { color: var(--uris-accent); background: var(--uris-accent-soft); }
+.uris-fs-empty { padding: 12px 4px; color: var(--uris-text-dim); font-size: var(--uris-font-sm); }
+
+/* ── Sidebar: поиск, инструменты, избранное ── */
+.uris-folder-search { padding: 8px 8px 6px; }
+.uris-folder-search-input {
+    box-sizing: border-box; width: 100%;
+    font-size: calc(12px * var(--uris-font-scale, 1));
+}
+.uris-folder-tools { display: inline-flex; align-items: center; gap: 2px; }
+.uris-folder-tool {
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 22px; height: 22px; padding: 0; border: 0; border-radius: var(--uris-radius);
+    background: transparent; color: var(--uris-text-dim); cursor: pointer;
+    font-size: calc(11px * var(--uris-font-scale, 1));
+    transition: background .12s, color .12s;
+}
+.uris-folder-tool:hover { color: var(--uris-accent); background: var(--uris-accent-soft); }
+.uris-folder-pin {
+    display: inline-flex; align-items: center; justify-content: center;
+    flex: 0 0 22px; width: 22px; height: 22px; padding: 0; border: 0;
+    background: transparent; color: var(--uris-text-dim); opacity: .35;
+    cursor: pointer; border-radius: var(--uris-radius);
+    font-size: calc(10px * var(--uris-font-scale, 1));
+    transition: opacity .12s, color .12s, background .12s;
+}
+.uris-folder-pin:hover { opacity: .8; color: var(--uris-text-strong); background: var(--uris-surface-btn); }
+.uris-folder-pin.uris-folder-pin-on { opacity: 1; color: var(--uris-accent); }
+.uris-folder-section-label {
+    padding: 8px 10px 2px;
+    font-size: calc(9px * var(--uris-font-scale, 1));
+    text-transform: uppercase; letter-spacing: .15em; color: var(--uris-text-dim);
+}
+.uris-folder-empty { padding: 10px; color: var(--uris-text-dim); font-size: var(--uris-font-sm); }
+
+/* ── Менеджер папок ── */
+.uris-fm-search { padding-bottom: 8px; border-bottom: 1px solid var(--uris-border-soft); }
+.uris-fm-search .text_pole { width: 100%; box-sizing: border-box; }
+.uris-fm-bulkbar {
+    display: flex; align-items: center; gap: 6px;
+    padding: 8px 0 0; margin-bottom: 4px;
+}
+.uris-fm-bulkbar[hidden] { display: none; }
+.uris-fm-bulk-count { flex: 0 0 auto; font-size: var(--uris-font-xs); color: var(--uris-text-dim); }
+.uris-fm-bulk-target { flex: 1; min-width: 0; }
+.uris-fm-list {
+    display: flex; flex-direction: column; gap: 4px;
+    max-height: 46vh; overflow-y: auto; margin: 8px 0 4px;
+    -webkit-overflow-scrolling: touch;
+}
+.uris-fm-row { display: flex; align-items: center; gap: 6px; }
+.uris-fm-check { flex: 0 0 auto; margin: 0; }
+.uris-fm-swatch {
+    flex: 0 0 16px; width: 16px; height: 16px; padding: 0;
+    border: 1px solid var(--uris-border); border-radius: 50%; cursor: pointer;
+}
+.uris-fm-name { flex: 1; min-width: 0; }
+.uris-fm-count {
+    flex: 0 0 auto; min-width: 18px; text-align: center;
+    font-size: var(--uris-font-xs); color: var(--uris-text-dim);
+}
+.uris-fm-merge { flex: 0 0 74px; font-size: var(--uris-font-xs); padding: 2px 4px; }
+.uris-fm-del {
+    flex: 0 0 auto; width: 24px; height: 24px; padding: 0; border: 0;
+    background: none; color: var(--uris-text-mut); cursor: pointer; border-radius: var(--uris-radius);
+}
+.uris-fm-del:hover { color: var(--uris-err); background: var(--uris-surface-btn); }
 
 /* ── Чипы фильтра (используются только в picker-overlay) ── */
 .uris-refs-chips { display: flex; gap: 6px; flex: 1; min-width: 0; flex-wrap: wrap; }
@@ -1448,7 +1599,7 @@
     width: 100%; height: 100vh; height: 100dvh;
     background: rgba(0,0,0,.6);
     display: flex; align-items: center; justify-content: center;
-    z-index: 100000;
+    z-index: var(--uris-z-modal);
 }
 .uris-picker-dialog {
     /* непрозрачный фон - иначе в прозрачных ST-темах диалог просвечивает (см. .uris-window) */
@@ -1540,6 +1691,9 @@
     /* Batch upload: список строк скроллится внутри bottom-sheet,
        как и пикерная сетка выше. */
     .uris-batch-list { max-height: none; flex: 1 1 auto; min-height: 120px; }
+    /* Folder sheet и менеджер папок — та же схема: единственный скролл — список. */
+    .uris-folder-sheet-list, .uris-fm-list { max-height: none; flex: 1 1 auto; min-height: 120px; }
+    .uris-fm-merge { flex: 0 0 64px; }
     .uris-picker-actions {
         position: sticky; bottom: 0; flex-wrap: wrap;
         padding-top: 8px; margin: 0;
@@ -2142,13 +2296,15 @@ div.pswp__img--placeholder,
    1) ST mobile (mobile-styles.css, @media ≤1000px) ставит body { position: fixed },
    из-за этого html вырождается по высоте и вендорная height: 100% у fixed-элемента
    ненадёжна. Рецепт тот же, что у наших оверлеев: явные 100vh → 100dvh.
-   2) z-index: вендорный дефолт --pswp-root-z-index = 100000 — уровень наших
-   оверлеев; фиксируем явно, чтобы апгрейд вендора не уронил просмотрщик под
-   окно расширения (99999). ST-попапы — <dialog> в top layer, они всегда выше. */
+   2) z-index: вендорный дефолт --pswp-root-z-index = 100000 — над всей таверной;
+   фиксируем на --uris-z-lightbox (см. :root), чтобы апгрейд вендора не уронил
+   просмотрщик под окно/оверлеи и чтобы он не висел над диалогами ST. ST-попапы —
+   <dialog> в top layer, они всегда выше. */
 .pswp.uris-pswp {
     height: 100vh;
     height: 100dvh;
-    z-index: 100000;
+    --pswp-root-z-index: var(--uris-z-lightbox);
+    z-index: var(--uris-z-lightbox);
 }
 
 /* Кнопки действий галереи в top bar (иконки Font Awesome вместо SVG).
@@ -2225,8 +2381,8 @@ div.pswp__img--placeholder,
 }
 /* ════ URIS: crop dialog (Croppr) ════
    Поверх открытого PhotoSwipe (save-as-reference из просмотрщика):
-   pswp = 100000, наши оверлеи = 100000 (решает DOM-порядок), кроп = 100100. */
-.uris-crop-overlay { z-index: 100100; }
+   pswp = --uris-z-lightbox, кроп = --uris-z-modal-top (см. :root). */
+.uris-crop-overlay { z-index: var(--uris-z-modal-top); }
 .uris-crop-dialog { max-width: min(92vw, 640px); }
 .uris-crop-stage {
     position: relative;
@@ -2271,8 +2427,8 @@ div.pswp__img--placeholder,
 .uris-batch-crop:hover { color: var(--uris-text-strong); }
 
 /* ── Меню копирования текстовых полей (gallery-actions.copyItemText) ──
-   uris-crop-overlay задаёт z-index 100100 — меню открывается и поверх
-   открытого PhotoSwipe-просмотрщика. */
+   uris-crop-overlay поднимает слой до --uris-z-modal-top — меню открывается
+   и поверх открытого PhotoSwipe-просмотрщика. */
 .uris-copy-menu { max-width: min(92vw, 480px); }
 .uris-copy-list {
     display: flex; flex-direction: column; gap: 6px;

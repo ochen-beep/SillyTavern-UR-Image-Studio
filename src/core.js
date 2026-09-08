@@ -209,6 +209,7 @@ export function abortAllGenerations() {
 export const defaultSettings = Object.freeze({
     enabled: true,
     collapsed: true,           // window hidden until first open
+    launcherMode: 'bar',       // 'bar' | 'floating' | 'both' — кнопка(и) запуска
     activeTab: 'generate',     // last selected floating window tab
     automationMode: 'manual',   // 'manual' | 'build-prompt' | 'full-pipeline'
     experimentalTemplateFromDescription: false,
@@ -452,6 +453,8 @@ export function loadSettings() {
     for (const k of Object.keys(defaultSettings)) if (!Object.hasOwn(s, k)) s[k] = defaultSettings[k];
     // Normalize apiSource enum.
     if (!['profile', 'custom'].includes(s.apiSource)) s.apiSource = defaultSettings.apiSource;
+    // Launcher mode enum (кнопка в QR-баре / плавающая / обе).
+    if (!['bar', 'floating', 'both'].includes(s.launcherMode)) s.launcherMode = 'bar';
     // Debug must be opt-in; never treat persisted strings or numbers as enabled.
     s.debugMode = s.debugMode === true;
     s.useParametersForAllChats = s.useParametersForAllChats === true;

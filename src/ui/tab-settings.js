@@ -51,6 +51,15 @@ export function render(root) {
             </section>
             <section class="uris-settings-section">
                 <h3>Поведение</h3>
+                <div class="uris-field">
+                    <label for="uris_launcher_mode_tab">Кнопка запуска</label>
+                    <select class="text_pole" id="uris_launcher_mode_tab" title="Какая кнопка открывает окно расширения">
+                        <option value="bar" ${(state.settings.launcherMode || 'bar') === 'bar' ? 'selected' : ''}>quick-reply бар</option>
+                        <option value="floating" ${(state.settings.launcherMode || 'bar') === 'floating' ? 'selected' : ''}>плавающая (FAB)</option>
+                        <option value="both" ${(state.settings.launcherMode || 'bar') === 'both' ? 'selected' : ''}>обе</option>
+                    </select>
+                    <small class="uris-hint">Плавающая кнопка работает даже при выключенном Quick Replies; её можно перетаскивать — позиция запоминается.</small>
+                </div>
                 <label class="checkbox_label"><input type="checkbox" id="uris_debug_mode" ${state.settings.debugMode === true ? 'checked' : ''}><span>Debug-режим</span></label>
                 <small class="uris-hint">Подробный технический trace для диагностики. Секреты и бинарные изображения не записываются.</small>
                 <label class="checkbox_label"><input type="checkbox" id="uris_use_all_params" ${state.settings.useParametersForAllChats === true ? 'checked' : ''}><span>Использовать параметры генерации для всех чатов</span></label>
@@ -165,6 +174,14 @@ function bindScaleControls(root) {
 function bindBehaviorToggles(root) {
     // Every tab re-renders on switch (setActiveTab), so unlike the ST panel
     // handler there is no need to refreshActive() the visible tab here.
+    root.querySelector('#uris_launcher_mode_tab')?.addEventListener('change', e => {
+        state.settings.launcherMode = e.target.value;
+        saveSettings();
+        // Перемонтирование лаунчеров (ensureLauncher) и синхронизацию селекта
+        // в ST-панели делает index.js — событийный шов, как в tab-api
+        // (uris:chat-generation-defaults-changed).
+        window.dispatchEvent?.(new CustomEvent('uris:launcher-mode-changed'));
+    });
     root.querySelector('#uris_debug_mode')?.addEventListener('change', e => {
         state.settings.debugMode = e.target.checked === true;
         saveSettings();

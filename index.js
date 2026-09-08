@@ -24,6 +24,7 @@ import { runStage1ForDraft, runFullPipelineForDraft, stopQueue } from './src/pip
 import {
     mountPanel, syncPanelVisibility, initViewportSync, removeViewportSync, removePanel, setStatus, isPanelVisible,
 } from './src/ui/window.js';
+import { ensureFloatingLauncher, removeFloatingLauncher } from './src/ui/floating-launcher.js';
 import { registerTab, setActiveTab, renderTabs, getActiveTab, refreshActive, resolveInitialTab } from './src/ui/tabs.js';
 import { render as renderApi } from './src/ui/tab-api.js';
 import { render as renderReferences } from './src/ui/tab-references.js';
@@ -69,6 +70,7 @@ let _visibilityHandler = null;
 let _pageHideHandler = null;
 let _onPostFollow = null;
 let _onGenerationDefaultsChanged = null;
+let _onLauncherModeChanged = null;
 
 // ── Init ──
 
@@ -181,6 +183,16 @@ async function init() {
         if (isPanelVisible() && getActiveTab() === 'generate') refreshActive();
     };
     window.addEventListener('uris:chat-generation-defaults-changed', _onGenerationDefaultsChanged);
+    // Launcher mode switched from the Settings tab (or the ST panel select):
+    // re-run ensureLauncher and keep both selects in sync.
+    _onLauncherModeChanged = () => {
+        ensureLauncher();
+        for (const id of ['uris_launcher_mode', 'uris_launcher_mode_tab']) {
+            const sel = document.getElementById(id);
+            if (sel && sel.value !== state.settings.launcherMode) sel.value = state.settings.launcherMode;
+        }
+    };
+    window.addEventListener('uris:launcher-mode-changed', _onLauncherModeChanged);
 
     // Singleton listeners keep the "Остановить" button and queue status in sync
     // with Stage 2 lifecycle events (manual, auto and queue alike).
@@ -226,10 +238,16 @@ function getLauncherHost() {
     const bar = getQuickReplyBar(); if (!bar) return null;
     return bar.querySelector('.qr--buttons') || bar;
 }
-/** Creates or recreates the launcher icon in the QR bar. */
+/** Creates or recreates the launcher icon(s) per settings.launcherMode. */
 function ensureLauncher() {
     const existing = document.getElementById('uris_launcher');
-    if (!state.settings.enabled) { existing?.remove(); return null; }
+    if (!state.settings.enabled) { existing?.remove(); removeFloatingLauncher(); return null; }
+    // FAB mounts independently of the QR bar, so the panel stays reachable
+    // even with the Quick Replies extension disabled (как у DS Comments).
+    const mode = state.settings.launcherMode || 'bar';
+    if (mode === 'floating' || mode === 'both') ensureFloatingLauncher({ onToggle: toggleLauncherPanel });
+    else removeFloatingLauncher();
+    if (mode === 'floating') { existing?.remove(); return null; }
     const host = getLauncherHost();
     if (!host) return null;
     let btn = existing;
@@ -296,6 +314,14 @@ function createSettingsPanel() {
         </div>
         <div class="inline-drawer-content">
             <label class="checkbox_label"><input type="checkbox" id="uris_enabled" ${state.settings.enabled ? 'checked' : ''}><span>Включить</span></label>
+            <div class="flex-row">
+                <select id="uris_launcher_mode" class="uris-w-full" title="Какая кнопка открывает окно расширения">
+                    <option value="bar" ${state.settings.launcherMode === 'bar' ? 'selected' : ''}>Кнопка: quick-reply бар</option>
+                    <option value="floating" ${state.settings.launcherMode === 'floating' ? 'selected' : ''}>Кнопка: плавающая (FAB)</option>
+                    <option value="both" ${state.settings.launcherMode === 'both' ? 'selected' : ''}>Кнопки: обе</option>
+                </select>
+            </div>
+            <small class="uris_hint">Плавающая кнопка работает даже при выключенном расширении Quick Replies; её можно перетаскивать — позиция запоминается.</small>
             <small class="uris_hint">Debug-режим, масштаб интерфейса и остальные настройки — вкладка «Настройки» в окне расширения.</small>
 
             <hr>
@@ -326,6 +352,13 @@ function bindSettingsPanel(host) {
         if (state.settings.enabled && !_initialized) safeInit();
         else if (!state.settings.enabled && _initialized) cleanup();
         ensureLauncher(); syncPanelVisibility();
+    });
+    host.querySelector('#uris_launcher_mode').addEventListener('change', e => {
+        state.settings.launcherMode = e.target.value;
+        saveSettings();
+        ensureLauncher();
+        // Синхронизация селекта во вкладке «Настройки» окна (если открыта).
+        window.dispatchEvent?.(new CustomEvent('uris:launcher-mode-changed'));
     });
     host.querySelector('#uris_open_window').addEventListener('click', () => {
         if (state.settings.collapsed) toggleLauncherPanel();
@@ -379,8 +412,10 @@ function cleanup() {
     if (_pageHideHandler) { window.removeEventListener('pagehide', _pageHideHandler); _pageHideHandler = null; }
     if (_onPostFollow) { window.removeEventListener('uris:post-follow', _onPostFollow); _onPostFollow = null; }
     if (_onGenerationDefaultsChanged) { window.removeEventListener('uris:chat-generation-defaults-changed', _onGenerationDefaultsChanged); _onGenerationDefaultsChanged = null; }
+    if (_onLauncherModeChanged) { window.removeEventListener('uris:launcher-mode-changed', _onLauncherModeChanged); _onLauncherModeChanged = null; }
     removePanel();
     document.getElementById('uris_launcher')?.remove();
+    removeFloatingLauncher();
     _initialized = false;
     log('Cleanup.');
 }

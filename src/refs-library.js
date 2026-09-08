@@ -14,7 +14,8 @@ import { normalizeAliases } from './scene-context.js';
 import { canonicalizeNativeImagePath } from './native-image-path.js';
 import { normalizeReferenceCap } from './reference-limits.js';
 
-function sharedCollection(name) {
+/** Shared image-connections settings object, creating the nesting on demand. */
+function imageSettings() {
     const ctx = getCtx();
     if (!ctx.extensionSettings) ctx.extensionSettings = {};
     if (!ctx.extensionSettings.ur_image_studio || typeof ctx.extensionSettings.ur_image_studio !== 'object') {
@@ -24,10 +25,15 @@ function sharedCollection(name) {
     if (!settings[IMAGE_CONNECTION_SETTINGS_KEY] || typeof settings[IMAGE_CONNECTION_SETTINGS_KEY] !== 'object') {
         settings[IMAGE_CONNECTION_SETTINGS_KEY] = getImageConnectionSettings({});
     }
-    if (!Array.isArray(settings[IMAGE_CONNECTION_SETTINGS_KEY][name])) {
-        settings[IMAGE_CONNECTION_SETTINGS_KEY][name] = [];
+    return settings[IMAGE_CONNECTION_SETTINGS_KEY];
+}
+
+function sharedCollection(name) {
+    const settings = imageSettings();
+    if (!Array.isArray(settings[name])) {
+        settings[name] = [];
     }
-    return settings[IMAGE_CONNECTION_SETTINGS_KEY][name];
+    return settings[name];
 }
 
 let testStore = null;
@@ -299,8 +305,67 @@ export async function deleteFolder(id) {
         const next = normalizePoolReference({ ...ref, folders: ref.folders.filter(folderId => folderId !== id) });
         await store.update('refs', ref.id, next);
     }
+    const prefs = getFolderPrefs();
+    if (prefs.pinned.includes(id)) saveFolderPrefs({ pinned: prefs.pinned.filter(pinnedId => pinnedId !== id) });
     await refreshPoolCache();
     log('Folder deleted', id);
+}
+
+/**
+ * Move every reference from folder `sourceId` into `targetId` and delete the
+ * source folder. Returns the number of affected references.
+ */
+export async function mergeFolders(sourceId, targetId) {
+    if (!sourceId || !targetId || sourceId === targetId) return 0;
+    const folders = await listFolders();
+    if (!folders.some(folder => folder.id === sourceId) || !folders.some(folder => folder.id === targetId)) return 0;
+    const refs = await listRefs();
+    const store = await requireSharedStore();
+    let affected = 0;
+    for (const ref of refs) {
+        if (!Array.isArray(ref.folders) || !ref.folders.includes(sourceId)) continue;
+        const next = uniqueStrings([...ref.folders.filter(folderId => folderId !== sourceId), targetId]);
+        await store.update('refs', ref.id, normalizePoolReference({ ...ref, folders: next }));
+        affected += 1;
+    }
+    await store.delete('ref-folders', sourceId);
+    const prefs = getFolderPrefs();
+    if (prefs.pinned.includes(sourceId)) {
+        saveFolderPrefs({ pinned: prefs.pinned.filter(pinnedId => pinnedId !== sourceId) });
+    }
+    await refreshPoolCache();
+    log('Folder merged', sourceId, '→', targetId, `(${affected} refs)`);
+    return affected;
+}
+
+// ── Folder preferences (sidebar UI state) ──
+// Pinned/sort/hideEmpty are DEVICE-LOCAL UI state and deliberately stay out of
+// data-port PORTABLE_KEYS: pinning «Мама» на другом устройстве не переносится,
+// зато не ломается merge-импорт, который юнионит refs/folders по id.
+
+const FOLDER_PREFS_KEY = 'folderPrefs';
+export const FOLDER_PREFS_MAX_PINNED = 12;
+export const FOLDER_SORT_MODES = ['manual', 'name', 'count'];
+
+/** Normalize persisted folder prefs: unknown sort → manual, pinned — unique ids, capped. */
+export function normalizeFolderPrefs(data = {}) {
+    return {
+        pinned: uniqueStrings(Array.isArray(data.pinned) ? data.pinned : []).slice(0, FOLDER_PREFS_MAX_PINNED),
+        sort: FOLDER_SORT_MODES.includes(data.sort) ? data.sort : 'manual',
+        hideEmpty: data.hideEmpty === true,
+    };
+}
+
+export function getFolderPrefs() {
+    const raw = imageSettings()[FOLDER_PREFS_KEY];
+    return normalizeFolderPrefs(raw && typeof raw === 'object' ? raw : {});
+}
+
+export function saveFolderPrefs(patch = {}) {
+    const next = normalizeFolderPrefs({ ...getFolderPrefs(), ...patch });
+    imageSettings()[FOLDER_PREFS_KEY] = next;
+    saveSettings();
+    return next;
 }
 
 // ── Chat binding (chatMetadata.uris_binding.refs) ──

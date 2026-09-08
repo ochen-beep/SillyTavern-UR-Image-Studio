@@ -9,6 +9,7 @@ import {
     listRefs, getRef, updateRef, deleteRef,
     listFolders, createFolder, updateFolder, deleteFolder, FOLDER_COLOR_PALETTE,
     filterRefsByFolder, refreshPoolCache, getRefSync,
+    getFolderPrefs, saveFolderPrefs,
 } from '../refs-library.js';
 
 import { ingestReferenceImage } from '../references.js';
@@ -18,6 +19,10 @@ import { showSingleImage } from './lightbox.js';
 import { refreshActive, getActiveTab } from './tabs.js';
 import { lockBodyScroll, unlockBodyScroll } from './window.js';
 import { recordUrisError } from '../error-pool.js';
+import {
+    createFolderField, openFolderSheet, orderSidebarFolders, nextFolderSortMode, filterFolders,
+} from './folder-picker.js';
+import { showFolderManager } from './folder-manager.js';
 
 // Layout state
 let _activeFolderFilter = 'all';
@@ -26,6 +31,7 @@ let _editingRefId = null;
 let _cw = 600;
 let _ro = null;
 let _mobileSearchQuery = '';
+let _folderSearchQuery = '';
 
 // Mobile stack breakpoint — measured against the TAB CONTAINER (root.clientWidth),
 // not window.innerWidth (unlike CSS media @media (max-width: 768px)). The axes are
@@ -39,6 +45,7 @@ export function render(root) {
     root.classList.add('uris-body-flush');
     _mobileScreen = 'folders';
     _mobileSearchQuery = '';
+    _folderSearchQuery = '';
     // A full tab re-entry must not inherit a stale editor session: close any
     // open reference/folder editor overlay so the grid renders clean.
     _editingRefId = null;
@@ -103,9 +110,31 @@ async function _renderAll(root) {
 }
 
 // ── Sidebar ──
+// Поиск + секции (Избранное/Папки) + сортировка/скрытие пустых переживают
+// списки в 50+ папок. Инпут поиска живёт ВНЕ перерисовываемого списка:
+// _renderFolderList обновляет только строки, иначе каретка прыгает (см.
+// комментарий про caret в _renderMobileGrid).
 function _renderSidebar(root, folders, refs) {
     const host = root.querySelector('#urisRefsSidebar');
     if (!host) return;
+    host.innerHTML = `
+        <div class="uris-folder-search">
+            <input type="text" class="uris-folder-search-input" placeholder="Поиск папок…"
+                value="${escapeHtml(_folderSearchQuery)}" aria-label="Поиск папок" autocomplete="off">
+        </div>
+        <div class="uris-folder-list" id="urisFolderList"></div>`;
+    _renderFolderList(root, folders, refs);
+    host.querySelector('.uris-folder-search-input')?.addEventListener('input', (e) => {
+        _folderSearchQuery = e.target.value || '';
+        _renderFolderList(root, folders, refs);
+    });
+}
+
+function _renderFolderList(root, folders, refs) {
+    const host = root.querySelector('#urisFolderList');
+    if (!host) return;
+    const prefs = getFolderPrefs();
+    const query = _folderSearchQuery.trim().toLowerCase();
     const countAll = refs.length;
     const countNone = filterRefsByFolder(refs, 'none').length;
     const itemHtml = (folderId, label, count, dotColor) => `
@@ -132,27 +161,78 @@ function _renderSidebar(root, folders, refs) {
                 </div>
             </div>`;
     };
-    const folderRows = folders.map(f => `
+    const countById = new Map(folders.map(f => [f.id, filterRefsByFolder(refs, f.id).length]));
+    const pinnedSet = new Set(prefs.pinned);
+    let visible = orderSidebarFolders(folders, { pinnedIds: prefs.pinned, sort: prefs.sort, countById });
+    // «Скрывать пустые» не действует в поиске: ищут, чтобы найти любую папку.
+    if (prefs.hideEmpty && !query) visible = visible.filter(f => (countById.get(f.id) || 0) > 0);
+    if (query) visible = filterFolders(visible, query);
+
+    const rowsHtml = (list) => list.map(f => `
         <div class="uris-folder-row">
-            ${itemHtml(f.id, f.name, filterRefsByFolder(refs, f.id).length, f.color)}
+            ${itemHtml(f.id, f.name, countById.get(f.id) || 0, f.color)}
+            <button class="uris-folder-pin ${pinnedSet.has(f.id) ? 'uris-folder-pin-on' : ''}" type="button"
+                    data-folder-id="${escapeHtml(f.id)}"
+                    title="${pinnedSet.has(f.id) ? 'Убрать из избранного' : 'В избранное'}" aria-label="В избранное"><i class="fa-solid fa-star"></i></button>
             <button class="uris-folder-edit" type="button" data-folder-id="${escapeHtml(f.id)}" title="Изменить папку" aria-label="Изменить папку"><i class="fa-solid fa-pencil"></i></button>
         </div>
         ${editorHtml(f)}`).join('');
-    host.innerHTML = `
-        <div class="uris-folder-list">
-            ${itemHtml('all', 'Все карточки', countAll, null)}
-            ${itemHtml('none', 'Без папки', countNone, null)}
-            <div class="uris-folder-header">
-                <span class="uris-folder-header-label">Папки</span>
+
+    const SORT_UI = {
+        manual: { icon: 'fa-bars', title: 'Сортировка: своя → по имени' },
+        name: { icon: 'fa-arrow-down-a-z', title: 'Сортировка: по имени → по количеству' },
+        count: { icon: 'fa-arrow-down-short-wide', title: 'Сортировка: по количеству → своя' },
+    };
+    const sortUi = SORT_UI[prefs.sort] || SORT_UI.manual;
+    const headerHtml = `
+        <div class="uris-folder-header">
+            <span class="uris-folder-header-label">Папки</span>
+            <span class="uris-folder-tools">
+                <button class="uris-folder-tool" id="urisFolderSortBtn" type="button" title="${escapeHtml(sortUi.title)}" aria-label="Сортировка папок"><i class="fa-solid ${sortUi.icon}"></i></button>
+                <button class="uris-folder-tool" id="urisFolderHideEmptyBtn" type="button" title="${prefs.hideEmpty ? 'Показывать пустые папки' : 'Скрывать пустые папки'}" aria-label="Скрывать пустые папки"><i class="fa-solid ${prefs.hideEmpty ? 'fa-eye-slash' : 'fa-eye'}"></i></button>
+                <button class="uris-folder-tool" id="urisFolderManageBtn" type="button" title="Управление папками" aria-label="Управление папками"><i class="fa-solid fa-folder-tree"></i></button>
                 <button class="uris-folder-header-add" id="urisRefsAddFolderBtn" type="button" title="Создать папку" aria-label="Создать папку"><i class="fa-solid fa-plus"></i></button>
-            </div>
-            ${folderRows}
+            </span>
         </div>`;
+
+    const inSearch = Boolean(query);
+    const pinnedVisible = visible.filter(f => pinnedSet.has(f.id));
+    const restVisible = visible.filter(f => !pinnedSet.has(f.id));
+    host.innerHTML = `
+        ${itemHtml('all', 'Все карточки', countAll, null)}
+        ${itemHtml('none', 'Без папки', countNone, null)}
+        ${!inSearch && pinnedVisible.length ? `<div class="uris-folder-section-label">Избранное</div>${rowsHtml(pinnedVisible)}` : ''}
+        ${!inSearch ? headerHtml : ''}
+        ${inSearch ? rowsHtml(visible) : rowsHtml(restVisible)}
+        ${inSearch && !visible.length ? '<div class="uris-folder-empty">Папки не найдены</div>' : ''}`;
+
     host.querySelectorAll('.uris-folder-item').forEach(btn => {
         btn.addEventListener('click', async () => {
             _activeFolderFilter = btn.dataset.folder;
             await _renderAll(root);
         });
+    });
+    host.querySelectorAll('.uris-folder-pin').forEach(btn => {
+        btn.addEventListener('click', () => {
+            const id = btn.dataset.folderId;
+            const current = getFolderPrefs();
+            const pinned = current.pinned.includes(id)
+                ? current.pinned.filter(pinnedId => pinnedId !== id)
+                : [...current.pinned, id];
+            saveFolderPrefs({ pinned });
+            _renderFolderList(root, folders, refs);
+        });
+    });
+    host.querySelector('#urisFolderSortBtn')?.addEventListener('click', () => {
+        saveFolderPrefs({ sort: nextFolderSortMode(prefs.sort) });
+        _renderFolderList(root, folders, refs);
+    });
+    host.querySelector('#urisFolderHideEmptyBtn')?.addEventListener('click', () => {
+        saveFolderPrefs({ hideEmpty: !prefs.hideEmpty });
+        _renderFolderList(root, folders, refs);
+    });
+    host.querySelector('#urisFolderManageBtn')?.addEventListener('click', () => {
+        showFolderManager({ onChanged: () => { void _renderAll(root); } });
     });
     host.querySelectorAll('.uris-folder-edit').forEach(btn => {
         btn.addEventListener('click', async () => {
@@ -285,14 +365,6 @@ async function _renderOverlay(root, folders) {
     host.setAttribute('aria-modal', 'true');
     host.setAttribute('aria-label', `Редактор референса: ${ref.name || 'Без названия'}`);
     const aliasesStr = (ref.aliases || []).join(', ');
-    const folderToggles = folders.map(f => {
-        const active = (ref.folders || []).includes(f.id);
-        return `<button class="uris-multifolder-toggle ${active ? 'on' : ''}" data-folder-id="${escapeHtml(f.id)}">
-            <span class="uris-folder-dot" style="background:${escapeHtml(f.color)}"></span>
-            <span class="uris-multifolder-name">${escapeHtml(f.name)}</span>
-            ${active ? '<span class="uris-multifolder-check">✓</span>' : ''}
-        </button>`;
-    }).join('');
     host.innerHTML = `
         <div class="uris-refs-overlay-panel">
             <div class="uris-refs-overlay-head">
@@ -321,7 +393,7 @@ async function _renderOverlay(root, folders) {
                 <label class="uris-ed-check"><input type="checkbox" class="uris-ed-binding-mode" ${ref.bindingMode === 'description' ? 'checked' : ''}> Только описание</label>
                 <small class="uris-hint">Без картинки в генерацию попадёт только это описание.</small>
                 <label class="uris-ed-label">Папки</label>
-                <div class="uris-multifolder-grid">${folderToggles || '<small class="uris-hint">Нет папок</small>'}</div>
+                <div class="uris-fp-host"></div>
                 <div class="uris-ed-autosave" aria-live="polite">Автосохранение</div>
                 <button class="uris-btn uris-btn-ghost uris-ed-del"><i class="fa-solid fa-trash"></i> Удалить карточку</button>
             </div>
@@ -332,9 +404,11 @@ async function _renderOverlay(root, folders) {
 function _bindOverlay(root, host, ref, folders) {
     _bindEditorBody(root, host.querySelector('.uris-refs-overlay-body'), ref, folders, {
         onFolderChange: async () => {
-            await _renderOverlay(root, folders);
-            _renderSidebar(root, folders, await listRefs());
-            _renderGrid(root, folders);
+            // Свежий список папок: шит поля мог создать новую папку.
+            const freshFolders = await listFolders();
+            await _renderOverlay(root, freshFolders);
+            _renderSidebar(root, freshFolders, await listRefs());
+            _renderGrid(root, freshFolders);
         },
     });
     host.querySelector('.uris-refs-overlay-close')?.addEventListener('click', async () => {
@@ -360,7 +434,8 @@ async function _renderMobileFolders(root) {
     const host = root.querySelector('#urisMobileScreen');
     if (!host) return;
     const [folders, refs] = await Promise.all([listFolders(), listRefs()]);
-    const noFolder = filterRefsByFolder(refs, 'none');
+    const prefs = getFolderPrefs();
+    const countById = new Map(folders.map(f => [f.id, filterRefsByFolder(refs, f.id).length]));
     const previewDots = (rs) => rs.slice(0, 3).map(r =>
         `<span class="uris-mobile-folder-thumb" style="background-image:url('${escapeHtml(r.imagePath)}')"></span>`
     ).join('');
@@ -368,9 +443,24 @@ async function _renderMobileFolders(root) {
         <div class="uris-mobile-toolbar">
             <button class="uris-mobile-add-folder">+ Создать папку</button>
             <button class="uris-mobile-add-ref"><i class="fa-solid fa-plus"></i> Референс</button>
+            <button class="uris-mobile-manage" title="Управление папками" aria-label="Управление папками"><i class="fa-solid fa-folder-tree"></i></button>
             <input type="file" class="uris-ref-file" accept="image/*" multiple hidden>
         </div>
-        <div class="uris-mobile-list">
+        <div class="uris-mobile-search-wrap">
+            <input class="uris-mobile-folder-search" type="search" value="${escapeHtml(_folderSearchQuery)}"
+                placeholder="Поиск папок..." autocomplete="off" aria-label="Поиск папок">
+        </div>
+        <div class="uris-mobile-list" id="urisMobileFolderList"></div>`;
+
+    // Список папок перерисовывается отдельно от инпута поиска — каретка на месте.
+    const renderList = () => {
+        const listHost = host.querySelector('#urisMobileFolderList');
+        if (!listHost) return;
+        const query = _folderSearchQuery.trim().toLowerCase();
+        let ordered = orderSidebarFolders(folders, { pinnedIds: prefs.pinned, sort: prefs.sort, countById });
+        if (query) ordered = filterFolders(ordered, query);
+        const noFolder = filterRefsByFolder(refs, 'none');
+        listHost.innerHTML = `
             <button class="uris-mobile-folder-item" data-folder="all">
                 <span class="uris-mobile-folder-icon">◈</span>
                 <span class="uris-mobile-folder-name">Все карточки</span>
@@ -385,7 +475,7 @@ async function _renderMobileFolders(root) {
                 <span class="uris-mobile-folder-previews">${previewDots(noFolder)}</span>
                 <span class="uris-mobile-folder-arrow">›</span>
             </button>
-            ${folders.map(f => {
+            ${ordered.map(f => {
                 const inFolder = filterRefsByFolder(refs, f.id);
                 return `<button class="uris-mobile-folder-item" data-folder="${escapeHtml(f.id)}">
                     <span class="uris-folder-dot" style="background:${escapeHtml(f.color)}"></span>
@@ -395,13 +485,23 @@ async function _renderMobileFolders(root) {
                     <span class="uris-mobile-folder-arrow">›</span>
                 </button>`;
             }).join('')}
-        </div>`;
-    host.querySelectorAll('.uris-mobile-folder-item').forEach(btn => {
-        btn.addEventListener('click', () => {
-            _activeFolderFilter = btn.dataset.folder;
-            _mobileScreen = 'grid';
-            _renderMobileAll(root);
+            ${query && !ordered.length ? '<div class="uris-refs-empty">Папки не найдены</div>' : ''}`;
+        listHost.querySelectorAll('.uris-mobile-folder-item').forEach(btn => {
+            btn.addEventListener('click', () => {
+                _activeFolderFilter = btn.dataset.folder;
+                _mobileScreen = 'grid';
+                _renderMobileAll(root);
+            });
         });
+    };
+    renderList();
+
+    host.querySelector('.uris-mobile-folder-search')?.addEventListener('input', (e) => {
+        _folderSearchQuery = e.target.value || '';
+        renderList();
+    });
+    host.querySelector('.uris-mobile-manage')?.addEventListener('click', () => {
+        showFolderManager({ onChanged: () => { void _renderMobileAll(root); } });
     });
     host.querySelector('.uris-mobile-add-folder')?.addEventListener('click', async () => {
         const name = await showInputModal('Имя папки:', 'Новая папка');
@@ -503,14 +603,6 @@ async function _renderMobileCard(root) {
         <div class="uris-mobile-card-scroll" id="urisMobileCardBody"></div>`;
     const body = host.querySelector('#urisMobileCardBody');
     const aliasesStr = (ref.aliases || []).join(', ');
-    const folderToggles = folders.map(f => {
-        const active = (ref.folders || []).includes(f.id);
-        return `<button class="uris-multifolder-toggle ${active ? 'on' : ''}" data-folder-id="${escapeHtml(f.id)}">
-            <span class="uris-folder-dot" style="background:${escapeHtml(f.color)}"></span>
-            <span class="uris-multifolder-name">${escapeHtml(f.name)}</span>
-            ${active ? '<span class="uris-multifolder-check">✓</span>' : ''}
-        </button>`;
-    }).join('');
     body.innerHTML = `
         <div class="uris-editor-preview-wrap">
             <button type="button" class="uris-editor-preview-btn" title="Открыть на весь экран" aria-label="Открыть на весь экран">
@@ -532,7 +624,7 @@ async function _renderMobileCard(root) {
         <label class="uris-ed-check"><input type="checkbox" class="uris-ed-binding-mode" ${ref.bindingMode === 'description' ? 'checked' : ''}> Только описание</label>
         <small class="uris-hint">Без картинки в генерацию попадёт только это описание.</small>
         <label class="uris-ed-label">Папки</label>
-        <div class="uris-multifolder-grid">${folderToggles || '<small class="uris-hint">Нет папок</small>'}</div>
+        <div class="uris-fp-host"></div>
         <div class="uris-ed-autosave" aria-live="polite">Автосохранение</div>
         <button class="uris-btn uris-btn-ghost uris-ed-del"><i class="fa-solid fa-trash"></i> Удалить</button>`;
     _bindEditorBody(root, body, ref, folders, { onFolderChange: () => _renderMobileCard(root) });
@@ -591,16 +683,22 @@ function _bindEditorBody(root, host, ref, folders, opts = {}) {
     aliasesInput.addEventListener('change', saveBasic);
     descInput.addEventListener('change', saveBasic);
 
-    host.querySelectorAll('.uris-multifolder-toggle').forEach(btn => {
-        btn.addEventListener('click', async () => {
-            const fid = btn.dataset.folderId;
-            const current = await getRef(ref.id);
-            const set = new Set(current.folders || []);
-            if (set.has(fid)) set.delete(fid); else set.add(fid);
-            await updateRef(ref.id, { folders: [...set] });
-            opts.onFolderChange?.();
+    // Папки: чипы выбранных + «+ Папка» с листом-поиском (folder-picker.js).
+    // Каждая смена применяется сразу, как остальные поля карточки; шит живёт
+    // на document.body и переживает ре-рендер редактора под ним.
+    const fpHost = host.querySelector('.uris-fp-host');
+    if (fpHost) {
+        const field = createFolderField({
+            folders,
+            selected: ref.folders || [],
+            onCreate: (name) => createFolder(name),
+            onChange: async (ids) => {
+                await updateRef(ref.id, { folders: ids });
+                opts.onFolderChange?.();
+            },
         });
-    });
+        fpHost.appendChild(field.el);
+    }
 
     host.querySelector('.uris-ed-replace')?.addEventListener('click', () =>
         host.querySelector('.uris-ed-file')?.click());
@@ -674,13 +772,24 @@ function _bindMobileAddRef(host, root) {
 
 // ── Pool picker overlay (multi/single) ──
 
-function folderChipsHtml(folders, activeFilter) {
+/**
+ * Чипы фильтра пикера: Все/Без папки + избранное (до 5) + «Все папки ▾».
+ * При 50+ папок лента всех чипов превращалась в бесконечный скролл — полный
+ * список теперь живёт в шите с поиском (openFolderSheet pick-one). Активная
+ * папка вне избранного показывается чипом, чтобы было видно текущий фильтр.
+ */
+function pickerChipsHtml(folders, activeFilter) {
     const chip = (folder, label) =>
         `<span class="uris-folder-chip ${activeFilter === folder ? 'uris-folder-chip-on' : ''}" data-folder="${folder}">${escapeHtml(label)}</span>`;
+    const prefs = getFolderPrefs();
+    const byId = new Map(folders.map(f => [f.id, f]));
+    const favorites = prefs.pinned.filter(id => byId.has(id)).slice(0, 5);
     let html = chip('all', 'Все') + chip('none', 'Без папки');
-    for (const f of folders) {
-        html += chip(f.id, f.name);
+    if (activeFilter !== 'all' && activeFilter !== 'none' && byId.has(activeFilter) && !favorites.includes(activeFilter)) {
+        html += chip(activeFilter, byId.get(activeFilter).name);
     }
+    for (const id of favorites) html += chip(id, byId.get(id).name);
+    html += `<span class="uris-folder-chip uris-picker-more" data-picker-more="1" title="Выбрать папку">Все папки <i class="fa-solid fa-caret-down"></i></span>`;
     return html;
 }
 
@@ -728,12 +837,25 @@ export async function showPoolPicker({ title = 'Выберите референ�
         const renderFolders = () => {
             const fc = overlay.querySelector('#urisPickerFolders');
             if (!fc) return;
-            fc.innerHTML = folderChipsHtml(folders, pickerFilter);
+            fc.innerHTML = pickerChipsHtml(folders, pickerFilter);
             fc.querySelectorAll('.uris-folder-chip').forEach(chip => {
+                if (!chip.dataset.folder) return; // чип «Все папки» биндится ниже
                 chip.addEventListener('click', () => {
                     pickerFilter = chip.dataset.folder;
                     renderFolders();
                     renderGrid();
+                });
+            });
+            fc.querySelector('.uris-picker-more')?.addEventListener('click', () => {
+                openFolderSheet({
+                    title: 'Фильтр по папке',
+                    mode: 'pick-one',
+                    folders,
+                    onPick: (folder) => {
+                        pickerFilter = folder.id;
+                        renderFolders();
+                        renderGrid();
+                    },
                 });
             });
         };
