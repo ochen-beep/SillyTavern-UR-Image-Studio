@@ -63,5 +63,7 @@ test('пресеты кропа: 3:4 соответствует тайлам п�
     const { CROP_PRESETS } = await import('../src/ui/crop-dialog.js');
     assert.equal(CROP_PRESETS.length, 3);
     assert.equal(CROP_PRESETS[0].ratio, null, 'первый пресет — свободный');
-    assert.ok(Math.abs(CROP_PRESETS[2].ratio - 0.75) < 1e-9, '3:4 — вертикальные тайлы пула');
+    // Croppr трактует aspectRatio как высота/ширина (height = width × ratio),
+    // поэтому портретный 3:4 — это 4/3, иначе пресет даёт альбомную рамку.
+    assert.ok(Math.abs(CROP_PRESETS[2].ratio - 4 / 3) < 1e-9, '3:4 (портрет) = 4/3 в конвенции Croppr');
 });

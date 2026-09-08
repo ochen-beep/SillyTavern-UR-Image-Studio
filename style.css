@@ -1297,9 +1297,12 @@
 .uris-ed-desc { resize: vertical; min-height: 72px; }
 .uris-editor-preview-wrap { position: relative; margin-bottom: 8px; }
 .uris-editor-preview-wrap .uris-editor-preview { margin-bottom: 0; }
-.uris-editor-preview-wrap .uris-ed-replace {
+/* Обрезка / замена поверх нижнего угла превью. */
+.uris-editor-preview-actions {
     position: absolute; right: 8px; bottom: 8px;
+    display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end;
 }
+.uris-editor-preview-actions .uris-btn { min-height: 30px; padding: 4px 9px; }
 /* Кнопка-обёртка превью: тап открывает просмотрщик на весь экран. */
 .uris-editor-preview-btn {
     display: block; width: 100%; padding: 0; margin: 0 0 8px; border: 0; background: none;
@@ -2241,3 +2244,25 @@ div.pswp__img--placeholder,
     padding: 6px; font-size: var(--uris-font);
 }
 .uris-batch-crop:hover { color: var(--uris-text-strong); }
+
+/* ── Меню копирования текстовых полей (gallery-actions.copyItemText) ──
+   uris-crop-overlay задаёт z-index 100100 — меню открывается и поверх
+   открытого PhotoSwipe-просмотрщика. */
+.uris-copy-menu { max-width: min(92vw, 480px); }
+.uris-copy-list {
+    display: flex; flex-direction: column; gap: 6px;
+    max-height: 60vh; max-height: 60dvh; overflow-y: auto;
+    touch-action: pan-y;
+}
+.uris-copy-field {
+    display: flex; flex-direction: column; gap: 2px; text-align: left;
+    padding: 10px 12px; border: 1px solid var(--uris-border-soft);
+    border-radius: 8px; background: var(--uris-surface-btn);
+    cursor: pointer; color: var(--uris-text-strong); font: inherit;
+}
+.uris-copy-field:hover { border-color: var(--uris-accent, var(--uris-border)); }
+.uris-copy-field-label { font-weight: 600; font-size: var(--uris-font); }
+.uris-copy-field-snippet {
+    opacity: .7; font-size: var(--uris-font-xs);
+    overflow-wrap: anywhere; white-space: normal;
+}

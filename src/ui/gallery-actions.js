@@ -4,8 +4,9 @@
  * (tab-gallery.js) and the lightbox (lightbox.js). Extracted from tab-gallery.js
  * to avoid duplication and keep a single source of truth.
  */
-import { getCtx, showConfirmModal, showInputModal, log, saveSettings, abortGeneration } from '../core.js';
+import { getCtx, showConfirmModal, showInputModal, log, saveSettings, abortGeneration, escapeHtml } from '../core.js';
 import { setStatus } from './window.js';
+import { lockBodyScroll, unlockBodyScroll } from './window.js';
 import { deleteGalleryCard } from '../storage.js';
 import { runStage2 } from '../pipeline.js';
 import { createRef, createReferenceFromGalleryCard, listRefs, updateRef } from '../refs-library.js';
@@ -15,14 +16,85 @@ import { recordUrisError } from '../error-pool.js';
 
 import { canonicalizeNativeImagePath } from '../native-image-path.js';
 
-export async function copyPrompt(item) {
-    try {
-        await navigator.clipboard.writeText(item.prompt || '');
-        toastr?.success('Промпт скопирован');
-    } catch (err) {
-        recordUrisError({ scope: 'Галерея', message: `Не удалось скопировать: ${err?.message || err}` });
-        toastr?.error('Не удалось скопировать');
+/**
+ * Текстовые поля сущности, доступные для копирования. Порядок = порядок в
+ * меню копирования: у карточки галереи это промпт/негатив/стиль, у референса —
+ * описание, aliases и имя. Пустые поля не попадают в список.
+ */
+export function textFieldsFor(item) {
+    const fields = [];
+    if (item?.prompt) fields.push({ label: 'Промпт', text: item.prompt });
+    if (item?.negativePrompt) fields.push({ label: 'Негативный промпт', text: item.negativePrompt });
+    if (item?.style) fields.push({ label: 'Стиль', text: item.style });
+    if (item?.description) fields.push({ label: 'Описание', text: item.description });
+    if (Array.isArray(item?.aliases) && item.aliases.length) fields.push({ label: 'Aliases', text: item.aliases.join(', ') });
+    if (item?.name) fields.push({ label: 'Имя', text: item.name });
+    return fields;
+}
+
+/**
+ * Копирование текста сущности: одно поле — мгновенно, несколько — меню выбора.
+ * Меню открывается и поверх просмотрщика (z-index 100100).
+ */
+export async function copyItemText(item, deps = {}) {
+    const fields = textFieldsFor(item);
+    if (!fields.length) {
+        toastr?.info('Нет текста для копирования');
+        return;
     }
+    const write = deps.write || (navigator?.clipboard ? navigator.clipboard.writeText.bind(navigator.clipboard) : null);
+    const writeWithFeedback = async (field) => {
+        try {
+            await write(field.text);
+            toastr?.success(`Скопировано: ${field.label}`);
+        } catch (err) {
+            recordUrisError({ scope: 'Копирование', message: String(err?.message || err) });
+            toastr?.error('Не удалось скопировать');
+        }
+    };
+    if (fields.length === 1) return writeWithFeedback(fields[0]);
+
+    return new Promise(resolve => {
+        const overlay = document.createElement('div');
+        overlay.className = 'uris-picker-overlay uris-crop-overlay';
+        overlay.setAttribute('role', 'dialog');
+        overlay.setAttribute('aria-modal', 'true');
+        overlay.setAttribute('aria-label', 'Копировать текст');
+        overlay.innerHTML = `
+            <div class="uris-picker-dialog uris-copy-menu">
+                <h4>Копировать текст</h4>
+                <div class="uris-copy-list">
+                    ${fields.map((field, i) => `
+                        <button type="button" class="uris-copy-field" data-i="${i}">
+                            <span class="uris-copy-field-label">${escapeHtml(field.label)}</span>
+                            <small class="uris-copy-field-snippet">${escapeHtml(field.text.length > 80 ? field.text.slice(0, 80) + '…' : field.text)}</small>
+                        </button>`).join('')}
+                </div>
+                <div class="uris-picker-actions">
+                    <button type="button" class="uris-btn uris-btn-ghost uris-copy-cancel">Отмена</button>
+                </div>
+            </div>`;
+        document.body.appendChild(overlay);
+        lockBodyScroll();
+
+        const close = () => {
+            document.removeEventListener('keydown', onKey, true);
+            overlay.parentNode?.removeChild(overlay);
+            unlockBodyScroll();
+        };
+        const onKey = (e) => { if (e.key === 'Escape') { e.stopPropagation(); close(null); } };
+        document.addEventListener('keydown', onKey, true);
+
+        overlay.querySelector('.uris-copy-cancel').addEventListener('click', () => close(null));
+        overlay.querySelectorAll('.uris-copy-field').forEach(btn => {
+            btn.addEventListener('click', async () => {
+                const field = fields[Number(btn.dataset.i)];
+                close();
+                if (field) await writeWithFeedback(field);
+                resolve(field ?? null);
+            });
+        });
+    });
 }
 
 export async function saveAsReference(item) {

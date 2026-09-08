@@ -19,7 +19,9 @@
 export const CROP_PRESETS = [
     { id: 'free', label: 'Свободно', ratio: null },
     { id: '1:1', label: '1:1', ratio: 1 },
-    { id: '3:4', label: '3:4', ratio: 3 / 4 },  // пул рендерит тайлы 3:4
+    // ВАЖНО: Croppr трактует aspectRatio как высота/ширина (constrainToRatio
+    // делает height = width × ratio), поэтому портретный 3:4 — это 4/3.
+    { id: '3:4', label: '3:4', ratio: 4 / 3 },  // пул рендерит тайлы 3:4
 ];
 
 /**
@@ -100,7 +102,7 @@ export async function openCropDialog(opts = {}) {
         try { croppr?.destroy(); } catch { /* already torn down */ }
         croppr = null;
         normalized.revoke();
-        overlay.remove();
+        overlay.parentNode?.removeChild(overlay);
         unlockBodyScroll();
     };
     const onKey = (e) => {
@@ -132,10 +134,43 @@ export async function openCropDialog(opts = {}) {
         try { croppr?.destroy(); } catch { /* first build */ }
         croppr = null;
         const { default: Croppr } = await import('../vendor/croppr.esm.js');
-        croppr = new Croppr(imgEl, {
+        const instance = new Croppr(imgEl, {
             aspectRatio: preset.ratio ?? undefined,
-            startSize: [70, '%'],
+            // Формат [width, height, unit?]: [70, '%'] парсится как
+            // width=70, height='%'-строка → NaN-размеры → вырожденная рамка 1×1.
+            startSize: [70, 70],
         });
+        croppr = instance;
+        // Croppr clones the anchor <img> and freezes startSize in pixels from
+        // the clone's layout at construction time — the clone has neither
+        // loaded nor laid out yet, so everything degenerates to 1×1.
+        // Once the clone is loaded AND laid out, restore startSize to % (the
+        // vendored convertToPixels is one-shot: it deletes the unit flag),
+        // re-convert against the real layout and rebuild the box via reset().
+        const syncBox = () => {
+            if (croppr !== instance) return;  // preset switched meanwhile
+            try {
+                instance.options.startSize = { width: 70, height: 70, unit: '%' };
+                instance.options.convertToPixels(instance.cropperEl);
+                instance.reset();
+            } catch { /* torn down */ }
+        };
+        // Раскладка и загрузка клона догоняют конструктор с задержкой:
+        // повторяем до появления ненулевого контейнера (≈10 кадров).
+        const trySync = (attempt = 0) => {
+            if (croppr !== instance) return;
+            const container = instance.cropperEl;
+            if (container && container.offsetWidth && container.offsetHeight) {
+                syncBox();
+                return;
+            }
+            if (attempt < 10 && typeof requestAnimationFrame === 'function') {
+                requestAnimationFrame(() => trySync(attempt + 1));
+            }
+        };
+        const inner = instance.imageEl;
+        if (inner && !inner.complete) inner.addEventListener('load', () => trySync(), { once: true });
+        else trySync();
     };
 
     try {
@@ -150,6 +185,12 @@ export async function openCropDialog(opts = {}) {
             try {
                 const value = croppr.getValue('real');
                 const region = clampCropRegion(value, imgEl.naturalWidth, imgEl.naturalHeight);
+                if (region.width < 2 || region.height < 2) {
+                    // Рамка не успела инициализироваться (картинка не загружена) —
+                    // осмысленный кроп невозможен, не отдаём 1×1 blob.
+                    toastr?.error?.('Область кропа ещё не инициализировалась — попробуйте ещё раз', 'UR Image Studio');
+                    return;
+                }
                 const canvas = document.createElement('canvas');
                 canvas.width = region.width;
                 canvas.height = region.height;

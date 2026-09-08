@@ -65,7 +65,7 @@ function card(it, i) {
         <button type="button" class="uris-card-img" data-act="view" title="Просмотр" aria-label="Просмотр"><img src="${escapeHtml(src)}" alt="" loading="lazy" decoding="async"${dims}>${badge}</button>
         <div class="uris-card-actions">
             <button class="uris-card-btn" data-act="regen" title="Перегенерировать" aria-label="Перегенерировать"><i class="fa-solid fa-rotate-right"></i></button>
-            <button class="uris-card-btn" data-act="copy" title="Копировать промпт" aria-label="Копировать промпт"><i class="fa-solid fa-copy"></i></button>
+            <button class="uris-card-btn" data-act="copy" title="Копировать текст" aria-label="Копировать текст"><i class="fa-solid fa-copy"></i></button>
             ${gotoBtn}
             <button class="uris-card-btn" data-act="saveRef" title="Сохранить как референс" aria-label="Сохранить как референс"><i class="fa-solid fa-bookmark"></i></button>
             <button class="uris-card-btn" data-act="del" title="Удалить" aria-label="Удалить"><i class="fa-solid fa-trash"></i></button>
@@ -127,7 +127,7 @@ function emptyState() {
 // элементы: смешение их давало «root is not defined» на клике по картинке
 // (обработчики молча падали с ReferenceError — просмотр не открывался).
 async function bindCards(scopeEl, root, items, chatId, from = 0, to = items.length) {
-    const { copyPrompt, saveAsReference, regenerate, deleteImage } = await import('./gallery-actions.js');
+    const { copyItemText, saveAsReference, regenerate, deleteImage } = await import('./gallery-actions.js');
     scopeEl.querySelectorAll('.uris-card').forEach(cardEl => {
         const idx = parseInt(cardEl.dataset.idx, 10);
         if (idx < from || idx >= to) return;       // outside this chunk
@@ -139,7 +139,7 @@ async function bindCards(scopeEl, root, items, chatId, from = 0, to = items.leng
             e.stopPropagation(); _viewer.showLightbox(items, idx, { chatId, root });
         });
         cardEl.querySelector('[data-act="copy"]')?.addEventListener('click', async (e) => {
-            e.stopPropagation(); await copyPrompt(it());
+            e.stopPropagation(); await copyItemText(it());
         });
         cardEl.querySelector('[data-act="regen"]')?.addEventListener('click', async (e) => {
             e.stopPropagation();

@@ -304,7 +304,10 @@ async function _renderOverlay(root, folders) {
                     <button type="button" class="uris-editor-preview-btn" title="Открыть на весь экран" aria-label="Открыть на весь экран">
                         <img src="${escapeHtml(ref.imagePath)}" class="uris-editor-preview" alt="">
                     </button>
-                    <button class="uris-btn uris-btn-subtle uris-ed-replace"><i class="fa-solid fa-image"></i> Заменить картинку</button>
+                    <div class="uris-editor-preview-actions">
+                        <button class="uris-btn uris-btn-subtle uris-ed-crop"><i class="fa-solid fa-crop-simple"></i> Обрезать</button>
+                        <button class="uris-btn uris-btn-subtle uris-ed-replace"><i class="fa-solid fa-image"></i> Заменить картинку</button>
+                    </div>
                 </div>
                 <input type="file" class="uris-ed-file" accept="image/*" hidden>
 
@@ -513,7 +516,10 @@ async function _renderMobileCard(root) {
             <button type="button" class="uris-editor-preview-btn" title="Открыть на весь экран" aria-label="Открыть на весь экран">
                 <img src="${escapeHtml(ref.imagePath)}" class="uris-editor-preview" alt="">
             </button>
-            <button class="uris-btn uris-btn-subtle uris-ed-replace"><i class="fa-solid fa-image"></i> Заменить картинку</button>
+            <div class="uris-editor-preview-actions">
+                <button class="uris-btn uris-btn-subtle uris-ed-crop"><i class="fa-solid fa-crop-simple"></i> Обрезать</button>
+                <button class="uris-btn uris-btn-subtle uris-ed-replace"><i class="fa-solid fa-image"></i> Заменить картинку</button>
+            </div>
         </div>
         <input type="file" class="uris-ed-file" accept="image/*" hidden>
         <label class="uris-ed-label">Имя</label>
@@ -542,14 +548,17 @@ function _bindEditorBody(root, host, ref, folders, opts = {}) {
     const aliasesInput = host.querySelector('.uris-ed-aliases');
     const descInput = host.querySelector('.uris-ed-desc');
     const bindingModeInput = host.querySelector('.uris-ed-binding-mode');
-    // Превью — тоже «картинка по клику»: полный экран с зумом (Galaxy-зум
-    // PhotoSwipe), без привязки к сетке — анимация fade.
+    // Превью — тоже «картинка по клику»: полный экран с зумом (PhotoSwipe),
+    // без привязки к сетке — анимация fade. Текстовые поля референса едут
+    // вместе с ним в меню копирования.
     host.querySelector('.uris-editor-preview-btn')?.addEventListener('click', () => {
         showSingleImage({
             src: ref.imagePath,
             width: ref.width,
             height: ref.height,
-            prompt: ref.description || ref.name || '',
+            name: ref.name,
+            aliases: ref.aliases,
+            description: ref.description,
         });
     });
     // Text fields (name/aliases/desc) persist on change (blur/commit); folders
@@ -592,6 +601,28 @@ function _bindEditorBody(root, host, ref, folders, opts = {}) {
 
     host.querySelector('.uris-ed-replace')?.addEventListener('click', () =>
         host.querySelector('.uris-ed-file')?.click());
+
+    // Кроп ТЕКУЩЕЙ картинки референса: результат — новый файл в хранилище
+    // (обрезанные байты ≠ сохранённые), карточка и превью обновляются.
+    host.querySelector('.uris-ed-crop')?.addEventListener('click', async () => {
+        if (!ref.imagePath) return;
+        try {
+            const crop = await openCropDialog({ source: ref.imagePath });
+            if (!crop) return;
+            const optimized = await ingestReferenceImage(crop.blob, `ref_${ref.id}`);
+            try {
+                await updateRef(ref.id, { imagePath: optimized.imagePath, ...optimized.metadata });
+            } catch (mutationError) {
+                throw new Error(`${mutationError.message}; orphaned upload: ${optimized.imagePath}`);
+            }
+            const img = host.querySelector('.uris-editor-preview');
+            if (img) img.src = optimized.imagePath + '?t=' + Date.now();
+            flashSaved();
+        } catch (err) {
+            recordUrisError({ scope: 'Референсы', message: 'Не удалось обрезать: ' + (err?.message || err) });
+            toastr?.error?.('Не удалось обрезать: ' + err.message);
+        }
+    });
     host.querySelector('.uris-ed-file')?.addEventListener('change', async (e) => {
         const file = e.target.files?.[0];
         if (!file) return;
