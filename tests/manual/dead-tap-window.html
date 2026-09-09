@@ -1,0 +1,161 @@
+<!doctype html>
+<!--
+    Зонд «мёртвого тапа» после закрытия просмотрщика: измеряет окно времени,
+    в течение которого тап в точку страницы (карточка сетки) съедается
+    PhotoSwipe, — и проверяет, проходит ли тап сквозь закрывающийся просмотрщик
+    к карточке под ним (реальный click по результату hit-теста).
+
+    Запуск: python -m http.server 8931 → /tests/manual/dead-tap-window.html
+    ?fix=1 — превентивно применить КАНДИДАТ-фикс (hit-transparent .pswp-поддерево)
+    и замерить окно с ним, для сравнения до/после.
+
+    ВАЖНО: запускать в ВИДИМОЙ вкладке. В скрытой/фоновой вкладке браузер
+    замораживает rAF и зажимает setTimeout до ~1 с (стандартное троттлирование
+    фона) — анимация pswp не завершается, миллисекундные замеры врут.
+-->
+<html lang="ru">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>URIS — dead tap window probe</title>
+    <link rel="stylesheet" href="../../style.css">
+    <style>
+        body { margin: 0; background: #1a1a2e; color: #eee; font-family: system-ui, sans-serif; }
+        .probe-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; padding: 12px; }
+        .probe-card { aspect-ratio: 3/4; background: #334; border: 1px solid #556; border-radius: 6px;
+                      display: grid; place-items: center; cursor: pointer; user-select: none; }
+        #probeOut { white-space: pre; font: 12px/1.5 ui-monospace, monospace; padding: 10px; background: #0b0e13; }
+    </style>
+</head>
+<body>
+    <div class="probe-grid" id="probeGrid"></div>
+    <div id="probeOut">инициализация…</div>
+    <script type="module">
+        // rAF в скрытой/фоновой вкладке заморожен (известная беда стендов, см.
+        // CHANGELOG v0.8.5 «мёртвый тап»): анимационный цикл pswp на rAF не
+        // завершается, destroy не наступает. Для зонда заменяем rAF таймерным
+        // шимом с тем же кадром ~16 мс — тайминги замера остаются честными.
+        if (new URLSearchParams(location.search).get('raf') !== 'real') {
+            window.requestAnimationFrame = (fn) => setTimeout(() => fn(performance.now()), 16);
+        }
+
+        // ── ST-стабы (как в refs-real-render.html): showLightbox пробует
+        // размеры карточек через контекст SillyTavern ──
+        const memoryStore = new Map();
+        globalThis.SillyTavern = {
+            getContext: () => ({
+                extensionSettings: {},
+                saveSettingsDebounced: () => {},
+                getRequestHeaders: () => ({}),
+                chatId: 'probe-chat',
+            }),
+            libs: { localforage: {
+                async getItem(key) { return memoryStore.has(key) ? memoryStore.get(key) : []; },
+                async setItem(key, value) { memoryStore.set(key, value); },
+                async removeItem(key) { memoryStore.delete(key); },
+            } },
+        };
+        globalThis.toastr = { info() {}, success() {}, warning() {}, error() {} };
+
+        const { showLightbox } = await import('../../src/ui/lightbox.js');
+        const out = document.getElementById('probeOut');
+        const grid = document.getElementById('probeGrid');
+        const cards = [];
+        for (let i = 0; i < 9; i++) {
+            const card = document.createElement('div');
+            card.className = 'probe-card';
+            card.textContent = `Карточка ${i}`;
+            grid.appendChild(card);
+            cards.push(card);
+            card.addEventListener('click', () => {
+                const src = 'data:image/svg+xml,' + encodeURIComponent(
+                    `<svg xmlns="http://www.w3.org/2000/svg" width="600" height="800"><rect width="600" height="800" fill="#334"/><text x="300" y="410" text-anchor="middle" fill="#fff" font-size="40">${i}</text></svg>`);
+                showLightbox([{ id: `c${i}`, src, width: 600, height: 800, prompt: `img ${i}` }], 0, {});
+            });
+        }
+
+        const fixMode = new URLSearchParams(location.search).get('fix') === '1';
+        if (fixMode) {
+            // Кандидат-фикс: поддерево .pswp прозрачно для hit-testing с момента
+            // закрытия. (В реальном фиксе класс ставится в обработчике 'close' —
+            // синхронно; для замера «после» достаточно безусловного правила.)
+            const s = document.createElement('style');
+            s.textContent = '.pswp, .pswp * { pointer-events: none !important; }';
+            document.head.appendChild(s);
+        }
+
+        const targetCard = cards[0]; // точка пробы — карточка вне центра
+        const probePoint = () => {
+            const r = targetCard.getBoundingClientRect();
+            return { x: r.x + 10, y: r.y + 10 };
+        };
+        const classify = (el) => {
+            if (!el) return 'none';
+            if (el.closest('.pswp')) return 'pswp';
+            if (el.closest('.probe-card')) return 'card';
+            return el.tagName.toLowerCase();
+        };
+
+        const run = async () => {
+            // 1. Открыть просмотрщик по центру.
+            cards[4].click();
+            await new Promise(r => setTimeout(r, 500));
+            if (!document.querySelector('.pswp')) throw new Error('pswp не открылся');
+
+            const samples = [];
+            let tapResult = null;
+            const t0 = performance.now();
+
+            // 2. Программное закрытие (та же ветка pswp.close()) через 16 мс —
+            // штатной кнопкой закрытия (Escape в скрытой вкладке ненадёжен).
+            setTimeout(() => document.querySelector('.pswp__button--close')?.click(), 16);
+
+            // 3. Параллельно — «тап» на 40 мс: реальный hit-тест + click по цели.
+            setTimeout(() => {
+                const p = probePoint();
+                const el = document.elementFromPoint(p.x, p.y);
+                const hit = classify(el);
+                let card = null;
+                if (el) card = el.closest('.probe-card');
+                if (card) card.click();
+                setTimeout(() => {
+                    tapResult = { tapAt: 40, hit, target: classify(el), newPswpAfterTap: !!document.querySelector('.pswp') };
+                }, 150);
+            }, 40);
+
+            // 4. Семплирование hit-теста каждые ~2 кадра до 450 мс.
+            await new Promise(resolve => {
+                const tick = () => {
+                    const t = Math.round(performance.now() - t0);
+                    const p = probePoint();
+                    samples.push([t, classify(document.elementFromPoint(p.x, p.y))]);
+                    if (t < 450) requestAnimationFrame(tick); else resolve();
+                };
+                requestAnimationFrame(tick);
+            });
+            await new Promise(r => setTimeout(r, 200)); // дождаться tapResult
+
+            const pswpSamples = samples.filter(([, c]) => c === 'pswp');
+            const result = {
+                mode: fixMode ? 'FIX' : 'CURRENT',
+                interceptWindow: pswpSamples.length
+                    ? `${pswpSamples[0][0]}…${pswpSamples[pswpSamples.length - 1][0]} мс (${pswpSamples.length} семплов)`
+                    : 'нет — тапы проходят с первого семпла',
+                tapAt40ms: tapResult,
+                pswpDestroyed: !document.querySelector('.pswp'),
+            };
+            window.__probeResult = result;
+            out.textContent = JSON.stringify(result, null, 2) + '\n\nсемплы: ' +
+                samples.map(s => s.join(':')).join(' ');
+        };
+        // Автопрогон для ручного открытия в браузере; ?manual=1 отключает —
+        // для внешней автоматизации, которая управляет циклом сама.
+        if (new URLSearchParams(location.search).get('manual') !== '1') {
+            run().catch(e => {
+                out.textContent = 'ОШИБКА ЗОНДА: ' + String(e && e.message || e).slice(0, 400);
+                window.__probeError = String(e && e.message || e);
+            });
+        }
+    </script>
+</body>
+</html>

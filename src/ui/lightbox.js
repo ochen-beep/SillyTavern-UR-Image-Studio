@@ -98,14 +98,25 @@ export async function showLightbox(items, index = 0, { chatId = null, root = nul
     });
     _active = pswp;
     pswp.on('destroy', () => { if (_active === pswp) _active = null; });
-    // После свайп/pinch-закрытия просмотрщик визуально «уезжает» мгновенно,
-    // а его полноэкранный корень ещё живёт всю closing animation (100 мс —
-    // hideAnimationDuration в опциях выше; вендорный дефолт был 333) и
-    // перехватывает указатели: первый тап пользователя умирал в невидимом
-    // корне (pswp на закрытии делает preventDefault), срабатывал только
-    // второй. Отпускаем тапы к странице с самого начала закрытия.
-    pswp.on('closingAnimationStart', () => {
+    // Мёртвый тап после жестового закрытия: корень .pswp живёт всю closing
+    // animation и перехватывает указатели. Ставить pointer-events:none на
+    // корень (и даже на closingAnimationStart — тот диспатчится из _start()
+    // через setTimeout, тик-два ПОСЛЕ close()) недостаточно: вендорный CSS
+    // ЯВНО возвращает hit-тест потомкам — .pswp__content > * (сама картинка,
+    // крупнейшая область, куда «на автомате» падает следующий тап) и
+    // .pswp--ui-visible .pswp__hide-on-close (верхний бар в момент закрытия).
+    // Инертный элемент без слушателей (вендор снимает их первой же строкой
+    // close()) просто съедает тап. Поэтому на САМОМ раннем событии 'close'
+    // (диспатчится синхронно в pswp.close(), до снятия слушателей и анимации)
+    // делаем всё поддерево прозрачным для hit-теста: корень — inline, дыры
+    // вендора — классом uris-pswp-closing (правила в style.css). Потерь
+    // интерактивности нет: кнопки в окне закрытия всё равно мертвы, а тапы
+    // уходят странице — «нажал на другое, оно открылось сразу»; новый
+    // просмотрщик открывается поверх исчезающего (destroy старого защищён
+    // guard'ом _active === pswp выше).
+    pswp.on('close', () => {
         pswp.element.style.pointerEvents = 'none';
+        pswp.element.classList.add('uris-pswp-closing');
     });
 
     registerActionButtons(pswp, { items, chatId: chatIdResolved, root });
