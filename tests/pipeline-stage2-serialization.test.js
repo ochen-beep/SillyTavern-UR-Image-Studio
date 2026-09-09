@@ -499,3 +499,101 @@ test('external-signal (queue) Stage 2 also registers in activeGenerations and is
         assert.ok(!coreState.activeGenerations.has(requestId), 'controller removed from activeGenerations after cancellation');
     } finally { restore(); }
 });
+
+// ── P1-2 regressions: chain registration covers pre-start aborts; per-chat keying ──
+
+const chainRoute = {
+    source: 'openai-models',
+    modelId: 'gpt-image-1',
+    generationContract: 'openai-images',
+    contractVersion: 1,
+    capabilities: { generate: 'supported', references: 'supported', edit: 'unknown', maxReferences: 5 },
+    transport: { bodyKind: 'json', proxyEligible: true, directCors: 'preferred' },
+};
+
+async function setupChainConnection(connId) {
+    const { createConnection } = await import('../src/connection-store.js');
+    await createConnection({
+        id: connId,
+        kind: 'image',
+        name: `Test ${connId}`,
+        endpoint: 'https://api.openai.test/v1',
+        selectedRoute: chainRoute,
+    });
+    await lfMock.setItem(`uris_api_key:${connId}`, 'test-key');
+}
+
+test('Stop-all cancels a queued (chained) Stage 2 before it starts; it never reaches the provider', async () => {
+    const connId = 'browser-chain-stop-all';
+    await setupChainConnection(connId);
+
+    let fetchCalls = 0;
+    const restore = mockFetch((url, options) => {
+        if (String(url).endsWith('/images/generations')) {
+            fetchCalls += 1;
+            return new Promise((_, reject) => {
+                const sig = options?.signal;
+                sig?.addEventListener('abort', () => reject(Object.assign(new Error('Aborted'), { name: 'AbortError' })), { once: true });
+            });
+        }
+        throw new Error(`unexpected ${url}`);
+    });
+    try {
+        const { runStage2ForDraft } = await import('../src/pipeline-stage2.js');
+        const { abortAllGenerations } = await import('../src/core.js');
+        const input = {
+            chatId: 'test-chat', msgId: 41, messageText: 'A cat.', templateId: null,
+            chatConfig: { imageProfileId: connId, templateId: null, imageRoute: chainRoute },
+        };
+
+        // First click starts the run; second click queues into the per-post chain.
+        const first = runStage2ForDraft(input, undefined, undefined, { instruction: instr });
+        const second = runStage2ForDraft({ ...input }, undefined, undefined, { instruction: instr });
+        await new Promise(r => setTimeout(r, 30));
+
+        // "Stop stops everything": every registered controller is aborted — the
+        // queued run must already be registered (before its chain wait), so the
+        // pre-fix bug (it started and paid after the first was cancelled) is gone.
+        abortAllGenerations();
+
+        await assert.rejects(first, e => e?.name === 'AbortError');
+        await assert.rejects(second, e => e?.name === 'AbortError');
+        assert.equal(fetchCalls, 1, 'the queued run must never reach the provider POST');
+    } finally { restore(); }
+});
+
+test('stage2 chain is keyed per chat: the same msgId in another chat does not wait', async () => {
+    const connId = 'browser-chain-cross-chat';
+    await setupChainConnection(connId);
+
+    const restore = hangingFetch();
+    try {
+        const { runStage2ForDraft } = await import('../src/pipeline-stage2.js');
+        const { getGenerationDraft } = await import('../src/generation-drafts.js');
+        const { abortAllGenerations } = await import('../src/core.js');
+        const chatConfig = { imageProfileId: connId, templateId: null, imageRoute: chainRoute };
+
+        const first = runStage2ForDraft(
+            { chatId: 'chat-a', msgId: 5, messageText: 'A cat.', templateId: null, chatConfig },
+            undefined, undefined, { instruction: instr },
+        );
+        const second = runStage2ForDraft(
+            { chatId: 'chat-b', msgId: 5, messageText: 'A cat.', templateId: null, chatConfig },
+            undefined, undefined, { instruction: instr },
+        );
+
+        // With a bare-msgId key the second run waited for the first chat's chain
+        // and never reached 'running' while the first was in flight.
+        let secondRunning = false;
+        for (let i = 0; i < 200; i++) {
+            const d = await getGenerationDraft('chat-b', 5, 'A cat.');
+            if (d?.stage2?.status === 'running') { secondRunning = true; break; }
+            await new Promise(r => setTimeout(r, 5));
+        }
+        assert.ok(secondRunning, 'same-index generation in another chat must run without waiting');
+
+        abortAllGenerations();
+        await assert.rejects(first, e => e?.name === 'AbortError');
+        await assert.rejects(second, e => e?.name === 'AbortError');
+    } finally { restore(); }
+});

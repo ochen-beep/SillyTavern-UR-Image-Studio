@@ -11,8 +11,9 @@
  * Behavior parity with the previous hand-rolled viewer:
  * - copy prompt / save as reference keep the viewer open (ST dialogs are
  *   native <dialog> in the top layer, so they render above PhotoSwipe);
- * - regenerate / delete close it when the action completes, so the re-rendered
- *   grid shows the new state;
+ * - regenerate / delete close it only when the action succeeded — a cancelled
+ *   dialog or a failed/aborted run keeps the viewer open, so the toast about
+ *   what happened is not read over an already-vanished grid;
  * - focus returns to the trigger (PhotoSwipe `returnFocus`).
  *
  * Do NOT add lockBodyScroll here: PhotoSwipe runs its own scroll lock, and
@@ -157,8 +158,8 @@ function registerActionButtons(pswp, ctx) {
         { name: 'uris-copy', order: 30, icon: 'fa-copy', title: 'Копировать текст', danger: false, run: item => copyItemText(item) },
         { name: 'uris-crop', order: 31, icon: 'fa-crop-simple', title: 'Обрезать (в новую карточку)', danger: false, run: async item => { if (await cropGalleryImage(item, ctx.chatId, ctx.root)) pswp.close(); } },
         { name: 'uris-save-ref', order: 32, icon: 'fa-bookmark', title: 'Сохранить как референс', danger: false, run: item => saveAsReference(item) },
-        { name: 'uris-regen', order: 33, icon: 'fa-rotate-right', title: 'Перегенерировать', danger: false, run: async item => { await regenerate(item, ctx.root, null); pswp.close(); } },
-        { name: 'uris-del', order: 34, icon: 'fa-trash', title: 'Удалить', danger: true, run: async item => { await deleteImage(item, ctx.chatId, ctx.root); pswp.close(); } },
+        { name: 'uris-regen', order: 33, icon: 'fa-rotate-right', title: 'Перегенерировать', danger: false, run: async item => { if (await regenerate(item, ctx.root, null)) pswp.close(); } },
+        { name: 'uris-del', order: 34, icon: 'fa-trash', title: 'Удалить', danger: true, run: async item => { if (await deleteImage(item, ctx.chatId, ctx.root)) pswp.close(); } },
     ];
     pswp.on('uiRegister', () => {
         for (const button of buttons) {

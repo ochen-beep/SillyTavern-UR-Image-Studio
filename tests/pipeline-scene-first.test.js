@@ -1275,10 +1275,13 @@ test('cancelling a single queue item continues the queue with the next item', as
         const p1 = enqueueGeneration(item1);
         const p2 = enqueueGeneration(item2);
 
-        // Wait for the first item to register its per-request controller.
+        // Wait for the first item to actually reach the provider POST. Since the
+        // Stop-all fix the per-request controller is registered BEFORE the chain
+        // wait, so map size alone no longer means "started" — poll the image API
+        // call instead, then take the (single) registered controller.
         let firstRequestId = null;
         for (let i = 0; i < 200; i++) {
-            if (coreState.activeGenerations.size > 0) {
+            if (imageCallCount === 1 && coreState.activeGenerations.size > 0) {
                 firstRequestId = coreState.activeGenerations.keys().next().value;
                 break;
             }

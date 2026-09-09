@@ -78,22 +78,25 @@ export async function runStage2ForDraft(input, onStatus = () => {}, signal, opts
     // a different chat's config after a chat switch.
     const snapshot = chatConfig || await resolveChatConfigSnapshot();
 
-    // Per-msgId FIFO serialization for manual Stage 2 calls. Auto flow bypasses the chain.
-    let releaseNext = null;
-    let prevPromise = Promise.resolve();
-    let myNext = null;
-    let isChained = false;
-    if (!opts.isAuto && msgId != null) {
-        const chain = state.stage2Chains.get(msgId) || Promise.resolve();
-        prevPromise = chain;
-        myNext = new Promise(r => { releaseNext = r; });
-        state.stage2Chains.set(msgId, myNext);
-        isChained = true;
-    }
-
-    let ownController = null;
-    let useSignal = signal;
+    // Every Stage 2 owns a controller registered in activeGenerations BEFORE any
+    // waiting, so abortAllGenerations (ST Stop button, cleanup) also covers runs
+    // queued in the per-post chain: a chained run used to become cancellable only
+    // at its turn, so Stop or extension-disable could let it start afterwards and
+    // fire a paid request. An external (queue) signal is linked so stopQueue still
+    // cascades; a per-request cancel stops only this one.
     let activeRequestId = null;
+    let useSignal = null;
+
+    // Per-post FIFO serialization state for manual Stage 2 calls (auto flow
+    // bypasses the chain). releaseNext/myNext/chainKey live at function scope:
+    // the finally must release the chain even when the run is aborted pre-start.
+    let releaseNext = null;
+    let myNext = null;
+    let chainKey = null;
+
+    // True once the run passed the abort gate; pairs uris:stage2-end with a
+    // start (a pre-start abort emits neither).
+    let started = false;
 
     let imageConnId = null;
     let effectiveRoute = null;
@@ -101,29 +104,37 @@ export async function runStage2ForDraft(input, onStatus = () => {}, signal, opts
     let request = null;
 
     try {
-        if (isChained) {
-            await prevPromise.catch(() => {});
-        }
-        if (signal?.aborted) throw new DOMException('Aborted', 'AbortError');
-
-        // Every Stage 2 owns a controller registered in activeGenerations, so it
-        // is individually cancellable via abortGeneration(requestId) - manual,
-        // auto and queue alike. An external (queue) signal is linked to it so
-        // stopQueue still cascades, while a per-request cancel stops only this one.
-        ownController = new AbortController();
+        const ownController = new AbortController();
         if (signal) {
             if (signal.aborted) ownController.abort();
             else signal.addEventListener('abort', () => ownController.abort(), { once: true });
         }
+        useSignal = ownController.signal;
         activeRequestId = crypto.randomUUID();
         state.activeGenerations.set(activeRequestId, ownController);
+        // Already dead (Stop pressed / cleanup before this call ran) — do not
+        // even queue into the chain.
+        if (useSignal.aborted) throw new DOMException('Aborted', 'AbortError');
+
+        // Per-post FIFO serialization for manual Stage 2 calls. The key includes
+        // chatId: a bare msgId made a generation in one chat silently wait for an
+        // in-flight generation of the same index in another chat.
+        if (!opts.isAuto && msgId != null) {
+            chainKey = `${chatId}:${msgId}`;
+            const prevPromise = state.stage2Chains.get(chainKey) || Promise.resolve();
+            myNext = new Promise(r => { releaseNext = r; });
+            state.stage2Chains.set(chainKey, myNext);
+            await prevPromise.catch(() => {});
+        }
+        if (useSignal.aborted) throw new DOMException('Aborted', 'AbortError');
+        started = true;
+
         recordDiagnosticEvent({
             event: 'stage2-start', stage: 'stage2', requestId: activeRequestId,
             chatHash: hashDiagnosticId(chatId), msgId,
             operation: opts.instruction ? 'edit' : 'generate',
             details: { source: opts.isAuto ? 'auto' : (signal ? 'queue' : 'manual') },
         });
-        useSignal = ownController.signal;
         try { opts.onStart?.(activeRequestId); } catch { /* listener error must not break generation */ }
         emitStage2Event('uris:stage2-start', {
             requestId: activeRequestId, msgId,
@@ -364,13 +375,15 @@ export async function runStage2ForDraft(input, onStatus = () => {}, signal, opts
     } finally {
         if (activeRequestId) {
             state.activeGenerations.delete(activeRequestId);
-            recordDiagnosticEvent({ event: 'stage2-end', stage: 'stage2', requestId: activeRequestId, msgId });
-            emitStage2Event('uris:stage2-end', { requestId: activeRequestId, msgId });
+            if (started) {
+                recordDiagnosticEvent({ event: 'stage2-end', stage: 'stage2', requestId: activeRequestId, msgId });
+                emitStage2Event('uris:stage2-end', { requestId: activeRequestId, msgId });
+            }
         }
         if (releaseNext) {
             releaseNext();
-            if (myNext && state.stage2Chains.get(msgId) === myNext) {
-                state.stage2Chains.delete(msgId);
+            if (chainKey && myNext && state.stage2Chains.get(chainKey) === myNext) {
+                state.stage2Chains.delete(chainKey);
             }
         }
     }

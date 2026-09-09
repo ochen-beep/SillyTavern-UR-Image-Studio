@@ -500,12 +500,72 @@ test('cancelling prompt autosave prevents a delayed old write', async () => {
     assert.deepEqual(writes, []);
 });
 
+test('pending prompt autosave lands in the draft of the post being edited', async () => {
+    // P1 regression: the debounced callback used to re-read state.currentMsgId at
+    // fire time, so typing on post 4 and navigating to post 5 inside the debounce
+    // window wrote post 4's textarea text into post 5's draft. Identity must be
+    // captured at input time.
+    const originalCtx = globalThis.SillyTavern.getContext;
+    const originalLf = globalThis.SillyTavern.libs.localforage;
+    const store = new Map();
+    globalThis.SillyTavern.libs.localforage = {
+        getItem: async k => (store.has(k) ? store.get(k) : null),
+        setItem: async (k, v) => { store.set(k, v); },
+        removeItem: async k => { store.delete(k); },
+    };
+    const ctx = {
+        extensionSettings: {},
+        saveSettingsDebounced: () => {},
+        chatId: 'chat-1',
+        chat: [
+            { mes: 'post a text', is_user: false },
+            { mes: 'post b text', is_user: false },
+        ],
+    };
+    globalThis.SillyTavern.getContext = () => ctx;
+    try {
+        const { updateGenerationDraft, getGenerationDraft } = await import('../src/generation-drafts.js');
+        state.currentMsgId = 0;
+        // Seed post b's draft so a cross-post write would be observable.
+        await updateGenerationDraft('chat-1', 1, 'post b text', d => ({ ...d, prompt: 'post b prompt' }));
+
+        const els = new Map();
+        const makeEl = () => {
+            const el = { value: '', listeners: {} };
+            el.addEventListener = (type, fn) => { el.listeners[type] = fn; };
+            return el;
+        };
+        const root = { querySelector: sel => { if (!els.has(sel)) els.set(sel, makeEl()); return els.get(sel); } };
+        tabGenerate.bindGenerate(root);
+
+        const promptEl = els.get('#urisPrompt');
+        assert.ok(promptEl, 'prompt textarea is bound');
+
+        // Type on post a, then navigate away before the debounce fires.
+        promptEl.value = 'typed on post a';
+        promptEl.listeners.input();
+        state.currentMsgId = 1;
+        await new Promise(r => setTimeout(r, 550));
+
+        const draftA = await getGenerationDraft('chat-1', 0, 'post a text');
+        const draftB = await getGenerationDraft('chat-1', 1, 'post b text');
+        assert.equal(draftA.prompt, 'typed on post a', 'pending save must land in the edited post draft');
+        assert.equal(draftB.prompt, 'post b prompt', 'navigated-to draft must not receive the stale text');
+    } finally {
+        state.currentMsgId = null;
+    }
+});
+
 test('tab-generate source imports every runtime symbol bindGenerate calls at attach time', async () => {
-    // Regression guard: bindGenerate calls debounce() while attaching listeners.
-    // Dropping the import throws ReferenceError during render and silently
-    // disables every Generate-tab button, including Stage 1 and Stage 2.
+    // Regression guard: bindGenerate's cancel handler calls abortGeneration() and
+    // its paths call getCtx()/state. Dropping a core.js import throws
+    // ReferenceError during render and silently disables every Generate-tab
+    // button, including Stage 1 and Stage 2. (Originally guarded debounce():
+    // since the cancellable prompt autosave is wired in, attach no longer calls it.)
     const src = await readFile(new URL('../src/ui/tab-generate.js', import.meta.url), 'utf8');
-    assert.match(src, /import\s*\{[^}]*\bdebounce\b[^}]*\}\s*from\s*'\.\.\/core\.js'/);
+    assert.match(src, /import\s*\{[^}]*\babortGeneration\b[^}]*\}\s*from\s*'\.\.\/core\.js'/);
+    assert.match(src, /import\s*\{[^}]*\bgetCtx\b[^}]*\}\s*from\s*'\.\.\/core\.js'/);
+    assert.match(src, /createCancellablePromptAutosave\(\{[\s\S]*?persist:/, 'bindGenerate must use the cancellable autosave, not a bare debounce');
 });
 
 test('bindGenerate attaches Stage 1 and Stage 2 click handlers without throwing', () => {

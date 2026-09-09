@@ -4,7 +4,7 @@
  * Layout: post-navigator, excerpt/stale badge, prompt editor, actions Stage 1 / Stage 2,
  * compact aspect/size/quality controls, references panel, Advanced (template/automation/queue).
  */
-import { state, getCtx, escapeHtml, error, debounce, VALID_ASPECT_RATIOS, VALID_IMAGE_SIZES, abortGeneration } from '../core.js';
+import { state, getCtx, escapeHtml, error, warn, VALID_ASPECT_RATIOS, VALID_IMAGE_SIZES, abortGeneration } from '../core.js';
 import { notifyStage1Ready } from '../events.js';
 import { POST_FILTER, navigatePosts, getPostInfo, setFilter, setCurrentMsgId, getLastPostIndex } from '../post-navigator.js';
 import { runStage1ForDraft, runStage2ForDraft, enqueueGeneration, createQueueItem, stopQueue, buildCandidates } from '../pipeline.js';
@@ -530,6 +530,13 @@ export function bindModelSelect(root, choices, options = {}) {
  */
 export async function render(root) {
     _generateRoot = root;
+    // Bump the epoch on every render call, including the direct render(root) calls
+    // from bindings (post navigation, reference corrections, model switch) that
+    // never pass through the tab-switch entry point. Without the bump two
+    // concurrent direct renders share one epoch, and the slower stale render
+    // overwrites the DOM of the fresher one — the editor then shows a different
+    // post than state.currentMsgId points at.
+    root.__urisRenderEpoch = (root.__urisRenderEpoch || 0) + 1;
     const renderEpoch = root.__urisRenderEpoch;
     const isCurrent = () => root.__urisRenderEpoch === renderEpoch && root.__urisTabId === 'generate';
     const ctx = getCtx();
@@ -581,7 +588,19 @@ export async function render(root) {
         activeTemplateId: state.activeTemplateId,
     });
 
-    const modelChoices = await resolveModelChoices();
+    // resolveModelChoices may throw (assertImageModelEligible in the config
+    // snapshot: the chat's saved model was reclassified as non-image by fresh
+    // catalog metadata). Letting it reject the render leaves a silently empty
+    // tab — tabs.js swallows render rejections. Degrade to the "no connection"
+    // select and surface the reason instead.
+    let modelChoices = null;
+    try {
+        modelChoices = await resolveModelChoices();
+    } catch (e) {
+        error('Generate tab: model choices failed:', e?.message || e);
+        recordUrisError({ scope: 'Параметры', message: `Модель чата недоступна: ${e?.message || e}` });
+        toastr?.error('Модель чата недоступна: ' + (e?.message || e));
+    }
     if (!isCurrent()) return;
     root.innerHTML = renderGenerateMarkup({ ...vm, modelChoices, qualityOptions: qualityOptionsFor(modelChoices?.current || '', effectiveDraft.quality) });
     bindGenerate(root);
@@ -691,26 +710,37 @@ export function bindGenerate(root) {
     });
 
     // Prompt autosave: editing sets origin to manual and refreshes the prompt-driven preview.
+    // Identity (chatId/msgId) and text are captured at INPUT time into the scheduled payload:
+    // a pending save must land in the draft of the post being edited, never in whatever post
+    // the user navigated to while the debounce was pending (re-reading state.currentMsgId in
+    // the callback wrote the stale textarea text across posts and chats).
     const promptEl = root.querySelector('#urisPrompt');
-    const autosave = debounce(async () => {
+    const autosave = createCancellablePromptAutosave({
+        persist: async ({ chatId, msgId, messageText, value }) => {
+            const savedDraft = await updateGenerationDraft(chatId, msgId, messageText, d => ({
+                ...d,
+                prompt: value,
+                promptOrigin: d.prompt ? 'manual' : d.promptOrigin,
+            }));
+            // Only refresh if the user is still on the same message.
+            if (getCtx().chatId === chatId && state.currentMsgId === msgId) {
+                const resolution = await resolveDraftPromptReferences(chatId, savedDraft);
+                renderMatchedKeywords(root, undefined, resolution);
+                await renderLivePreview(root, resolution);
+                renderPromptAmbiguities(root, resolution);
+            }
+        },
+    });
+    promptEl?.addEventListener('input', () => {
         const ctx = getCtx();
-        const chatId = ctx.chatId;
         const msgId = state.currentMsgId;
-        const messageText = ctx.chat?.[msgId]?.mes || '';
-        const savedDraft = await updateGenerationDraft(chatId, msgId, messageText, d => ({
-            ...d,
-            prompt: promptEl?.value || '',
-            promptOrigin: d.prompt ? 'manual' : d.promptOrigin,
-        }));
-        // Only refresh if the user is still on the same message.
-        if (getCtx().chatId === chatId && state.currentMsgId === msgId) {
-            const resolution = await resolveDraftPromptReferences(chatId, savedDraft);
-            renderMatchedKeywords(root, undefined, resolution);
-            await renderLivePreview(root, resolution);
-            renderPromptAmbiguities(root, resolution);
-        }
-    }, 400);
-    promptEl?.addEventListener('input', autosave);
+        autosave.schedule({
+            chatId: ctx.chatId,
+            msgId,
+            messageText: ctx.chat?.[msgId]?.mes || '',
+            value: promptEl.value,
+        });
+    });
 
     // Expanded editor (ST-style maximized_textarea popup). On OK the value is
     // written back and the normal input autosave (draft + live preview refresh)
@@ -1285,6 +1315,28 @@ async function getActiveReferencePolicy() {
 }
 
 /**
+ * getActiveReferencePolicy that degrades instead of rejecting. A throw here
+ * (resolveChatConfigSnapshot → assertImageModelEligible) would break every caller,
+ * including the fire-and-forget updatePostInfo path (unhandled rejection + a
+ * half-cleared reference panel). The panel renders the degraded message instead.
+ */
+async function safeReferencePolicy() {
+    try {
+        return await getActiveReferencePolicy();
+    } catch (e) {
+        warn('Generate tab: reference policy failed:', e?.message || e);
+        return {
+            supported: false,
+            maxRefs: null,
+            canAdd: false,
+            unsupported: true,
+            overLimit: false,
+            message: 'Не удалось определить политику референсов соединения.',
+        };
+    }
+}
+
+/**
  * Live preview of the references that the current prompt will send to Stage2.
  * @param {HTMLElement} root
  * @param {import('../scene-context.js').SceneContextSnapshot|null} referenceResolution
@@ -1294,7 +1346,7 @@ export async function renderLivePreview(root, referenceResolution) {
     if (!host) return;
     const refs = referenceResolution?.stage2Refs || [];
     const effectiveIds = new Set(refs.map(r => r.id));
-    const policy = await getActiveReferencePolicy();
+    const policy = await safeReferencePolicy();
     const panelState = buildReferencePanelState(refs, policy);
     const capLabel = `<div class="uris-refs-stage2-cap">Выбрано для генерации  ·  ${panelState.unsupported ? escapeHtml(panelState.message) : `${panelState.count}/${panelState.max === null ? 'без заявленного лимита' : panelState.max}${policy.encoding ? ` · ${escapeHtml(policy.encoding)}` : ''}`}</div>`;
     const chips = renderReferencePreviewMarkup(refs);
@@ -1347,7 +1399,7 @@ async function renderCap(root, referenceResolution = null) {
     if (!cap) return;
 
     const refs = referenceResolution?.stage2Refs || [];
-    const policy = await getActiveReferencePolicy();
+    const policy = await safeReferencePolicy();
     const panelState = buildReferencePanelState(refs, policy);
 
     // Cap indicator N/M (primary in renderLivePreview; here as fallback/legacy host).

@@ -139,31 +139,48 @@ export async function saveAsReference(item) {
     }
 }
 
+// One in-flight regenerate per gallery card: the lightbox toolbar has no button
+// DOM to disable (regenBtn === null), so a double click would queue a second
+// paid generation behind the first in the per-post FIFO chain.
+const _regenInFlight = new Set();
+
+/**
+ * Regenerate a gallery card from its stored prompt. Returns true only when a new
+ * image was actually produced — the lightbox keeps the viewer open on cancel,
+ * abort or failure (close-on-failure used to hide the error context under the toast).
+ */
 export async function regenerate(item, root, regenBtn) {
     // While a generation is in flight the regen button is repurposed as a stop
     // button: a second click cancels it instead of starting a competing one.
     if (regenBtn?.dataset.urisStopMode === '1') {
         const id = regenBtn.dataset.urisCurrentReq;
         if (id) abortGeneration(id);
-        return;
+        return false;
     }
-    if (regenBtn?.disabled) return;
-    const snapshot = Array.isArray(item.refs) ? item.refs : null;
-    let useSameRefs = false;
-    if (snapshot && snapshot.length) {
-        const names = snapshot.map(r => r.name || r.id || 'ref').join(', ');
-        useSameRefs = await showConfirmModal(
-            `Регенерировать с теми же референсами (${snapshot.length}: ${names})?\n\n` +
-            `«OK» - те же референсы (снапшот на момент первичной генерации).\n` +
-            `«Отмена» - использовать текущий активный профиль (мог измениться).`
-        );
+    if (regenBtn?.disabled) return false;
+    const flightKey = `regen:${item?.id || item?.sourceMsgId || ''}`;
+    if (_regenInFlight.has(flightKey)) {
+        toastr?.info('Перегенерация уже выполняется');
+        return false;
     }
+    _regenInFlight.add(flightKey);
     const origHtml = regenBtn ? regenBtn.innerHTML : '';
     const origTitle = regenBtn ? regenBtn.title : '';
+    let ok = false;
     try {
         // Lock during setup (confirm modal + ref rebuild) to prevent a competing
         // generation; onStart switches it to an enabled "stop" button once the
         // provider request is actually in flight.
+        const snapshot = Array.isArray(item.refs) ? item.refs : null;
+        let useSameRefs = false;
+        if (snapshot && snapshot.length) {
+            const names = snapshot.map(r => r.name || r.id || 'ref').join(', ');
+            useSameRefs = await showConfirmModal(
+                `Регенерировать с теми же референсами (${snapshot.length}: ${names})?\n\n` +
+                `«OK» - те же референсы (снапшот на момент первичной генерации).\n` +
+                `«Отмена» - использовать текущий активный профиль (мог измениться).`
+            );
+        }
         if (regenBtn) regenBtn.disabled = true;
         setStatus('Перегенерация...');
         const instr = { style: item.style, prompt: item.prompt, aspectRatio: item.aspectRatio, imageSize: item.imageSize, quality: item.quality };
@@ -187,6 +204,7 @@ export async function regenerate(item, root, regenBtn) {
         await runStage2(item.sourceMsgId, instr, s => setStatus(s), undefined, opts);
         toastr?.success('Перегенерировано');
         if (root) refreshRoot(root);
+        ok = true;
     } catch (err) {
         if (err?.name === 'AbortError') toastr?.info('Генерация отменена');
         else {
@@ -194,6 +212,7 @@ export async function regenerate(item, root, regenBtn) {
             toastr?.error('Перегенерация: ' + err.message);
         }
     } finally {
+        _regenInFlight.delete(flightKey);
         setStatus('');
         if (regenBtn) {
             delete regenBtn.dataset.urisStopMode;
@@ -203,14 +222,17 @@ export async function regenerate(item, root, regenBtn) {
             regenBtn.innerHTML = origHtml;
         }
     }
+    return ok;
 }
 
+/** Delete a gallery card. Returns false on cancel/failure — the lightbox keeps the viewer open. */
 export async function deleteImage(item, chatId, root) {
     const ctx = getCtx();
     const deleteFile = await confirmDeleteModal(ctx);
-    if (deleteFile === null) return; // cancelled
-    await deleteGalleryCard(chatId, item.id, { deleteFile });
+    if (deleteFile === null) return false; // cancelled
+    const removed = await deleteGalleryCard(chatId, item.id, { deleteFile });
     if (root) refreshRoot(root);
+    return removed !== false;
 }
 
 async function confirmDeleteModal(ctx) {
