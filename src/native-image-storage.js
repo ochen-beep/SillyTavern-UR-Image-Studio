@@ -148,6 +148,10 @@ export async function makeThumbnailForPath(imagePath, { filename, signal, timeou
         maxEdge: THUMBNAIL_MAX_EDGE,
         quality: THUMBNAIL_WEBP_QUALITY,
         version: `thumb-v1-${THUMBNAIL_MAX_EDGE}`,
+        // Thumbs are local-only files (URIS_Thumbs is never scanned into the
+        // gallery), so webp stays optimal here despite the v3 reference
+        // cascade defaulting to jpeg/png for provider-bound images.
+        formats: ['image/webp'],
     });
     const base = String(filename || '').replace(/\.[^.]+$/, '') || `thumb_${Date.now()}`;
     // uploadPayload sanitizes the whole filename and the server derives the

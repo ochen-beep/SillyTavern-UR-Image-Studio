@@ -44,6 +44,7 @@ import {
     dataUrlToFile,
     compressDataUrl,
     optimizeReferenceImage,
+    normalizeReferenceDataUrl,
     __testOnly,
     MAX_EDGE,
     MAX_INPUT_BYTES,
@@ -164,7 +165,7 @@ test('optimizeReferenceImage returns canonical result without upscaling', async 
     const seam = createOptimizerSeam({
         width: 320,
         height: 240,
-        encodings: { 'image/webp': { data: 'larger-than-source-webp' } },
+        encodings: { 'image/jpeg': { data: 'larger-than-source-jpeg' } },
     });
     const result = await optimizeReferenceImage(seam.sourceBlob, { _test: seam });
     assert.deepEqual(Object.keys(result).sort(), ['blob', 'dataUrl', 'height', 'mime', 'optimizationVersion', 'optimizedBytes', 'sourceBytes', 'width']);
@@ -181,7 +182,7 @@ test('optimizeReferenceImage enforces edge limit and rejects oversize or non-ima
     const seam = createOptimizerSeam({
         width: 2048,
         height: 1024,
-        encodings: { 'image/webp': { data: 'webp' } },
+        encodings: { 'image/jpeg': { data: 'jpeg' } },
     });
     const result = await optimizeReferenceImage(seam.sourceBlob, { _test: seam });
     assert.deepEqual([result.width, result.height], [1024, 512]);
@@ -190,38 +191,124 @@ test('optimizeReferenceImage enforces edge limit and rejects oversize or non-ima
     await assert.rejects(optimizeReferenceImage(tooLarge, { _test: seam }), /too large/);
 });
 
-test('optimizeReferenceImage falls back from opaque WebP MIME mismatch to JPEG', async () => {
+test('optimizeReferenceImage: opaque reference encodes JPEG only — webp is not a candidate', async () => {
     const seam = createOptimizerSeam({
         encodings: {
-            'image/webp': { data: 'bad-webp', type: 'image/png' },
+            'image/webp': { data: 'tiny-webp', type: 'image/webp' },
             'image/jpeg': { data: 'valid-jpeg', type: 'image/jpeg' },
         },
     });
     const result = await optimizeReferenceImage(seam.sourceBlob, { _test: seam });
     assert.equal(result.mime, 'image/jpeg');
-    assert.deepEqual(seam.calls, [['image/webp', 0.82], ['image/jpeg', 0.85]]);
+    // webp не кодируется вовсе: релейные апстримы (adobe2banana, инцидент
+    // 2026-09-08) отвергают его контент-валидатором с 400 "does not match
+    // its declared MIME type", хотя браузер кодирует webp корректно.
+    assert.deepEqual(seam.calls, [['image/jpeg', 0.85]]);
 });
 
-test('optimizeReferenceImage uses PNG after alpha WebP failure', async () => {
+test('optimizeReferenceImage: alpha reference encodes PNG only', async () => {
     const seam = createOptimizerSeam({
         alpha: true,
         encodings: {
-            'image/webp': { data: 'wrong-type', type: 'image/jpeg' },
+            'image/webp': { data: 'tiny-webp', type: 'image/webp' },
             'image/png': { data: 'valid-png', type: 'image/png' },
         },
     });
     const result = await optimizeReferenceImage(seam.sourceBlob, { _test: seam });
     assert.equal(result.mime, 'image/png');
-    assert.deepEqual(seam.calls, [['image/webp', 0.88], ['image/png', undefined]]);
+    assert.deepEqual(seam.calls, [['image/png', undefined]]);
 });
 
-test('optimizeReferenceImage accepts callback-based toBlob and falls back after null', async () => {
+test('optimizeReferenceImage: webp source does not pass through sourceCanWin', async () => {
+    const seam = createOptimizerSeam({
+        width: 320,
+        height: 240,
+        encodings: { 'image/jpeg': { data: 'reencoded-jpeg', type: 'image/jpeg' } },
+    });
+    const webpSource = new Blob(['source-webp'], { type: 'image/webp' });
+    const result = await optimizeReferenceImage(webpSource, { _test: seam });
+    assert.equal(result.mime, 'image/jpeg');
+    assert.notEqual(result.blob, webpSource);
+});
+
+test('optimizeReferenceImage: formats option pins webp (thumbnail contract)', async () => {
+    const seam = createOptimizerSeam({
+        encodings: { 'image/webp': { data: 'thumb-webp', type: 'image/webp' } },
+    });
+    const result = await optimizeReferenceImage(seam.sourceBlob, { _test: seam, formats: ['image/webp'] });
+    assert.equal(result.mime, 'image/webp');
+    assert.deepEqual(seam.calls, [['image/webp', 0.82]]);
+});
+
+test('OPTIMIZATION_VERSION bumps to ref-v3-1024 (invalidates cached webp results)', () => {
+    assert.equal(OPTIMIZATION_VERSION, 'ref-v3-1024');
+});
+
+test('optimizeReferenceImage accepts callback-based toBlob', async () => {
     const seam = createOptimizerSeam({
         encodings: { 'image/jpeg': { data: 'valid-jpeg', type: 'image/jpeg' } },
     });
     const result = await optimizeReferenceImage(seam.sourceBlob, { _test: seam });
     assert.equal(result.mime, 'image/jpeg');
-    assert.deepEqual(seam.calls, [['image/webp', 0.82], ['image/jpeg', 0.85]]);
+    assert.deepEqual(seam.calls, [['image/jpeg', 0.85]]);
+});
+
+function createNormalizeSeam({ alpha = false, fail = false } = {}) {
+    const calls = [];
+    return {
+        calls,
+        seam: {
+            async decode() {
+                if (fail) throw new Error('decode exploded');
+                return { width: 1024, height: 1024, close() {} };
+            },
+            createCanvas(w, h) {
+                return {
+                    width: w,
+                    height: h,
+                    getContext() {
+                        return {
+                            drawImage() {},
+                            getImageData() { return { data: alpha ? new Uint8ClampedArray([1, 2, 3, 128]) : new Uint8ClampedArray([1, 2, 3, 255]) }; },
+                        };
+                    },
+                    toBlob(callback, mime) {
+                        calls.push(mime);
+                        if (fail) return callback(null);
+                        callback(new Blob(['x'], { type: mime }));
+                    },
+                };
+            },
+            async blobToDataUrl(blob) { return `data:${blob.type};base64,eA==`; },
+        },
+    };
+}
+
+test('normalizeReferenceDataUrl: webp reference is re-encoded to jpeg for sending', async () => {
+    const { seam, calls } = createNormalizeSeam();
+    const out = await normalizeReferenceDataUrl('data:image/webp;base64,ZmFrZQ==', { _test: seam });
+    assert.equal(out, 'data:image/jpeg;base64,eA==');
+    assert.deepEqual(calls, ['image/jpeg']);
+});
+
+test('normalizeReferenceDataUrl: alpha webp is re-encoded to png', async () => {
+    const { seam, calls } = createNormalizeSeam({ alpha: true });
+    const out = await normalizeReferenceDataUrl('data:image/webp;base64,ZmFrZQ==', { _test: seam });
+    assert.equal(out, 'data:image/png;base64,eA==');
+    assert.deepEqual(calls, ['image/png']);
+});
+
+test('normalizeReferenceDataUrl: non-webp passes through untouched', async () => {
+    const { seam, calls } = createNormalizeSeam();
+    const original = 'data:image/png;base64,ZmFrZQ==';
+    assert.equal(await normalizeReferenceDataUrl(original, { _test: seam }), original);
+    assert.deepEqual(calls, []);
+});
+
+test('normalizeReferenceDataUrl: encoder failure returns the original webp (graceful)', async () => {
+    const { seam } = createNormalizeSeam({ fail: true });
+    const original = 'data:image/webp;base64,ZmFrZQ==';
+    assert.equal(await normalizeReferenceDataUrl(original, { _test: seam }), original);
 });
 
 test('decodeBrowserBlob retries HTMLImage after createImageBitmap rejects and closes fallback image', async () => {
@@ -256,7 +343,7 @@ test('decodeBrowserBlob retries HTMLImage after createImageBitmap rejects and cl
 
 test('optimizeReferenceImage cleans bitmap and canvas after output errors', async () => {
     let sourceClosed = 0;
-    const seam = createOptimizerSeam({ encodings: { 'image/webp': { data: 'candidate' } } });
+    const seam = createOptimizerSeam({ encodings: { 'image/jpeg': { data: 'candidate' } } });
     seam.decode = async blob => ({ width: blob._width ?? 400, height: blob._height ?? 200, close() { sourceClosed++; } });
     let canvas;
     const originalCanvas = seam.createCanvas;

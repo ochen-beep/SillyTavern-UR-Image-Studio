@@ -125,14 +125,23 @@ export async function dataUrlToFile(dataUrl, filename) {
 
 // ── Reference image optimization ──
 
-export const OPTIMIZATION_VERSION = 'ref-v2-1024';
+// v3: webp removed from the default candidate set. Relay upstreams behind
+// OpenAI-compatible gateways (adobe2banana, incident 2026-09-08) reject webp
+// at a content validator ("Image edit file content does not match its declared
+// MIME type", HTTP 400) even though the browser encodes it correctly. The bump
+// also documents the contract change for anything that compares versions.
+export const OPTIMIZATION_VERSION = 'ref-v3-1024';
 export const MAX_EDGE = 1024;
 export const MAX_INPUT_BYTES = 25 * 1024 * 1024;
 export const WEBP_PHOTO_QUALITY = 0.82;
 export const WEBP_ALPHA_QUALITY = 0.88;
 export const JPEG_QUALITY = 0.85;
 
-const CANONICAL_MIMES = new Set(['image/png', 'image/jpeg', 'image/webp']);
+// webp deliberately absent: an original webp file must not slip onto the wire
+// through the source pass-through (sourceCanWin) — the same relay validators
+// reject it. Gallery thumbnails pin webp explicitly via options.formats;
+// they are local-only files and never reach a provider.
+const CANONICAL_MIMES = new Set(['image/png', 'image/jpeg']);
 
 function imageError(message) {
     return new Error(`optimizeReferenceImage: ${message}`);
@@ -264,10 +273,18 @@ export async function optimizeReferenceImage(input, options = {}) {
         if (!context) throw imageError('could not create canvas context');
         context.drawImage(bitmap.image || bitmap, 0, 0, width, height);
         const alpha = hasAlpha(context, width, height);
+        // Receiver-safe default (v3): jpeg for opaque, png for alpha — the same
+        // formats ComfyUI/SillyTavern-adjacent tools send. options.formats pins
+        // an explicit set for callers with different constraints (thumbnails
+        // keep webp: local files, never uploaded to providers).
+        const formats = Array.isArray(options.formats) && options.formats.length
+            ? options.formats
+            : (alpha ? ['image/png'] : ['image/jpeg']);
+        const qualityForMime = (mime) => (mime === 'image/webp'
+            ? (alpha ? webpAlphaQuality : webpPhotoQuality)
+            : (mime === 'image/jpeg' ? jpegQuality : undefined));
+        const candidates = formats.map(mime => [mime, qualityForMime(mime)]);
         const encode = seam.toBlob || ((mime, quality) => canvasBlob(canvas, mime, quality));
-        const candidates = alpha
-            ? [['image/webp', webpAlphaQuality], ['image/png', undefined]]
-            : [['image/webp', webpPhotoQuality], ['image/jpeg', jpegQuality]];
         const valid = [];
         for (const [mime, quality] of candidates) {
             try {
@@ -285,6 +302,9 @@ export async function optimizeReferenceImage(input, options = {}) {
         const selected = sourceCanWin ? source : candidate;
         if (!selected) throw imageError('no compatible image encoder is available');
         const mime = String(selected.type).toLowerCase();
+        // [refs] instrumentation: which format actually reaches the wire and
+        // why (kept until the 2026-09-08 webp/400 incident is confirmed fixed).
+        log(`[refs] optimize: source ${sourceMime} ${source.size}B scale=${scale.toFixed(3)} → ${mime} ${selected.size}B (sourceCanWin=${selected === source}, formats=[${formats.join(', ')}])`);
         return {
             dataUrl: await (seam.blobToDataUrl || blobToDataUrl)(selected),
             blob: selected,
@@ -383,6 +403,52 @@ export async function ingestReferenceImage(input, filename, {
 // ── Scene-first reference materialization ──
 
 /**
+ * Send-time MIME normalization. References stored before v3 may be image/webp,
+ * which several relayed upstreams reject at a content validator (HTTP 400
+ * "Image edit file content does not match its declared MIME type" — adobe2banana,
+ * incident 2026-09-08). Re-encode webp to jpeg (opaque) or png (alpha) right
+ * before dispatch; anything else passes through untouched. No resizing — the
+ * stored file is already edge-1024 optimized. Any encoder failure returns the
+ * original data URL: sending a possibly-rejected webp is strictly better than
+ * dropping the reference.
+ *
+ * @param {string} dataUrl
+ * @param {{ signal?: AbortSignal, _test?: object }} [options]
+ * @returns {Promise<string>}
+ */
+export async function normalizeReferenceDataUrl(dataUrl, options = {}) {
+    const mime = dataUrlMimeType(dataUrl);
+    if (mime !== 'image/webp') return dataUrl;
+    const seam = options._test || {};
+    try {
+        const source = await (seam.dataUrlToBlob || dataUrlToBlob)(dataUrl);
+        const decode = seam.decode || decodeBrowserBlob;
+        const bitmap = await decode(source);
+        const width = bitmap.width;
+        const height = bitmap.height;
+        if (!validDimension(width) || !validDimension(height)) throw imageError('invalid image dimensions');
+        const canvas = (seam.createCanvas || nativeCanvas)(width, height);
+        const context = canvas?.getContext?.('2d', { willReadFrequently: true });
+        if (!context) throw imageError('could not create canvas context');
+        context.drawImage(bitmap.image || bitmap, 0, 0, width, height);
+        bitmap.close?.();
+        const alpha = hasAlpha(context, width, height);
+        const targetMime = alpha ? 'image/png' : 'image/jpeg';
+        const encode = seam.toBlob || ((m, q) => canvasBlob(canvas, m, q));
+        const blob = await encode(targetMime, alpha ? undefined : JPEG_QUALITY);
+        if (!blob || blob.size <= 0 || String(blob.type).toLowerCase() !== targetMime) {
+            throw imageError('re-encode produced no usable blob');
+        }
+        const out = await (seam.blobToDataUrl || blobToDataUrl)(blob);
+        log(`[refs] send-normalize: image/webp → ${targetMime} (${source.size}B → ${blob.size}B)`);
+        return out;
+    } catch (error) {
+        warn(`[refs] send-normalize failed, отправляю оригинал (image/webp): ${error?.message || error}`);
+        return dataUrl;
+    }
+}
+
+/**
  * Load image data URLs for the Stage 2 references in a SceneContextSnapshot.
  * Preserves snapshot order. Throws if a selected reference image cannot be loaded.
  *
@@ -422,6 +488,15 @@ export async function materializeStage2References(snapshot, options = {}) {
             if (!dataUrl) {
                 const label = ref.name || ref.id || '(unnamed)';
                 throw new Error(`Reference image unavailable: ${label} (${ref.imagePath || 'no path'})`);
+            }
+            // v3: re-encode stored webp refs before the byte budget is computed
+            // and before any provider sees them (multipart, JSON edits, Gemini
+            // inline all consume this dataUrl). No-op for v3+ refs.
+            dataUrl = await normalizeReferenceDataUrl(dataUrl, { signal: options.signal });
+            if (controller.signal.aborted) {
+                const error = new DOMException('Reference materialization aborted or timed out', 'AbortError');
+                error.code = 'REFERENCE_MATERIALIZATION_ABORTED';
+                throw error;
             }
             const comma = dataUrl.indexOf(',');
             const encoded = comma >= 0 ? dataUrl.slice(comma + 1).replace(/\s/g, '') : '';
