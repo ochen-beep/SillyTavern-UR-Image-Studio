@@ -7,6 +7,7 @@ import { decompress as fzstdDecompress } from './vendor/fzstd.esm.js';
 // Circular import netdump → core is safe: netdump functions are called
 // only at runtime (inside fetchWithTimeout), not at module load time.
 import { recordFromFetch, recordFromFetchError } from './netdump.js';
+import { tunnelBypassHeaders } from './tunnel-bypass.js';
 
 export const MODULE_NAME = 'ur_image_studio';
 export const DISPLAY_NAME = 'UR Image Studio';
@@ -711,8 +712,16 @@ export async function fetchWithTimeout(url, options = {}, timeoutMs = 120000) {
     // Network dumper: monitor all URIS browser fetches. Non-blocking —
     // recorder errors NEVER crash generation (fire-and-forget .catch).
     const _t0 = performance.now();
+    // Tunnel consent-page bypass (loca.lt 511 / ngrok ERR_NGROK_6024): inject
+    // the documented opt-out header for tunnel hosts only — a custom header
+    // turns the fetch into a preflighted one, which must stay a tunnel-only
+    // concern. User-supplied headers win (see tunnel-bypass.js).
+    const bypass = tunnelBypassHeaders(url);
+    const headers = Object.keys(bypass).length
+        ? { ...bypass, ...requestOptions.headers }
+        : requestOptions.headers;
     try {
-        const resp = await fetch(url, { ...requestOptions, signal: ctrl.signal });
+        const resp = await fetch(url, { ...requestOptions, headers, signal: ctrl.signal });
         recordFromFetch(url, { ...requestOptions, __urisDiagnostic }, resp, performance.now() - _t0).catch(() => {});
         return armBodyDeadline(resp);
     } catch (e) {

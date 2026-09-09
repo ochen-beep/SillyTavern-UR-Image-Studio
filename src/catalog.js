@@ -2,6 +2,7 @@
 import { CONTRACTS, normalizeRouteContract, stripSecrets } from './image-connection-schema.js';
 import { normalizeReferenceCap } from './reference-limits.js';
 import { proxiedFetch as defaultProxiedFetch, isCorsOrNetworkError } from './proxy.js';
+import { tunnelBypassHeaders } from './tunnel-bypass.js';
 import { trace, warn, decodeZstdBytes } from './core.js'
 
 const IMAGE_MODEL = /(?:^|[\/_-])(?:gpt-image|dall-e|imagen|gemini[^/]*image|image)(?:[\/_-]|$)/i;
@@ -521,7 +522,15 @@ async function request(url, apiKey, fetcher, proxiedFetcher, headers, timeoutMs,
     }
     const options = {
         method: 'GET',
-        headers: { ...headers, ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {}) },
+        // Tunnel consent-page bypass (loca.lt 511 / ngrok ERR_NGROK_6024):
+        // injected first so caller-supplied headers win. Covers BOTH delivery
+        // modes — connect-probe fetches direct with raw globalThis.fetch, and
+        // the ST /proxy/ middleware forwards request headers verbatim.
+        headers: {
+            ...tunnelBypassHeaders(url),
+            ...headers,
+            ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {}),
+        },
         signal: controller.signal,
     };
     // We do NOT try to steer the upstream Content-Encoding here:
