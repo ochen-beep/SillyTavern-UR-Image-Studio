@@ -84,9 +84,11 @@ export async function updateConnection(id, patch = {}) {
     const connection = normalize({ ...previous, ...patch, id });
     connections[index] = connection;
     persist(connections);
-    if (connectionFingerprint(previous) !== connectionFingerprint(connection)) {
-        await clearConnectionApiKey(id);
-    }
+    // The browser-local key is keyed by connection id and is deliberately NOT
+    // fingerprint-bound to endpoint/provider/dialect: re-editing metadata after
+    // a failed generation (endpoint typo fix, references-panel dialect pin)
+    // must never silently erase it. The key leaves storage only through an
+    // explicit user action: deleteConnection, or saving an empty Key field.
     return connection;
 }
 
@@ -99,18 +101,6 @@ export async function deleteConnection(id) {
     return true;
 }
 
-function connectionFingerprint(connection) {
-    return JSON.stringify({
-        endpoint: String(connection?.endpoint || '').trim().replace(/\/+$/, '').toLowerCase(),
-        provider: connection?.provider || connection?.apiFamily || null,
-    });
-}
-
-function peekConnection(id) {
-    const raw = globalThis.SillyTavern?.getContext?.()?.extensionSettings?.[MODULE_NAME]?.[IMAGE_CONNECTION_SETTINGS_KEY]?.connections;
-    if (!Array.isArray(raw)) return null;
-    return raw.find(connection => connection?.id === id) || null;
-}
 function keyMetaNamespace(id) {
     return `${getImageConnectionKeyNamespace(id)}:meta`;
 }
@@ -120,17 +110,18 @@ function localforage() {
 }
 
 export async function setConnectionApiKey(id, value) {
-    const connection = peekConnection(id);
     const key = String(value || '').trim();
     const store = localforage();
     if (!store) return;
     if (key) {
         await store.setItem(getImageConnectionKeyNamespace(id), key);
-        await store.setItem(keyMetaNamespace(id), connectionFingerprint(connection));
     } else {
         await store.removeItem(getImageConnectionKeyNamespace(id));
-        await store.removeItem(keyMetaNamespace(id));
     }
+    // Legacy cleanup: the retired fingerprint guard stored connection metadata
+    // beside the key; it is no longer read anywhere, so drop it on the next
+    // key write/clear instead of leaving stale records in localforage.
+    await store.removeItem(keyMetaNamespace(id));
 }
 
 export async function getConnectionApiKey(id) {

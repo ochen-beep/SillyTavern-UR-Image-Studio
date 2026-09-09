@@ -137,6 +137,54 @@ test('keeps connection API keys in browser-local storage and returns an empty va
     assert.equal(await store.getConnectionApiKey('primary'), '');
 });
 
+test('updateConnection never erases the browser-local key', async () => {
+    reset();
+
+    await store.createConnection({
+        id: 'c1', name: 'Gateway', endpoint: 'https://gw.example.test/v1',
+        model: { id: 'gpt-image-1', source: 'list' },
+        overrides: { dialect: 'openai-images' },
+    });
+    await store.setConnectionApiKey('c1', 'sk-secret-123');
+
+    // References-panel recovery click after a failed generation pins another
+    // dialect; the derived apiFamily changes, the key must survive.
+    await store.updateConnection('c1', { overrides: { dialect: 'chat-completions' } });
+    assert.equal(await store.getConnectionApiKey('c1'), 'sk-secret-123');
+
+    // Evidence write-back after a failed generation.
+    await store.updateConnection('c1', {
+        evidence: { 'gpt-image-1': { dialect: 'openai-images', refs: 'rejected', reason: 'image_url rejected' } },
+    });
+    assert.equal(await store.getConnectionApiKey('c1'), 'sk-secret-123');
+
+    // Endpoint fix (typo) — key stays bound to the connection id.
+    await store.updateConnection('c1', { endpoint: 'https://gw2.example.test/v1' });
+    assert.equal(await store.getConnectionApiKey('c1'), 'sk-secret-123');
+
+    // Legacy fingerprint metadata is cleaned up on the next key write.
+    const localforage = SillyTavern.libs.localforage;
+    await localforage.setItem('uris_api_key:c1:meta', '{"endpoint":"old"}');
+    await store.setConnectionApiKey('c1', 'sk-secret-123');
+    assert.equal(await localforage.getItem('uris_api_key:c1:meta'), null);
+    assert.equal(await store.getConnectionApiKey('c1'), 'sk-secret-123');
+});
+
+test('the key leaves storage only through explicit actions', async () => {
+    reset();
+
+    await store.createConnection({ id: 'c1', name: 'Gateway', endpoint: 'https://gw.example.test/v1' });
+    await store.setConnectionApiKey('c1', 'sk-secret-123');
+
+    // Saving an empty Key field in the card.
+    await store.setConnectionApiKey('c1', '');
+    assert.equal(await store.getConnectionApiKey('c1'), '');
+
+    await store.setConnectionApiKey('c1', 'sk-secret-123');
+    await store.deleteConnection('c1');
+    assert.equal(await store.getConnectionApiKey('c1'), '');
+});
+
 
 test('propagates browser-local key storage failures', async () => {
     reset();
