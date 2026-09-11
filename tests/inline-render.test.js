@@ -253,3 +253,44 @@ test('reconcileVisible: ручная оболочка становится ready
     assert.equal(shell.querySelector('img').getAttribute('src'), '/m.png');
     shutdownRender();
 });
+
+test('render: manual error shell converges (stable identity across passes)', () => {
+    // Регрессия: безгардовая replaceWith() в reconcileManualShells пересоздавала
+    // error-оболочку (data-manual остаётся → совпадение снова) каждый проход —
+    // бесконечный чурн через MutationObserver. Здесь без обсервера: 3 прохода
+    // подряд должны оставить ТОТ ЖЕ узел.
+    const { textEl, buttonsEl } = buildChatDOM();
+    const jobs = [];
+    initRender({ reroll: (job) => { jobs.push(job); return Promise.resolve(); } });
+    ensureManualButtons();
+    buttonsEl.querySelector('[data-uris-manual]').click();
+    upsertItem(0, { idx: -1, type: 'img', descHash: stableHash(`img|${jobs[0].desc}`), status: 'error', error: 'NO_CONNECTION' });
+    reconcileVisible();
+    const manualKey = `-1|img|${stableHash(`img|${jobs[0].desc}`)}`;
+    const first = textEl.querySelector(`[data-uris-inl="${manualKey}"]`);
+    assert.equal(first.getAttribute('data-uris-status'), 'error');
+    // Маркер [[img: a]] получает собственную button-оболочку — считаем её,
+    // инвариант: количество оболочек не растёт от прохода к проходу.
+    const countAfterFirst = textEl.querySelectorAll('[data-uris-inl]').length;
+    for (let i = 0; i < 3; i++) {
+        reconcileVisible();
+        const shell = textEl.querySelector(`[data-uris-inl="${manualKey}"]`);
+        assert.equal(shell, first, `проход ${i + 1}: узел не пересоздаётся`);
+    }
+    assert.equal(textEl.querySelectorAll('[data-uris-inl]').length, countAfterFirst, 'без churn: число оболочек стабильно');
+    shutdownRender();
+});
+
+test('render: маркерные оболочки тоже сходятся (identity после замены статуса)', () => {
+    const { textEl } = buildChatDOM();
+    upsertItem(0, { idx: 0, type: 'img', descHash: HASH_A, status: 'pending', requestId: 'r1' });
+    reconcileVisible();
+    upsertItem(0, { idx: 0, type: 'img', descHash: HASH_A, status: 'ready', imagePath: 'p.png', requestId: 'r1' });
+    reconcileVisible();
+    const first = textEl.querySelector('[data-uris-inl]');
+    assert.equal(first.getAttribute('data-uris-status'), 'ready');
+    reconcileVisible();
+    reconcileVisible();
+    assert.equal(textEl.querySelector('[data-uris-inl]'), first, 'тот же узел на следующих проходах');
+    assert.equal(textEl.querySelectorAll('[data-uris-inl]').length, 1);
+});

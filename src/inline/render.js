@@ -94,23 +94,29 @@ export function reconcileVisible() {
         const msgId = Number(msgIdRaw);
         const mes = chat?.[msgId]?.mes;
         const markers = typeof mes === 'string' ? parseInline(mes) : [];
-        const slot = getSlot(msgId);
         let shellEls = [];
         try { shellEls = Array.from(mesEl.querySelectorAll(`[${SHELL_ATTR}]`)); } catch { shellEls = []; }
-        if (!markers.length && !(slot.items || []).length && !shellEls.length) continue; // fast-path
+        // 📷-кнопка нужна каждому AI-сообщению — до fast-path (chat передан,
+        // getCtx() на сообщение не зовётся; getSlot ниже не затрагивается).
+        ensureManualButton(mesEl, msgId, chat);
+        // Fast-path ДО getSlot: без маркеров и оболочек store не читаем — иначе
+        // каждый проход материализует uris_inline-скелет в chatMetadata чатов,
+        // где инлайн не использовался. Ручные оболочки несут data-uris-inl, так
+        // что shellEls покрывает все сообщения, которым нужны данные слота.
+        if (!markers.length && !shellEls.length) continue;
+        const items = getSlot(msgId).items;
         const textEl = mesEl.querySelector('.mes_text');
         if (!textEl) continue;
         const existingKeys = new Set(shellEls.map(el => el.getAttribute(SHELL_ATTR)).filter(Boolean));
-        const plan = computeShellPlan({ msgId, markers, items: slot.items, hashFn: stableHash, existingKeys });
+        const plan = computeShellPlan({ msgId, markers, items, hashFn: stableHash, existingKeys });
         for (const entry of plan) {
             const cur = shellEls.find(el => el.getAttribute(SHELL_ATTR) === entry.key) || null;
             // keep только при совпадении и статуса: pending→ready обновится (аменда 1)
             if (entry.domAction === 'keep' && cur && cur.getAttribute(STATUS_ATTR) === entry.status) continue;
             mountShell(textEl, entry, cur);
         }
-        pruneStaleShells(textEl, plan, slot, shellEls);
-        reconcileManualShells(mesEl, textEl, slot);
-        ensureManualButton(mesEl, msgId);
+        pruneStaleShells(textEl, plan, items, shellEls);
+        reconcileManualShells(mesEl, textEl, items);
     }
 }
 
@@ -313,14 +319,13 @@ function mountShell(textEl, entry, cur) {
 /** Оболочки вне текущего плана снимаются («реролл = замена», маркер удалён —
  * оболочка тоже). Ручные (data-manual) и готовые результаты ручной генерации
  * (idx<0, вне marker-плана) остаются. */
-function pruneStaleShells(textEl, plan, slot, shellEls) {
+function pruneStaleShells(textEl, plan, items, shellEls) {
     const planKeys = new Set(plan.map(e => e.key));
-    const items = slot.items || [];
     for (const el of shellEls) {
         const key = el.getAttribute(SHELL_ATTR);
         if (!key || planKeys.has(key)) continue;
         if (el.getAttribute('data-manual') === '1') continue;
-        const item = items.find(i => itemKey(i) === key) || null;
+        const item = (items || []).find(i => itemKey(i) === key) || null;
         if (item && Number(item.idx) < 0) continue;
         removeNode(el);
     }
@@ -333,8 +338,11 @@ function removeNode(el) {
     } catch { /* узел уже снят */ }
 }
 
-/** Ручные оболочки (data-manual): pending → ready/error из store (аменда 1). */
-function reconcileManualShells(mesEl, textEl, slot) {
+/** Ручные оболочки (data-manual): pending → ready/error из store (аменда 1).
+ * Гард сходимости — как в marker-пути: тот же ключ и статус → узел уже
+ * актуален, безгардовая replaceWith() создавала бы новый DOM-узел каждый
+ * проход (чурн ~4 Гц через MutationObserver на error-оболочках). */
+function reconcileManualShells(mesEl, textEl, items) {
     if (!textEl) return;
     let manualEls = [];
     try { manualEls = Array.from(mesEl.querySelectorAll('[data-manual="1"]')); } catch { return; }
@@ -342,16 +350,18 @@ function reconcileManualShells(mesEl, textEl, slot) {
     for (const el of manualEls) {
         const key = el.getAttribute(SHELL_ATTR);
         if (!key) continue;
-        const item = (slot.items || []).find(i => itemKey(i) === key) || null;
+        const item = (items || []).find(i => itemKey(i) === key) || null;
         if (!item || (item.status !== 'ready' && item.status !== 'error')) continue;
+        const computedStatus = (item.status === 'ready' && !item.imagePath) ? 'error' : item.status;
+        if (el.getAttribute(SHELL_ATTR) === key && el.getAttribute(STATUS_ATTR) === computedStatus) continue;
         const desc = el.getAttribute('data-uris-desc') || '';
         const entry = {
             msgId, idx: item.idx, type: item.type, desc, descHash: item.descHash,
-            key, item, status: (item.status === 'ready' && !item.imagePath) ? 'error' : item.status,
+            key, item, status: computedStatus,
             marker: { raw: null },
         };
         const shell = shellFor(msgId, entry);
-        if (entry.status !== 'ready') {
+        if (computedStatus !== 'ready') {
             // error остаётся ручной оболочкой (retry кликом)
             shell.setAttribute('data-manual', '1');
             shell.setAttribute('data-uris-desc', desc);
@@ -395,23 +405,27 @@ function cancelPending(entry) {
 
 // ── Ручная 📷-кнопка в .mes_buttons ──
 
-/** Для каждого .mes[mesid] AI-сообщения с .mes_buttons, где ещё нет кнопки. */
-export function ensureManualButtons(rootEl) {
+/** Для каждого .mes[mesid] AI-сообщения с .mes_buttons, где ещё нет кнопки.
+ * chat можно передать (реконсиляция уже зовёт getContext один раз на проход). */
+export function ensureManualButtons(rootEl, chat = null) {
     if (typeof document === 'undefined') return;
     const scope = rootEl || (typeof document.getElementById === 'function' && document.getElementById('chat')) || document;
     let mesEls = [];
     try { mesEls = Array.from(scope.querySelectorAll('.mes')); } catch { return; }
+    if (chat == null) {
+        try { chat = getCtx()?.chat || null; } catch { chat = null; }
+    }
     for (const mesEl of mesEls) {
         const msgId = mesEl.getAttribute('mesid');
         if (msgId == null || msgId === '') continue;
-        ensureManualButton(mesEl, Number(msgId));
+        ensureManualButton(mesEl, Number(msgId), chat);
     }
 }
 
-function ensureManualButton(mesEl, msgId) {
+function ensureManualButton(mesEl, msgId, chat) {
     try {
         let isUser = false;
-        try { isUser = !!getCtx()?.chat?.[Number(msgId)]?.is_user; } catch { /* ST недоступен */ }
+        try { isUser = !!chat?.[Number(msgId)]?.is_user; } catch { /* ST недоступен */ }
         if (isUser) return;
         const buttons = mesEl.querySelector('.mes_buttons');
         if (!buttons || buttons.querySelector('[data-uris-manual]')) return;
