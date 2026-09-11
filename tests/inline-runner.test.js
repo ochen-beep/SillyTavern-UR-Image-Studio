@@ -1,7 +1,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { planScan, stableHash } from '../src/inline/runner.js';
+import { planScan, stableHash, buildJobPlan } from '../src/inline/runner.js';
 import { parseInline } from '../src/inline/grammar.js';
+import { normalizeTrigger } from '../src/inline/triggers.js';
 
 test('planScan: new marker in auto mode → queue', () => {
     const markers = parseInline('ответ [[img: чашка кофе]]');
@@ -101,4 +102,22 @@ test('planScan: unknown type → skip-unknown', () => {
 
 test('stableHash: golden FNV-1a hex для img|d', () => {
     assert.equal(stableHash('img|d'), '6998fd64');
+});
+
+// — buildJobPlan: чистая сборка плана (промпт/аспект/политика рефов).
+
+test('buildJobPlan: prompt = shell + macros, refs policy off → без резолвера', () => {
+    const trigger = normalizeTrigger({ id: 'scene', name: 'Сцена', aliases: ['scene'],
+        aspect: '16:9', prefix: 'cinematic shot, ', suffix: '', refsPolicy: 'off' });
+    const plan = buildJobPlan({ trigger, desc: 'ночной город', macros: { charName: 'Илюха' } });
+    assert.equal(plan.prompt, 'cinematic shot, ночной город');
+    assert.equal(plan.aspect, '16:9');
+    assert.equal(plan.refs, null);                 // refsPolicy off → авторефов нет
+});
+
+test('buildJobPlan: refs auto → флаг авто-референсов', () => {
+    const trigger = normalizeTrigger({ id: 'img', name: 'К', aliases: ['img'], aspect: '1:1',
+        prefix: '', suffix: '', refsPolicy: 'auto' });
+    const plan = buildJobPlan({ trigger, desc: 'чашка кофе' });
+    assert.equal(plan.refs, 'auto');
 });

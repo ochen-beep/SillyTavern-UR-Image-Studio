@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
     DEFAULT_TRIGGERS, REFS_POLICIES, normalizeTrigger, buildAliasIndex, resolveProfile,
-    buildInlinePrompt, sanitizeTriggerList,
+    buildInlinePrompt, sanitizeTriggerList, triggerAliases,
 } from '../src/inline/triggers.js';
 
 test('triggers: defaults include img/selfie/scene with correct shape', () => {
@@ -77,4 +77,15 @@ test('triggers: buildInlinePrompt is $-safe for names', () => {
     const prompt = buildInlinePrompt(selfie, 'beach', { charName: 'Alice$&$\'X' });
     assert.ok(prompt.includes("Alice$&$'X"));
     assert.ok(!prompt.includes('{{char}}'));
+});
+
+test('triggers: triggerAliases находит первый алиас в тексте (границы слов)', () => {
+    const idx = buildAliasIndex(DEFAULT_TRIGGERS);
+    const hit = triggerAliases(idx, 'сделай селфи на пляже');
+    assert.equal(hit.alias, 'селфи');
+    assert.equal(hit.profile.id, 'selfie');
+    assert.equal(triggerAliases(idx, 'selfieee — не слово'), null);             // подстрока ≠ алиас
+    assert.equal(triggerAliases(idx, 'Сделай СЕЛФИ')?.profile.id, 'selfie');    // регистр не важен
+    assert.equal(triggerAliases(idx, ''), null);
+    assert.equal(triggerAliases(idx, null), null);
 });

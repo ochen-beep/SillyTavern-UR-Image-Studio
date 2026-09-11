@@ -89,6 +89,17 @@ export function resolveProfile(aliasIndex, type) {
     return aliasIndex.get(String(type || '').toLowerCase().replaceAll('ё', 'е')) || null;
 }
 
+/** Первый алиас, встреченный в тексте (для key-word триггера юзера). */
+export function triggerAliases(aliasIndex, text) {
+    const t = String(text || '');
+    for (const [alias, profile] of aliasIndex) {
+        if (!alias) continue;
+        const re = new RegExp(`(^|[^\\p{L}])${alias.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}([^\\p{L}]|$)`, 'iu');
+        if (re.test(t)) return { alias, profile };
+    }
+    return null;
+}
+
 /**
  * Промпт инлайна: prefix + описание + suffix, макросы ST разворачиваются.
  * @param {{prefix:string, suffix:string}} trigger

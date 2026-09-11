@@ -17,3 +17,8 @@ test('autolane: rejection does not poison the lane', async () => {
     const r = await enqueueAutoLane(async () => 'after');
     assert.equal(r, 'after');
 });
+
+test('autolane: sync throw rejects caller, lane survives', async () => {
+    await assert.rejects(enqueueAutoLane(() => { throw new Error('sync'); }), /sync/);
+    assert.equal(await enqueueAutoLane(() => 'after'), 'after');
+});
