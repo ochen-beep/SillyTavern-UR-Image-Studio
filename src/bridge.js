@@ -38,6 +38,8 @@ import { composeReferencePrompt } from './reference-binding.js';
 import { generatePromptText } from './text-api.js';
 import { listRefs } from './refs-library.js';
 import { enqueueAutoLane } from './autolane.js';
+import { parseInline } from './inline/grammar.js';
+import { buildAliasIndex, resolveProfile, sanitizeTriggerList, buildInlinePrompt, DEFAULT_TRIGGERS } from './inline/triggers.js';
 
 /** Public contract version. Increment on breaking changes to the surface below. */
 export const BRIDGE_API_VERSION = 1;
@@ -86,7 +88,7 @@ export function validateBridgeCaller(caller) {
 /**
  * Validate and normalize a bridge generate() request. Pure — unit-tested in node.
  * @param {unknown} request
- * @returns {{prompt:string, aspectRatio:string, imageSize:string, quality:string, references:Array<{id:string,name:string,dataUrl:string}>, connectionId:string|null, modelId:string|null}}
+ * @returns {{prompt:string, aspectRatio:string, imageSize:string, quality:string, references:Array<{id:string,name:string,dataUrl:string}>, connectionId:string|null, modelId:string|null, trigger:string|null}}
  */
 export function normalizeBridgeRequest(request) {
     if (!request || typeof request !== 'object' || Array.isArray(request)) {
@@ -131,9 +133,10 @@ export function normalizeBridgeRequest(request) {
 
     const connectionId = typeof req.connectionId === 'string' && req.connectionId.trim() ? req.connectionId.trim() : null;
     const modelId = typeof req.modelId === 'string' && req.modelId.trim() ? req.modelId.trim() : null;
+    const trigger = typeof req.trigger === 'string' && req.trigger.trim() ? req.trigger.trim() : null;
     const useSceneRefs = req.useSceneRefs === true;
     const expandMacros = req.expandMacros !== false;
-    return { prompt, aspectRatio, imageSize, quality, references, connectionId, modelId, useSceneRefs, expandMacros };
+    return { prompt, aspectRatio, imageSize, quality, references, connectionId, modelId, trigger, useSceneRefs, expandMacros };
 }
 
 // ── Runtime (browser) state ──
@@ -233,6 +236,20 @@ async function generateOnce(caller, requestId, norm, controller, onStatus) {
             dispatchOpts.route = plan.route;
         }
 
+        // Trigger-профиль (опционально): приносит aspect/shell/refsPolicy из реестра.
+        let aspect = norm.aspectRatio;
+        let basePromptSource = norm.prompt;
+        let refsPolicyOverride = null;           // 'off' форсит отказ от авторефов
+        if (norm.trigger) {
+            const registry = sanitizeTriggerList(state.settings?.inlineTriggers || DEFAULT_TRIGGERS);
+            const profile = registry.find(t => t.id === norm.trigger);
+            if (!profile) throw bridgeError('TRIGGER_NOT_FOUND',
+                `Unknown trigger "${norm.trigger}". Known: ${registry.map(t => t.id).join(', ')}`);
+            aspect = profile.aspect || aspect;
+            basePromptSource = buildInlinePrompt(profile, norm.prompt);
+            if (profile.refsPolicy === 'off') refsPolicyOverride = 'off';
+        }
+
         // Reference pipeline: pool refs by id, then the Stage 2 scene resolver
         // (auto-match reference names/aliases in the prompt), then description
         // entries composed into the effective prompt — the same chain the
@@ -250,9 +267,10 @@ async function generateOnce(caller, requestId, norm, controller, onStatus) {
                 references.push({ id: ref.id, name: ref.name, dataUrl: ref.dataUrl });
             }
         }
-        let basePrompt = norm.expandMacros === false ? norm.prompt : resolveSTMacros(norm.prompt);
+        let basePrompt = norm.expandMacros === false ? basePromptSource : resolveSTMacros(basePromptSource);
         const matchedByResolver = [];
-        if (norm.useSceneRefs) {
+        // профиль строже: refsPolicy 'off' отключает авторефы, даже если useSceneRefs=true
+        if (norm.useSceneRefs && refsPolicyOverride !== 'off') {
             const candidates = await buildCandidates(state.currentChatId || 'current');
             const resolution = await resolvePromptReferenceContext({
                 prompt: basePrompt,
@@ -282,7 +300,7 @@ async function generateOnce(caller, requestId, norm, controller, onStatus) {
         const result = await generateImageRequest(connId, {
             requestId,
             prompt: basePrompt,
-            aspectRatio: norm.aspectRatio,
+            aspectRatio: aspect,
             imageSize: norm.imageSize,
             quality: norm.quality,
             references,
@@ -326,7 +344,7 @@ async function generateOnce(caller, requestId, norm, controller, onStatus) {
 
 /**
  * Headless paid generation, not bound to a chat message.
- * @param {unknown} request - { prompt, aspectRatio?, imageSize?, quality?, references?, connectionId?, modelId? }
+ * @param {unknown} request - { prompt, aspectRatio?, imageSize?, quality?, references?, connectionId?, modelId?, trigger? }
  * @param {unknown} opts - { caller, signal?, onStatus?, queue? }
  * @returns {Promise<{requestId:string, cardId:string|null, imagePath:string|null, width:number|null, height:number|null, warnings:Array}>}
  */
@@ -608,6 +626,11 @@ export function activateBridge() {
         ready: _readyPromise,
         generate,
         buildPrompt,
+        parseInline: (text) => {
+            const registry = sanitizeTriggerList(state.settings?.inlineTriggers || DEFAULT_TRIGGERS);
+            const idx = buildAliasIndex(registry);
+            return parseInline(text).map(m => ({ ...m, profile: resolveProfile(idx, m.type) }));
+        },
         abort,
         listActive,
         listConnections,

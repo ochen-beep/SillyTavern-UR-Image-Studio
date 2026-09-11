@@ -48,6 +48,7 @@ test('bridge: request normalization applies defaults', () => {
         references: [],
         connectionId: null,
         modelId: null,
+        trigger: null,
         useSceneRefs: false,
         expandMacros: true,
     });
@@ -169,4 +170,38 @@ test('bridge: activate is idempotent', () => {
     assert.equal(first, second);
     deactivateBridge();
     assert.equal(globalThis.URIS, undefined);
+});
+
+test('bridge: parseInline resolves profiles via trigger registry', async () => {
+    const bridge = activateBridge();
+    try {
+        const markers = bridge.parseInline('смотри [[селфи: на пляже]] и [[img: чашка]]');
+        assert.equal(markers.length, 2);
+        assert.equal(markers[0].type, 'селфи');
+        assert.equal(markers[0].profile?.id, 'selfie');
+        assert.equal(markers[0].profile?.aspect, '9:16');
+        assert.equal(markers[1].profile?.id, 'img');
+        // неизвестный тип → profile null (хост решает: img-fallback или скрыть)
+        const unknown = bridge.parseInline('[[бред: x]]');
+        assert.equal(unknown[0].profile, null);
+    } finally { deactivateBridge(); }
+});
+
+test('bridge: generate with unknown trigger → TRIGGER_NOT_FOUND', async () => {
+    const { state } = await import('../src/core.js');
+    const savedSettings = state.settings;
+    const bridge = activateBridge();
+    try {
+        // В node нет ни настроек, ни дефолтного коннекта чата: включаем мост
+        // и задаём connectionId явно, чтобы дойти до резолва триггера.
+        state.settings = { enabled: true, bridgeEnabled: true };
+        await assert.rejects(
+            () => bridge.generate({ trigger: 'несуществует', prompt: 'x', connectionId: 'conn-x' }, { caller: 'lab' }),
+            e => e instanceof UrisBridgeError && e.code === 'TRIGGER_NOT_FOUND',
+        );
+    } finally {
+        state.settings = savedSettings;
+        deactivateBridge();
+        assert.equal(globalThis.URIS, undefined);
+    }
 });
