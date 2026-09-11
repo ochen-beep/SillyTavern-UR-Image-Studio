@@ -80,7 +80,7 @@ export function bindScanner() {
         deleted: (i) => dropMessage(typeof i === 'number' ? i : null),
         chatChanged: () => { try { window.dispatchEvent(new CustomEvent('uris:inline-update', {})); } catch { /* node */ } },
         userSent: (i) => {
-            if (!getConfig().listenUser) return;
+            if (!inlineActive() || !getConfig().listenUser) return;
             const text = String(ctx.chat?.[i]?.mes || '');
             const idx = buildAliasIndex(sanitizeTriggerList(state.settings?.inlineTriggers || []));
             const hit = triggerAliases(idx, text);

@@ -101,7 +101,9 @@ export function triggerAliases(aliasIndex, text) {
 }
 
 /**
- * Промпт инлайна: prefix + описание + suffix, макросы ST разворачиваются.
+ * Промпт инлайна: prefix + описание + suffix, макросы ST разворачиваются
+ * (и в desc тоже: fallback-desc вроде '{{char}} photo' иначе уезжает
+ * к провайдеру буквально).
  * @param {{prefix:string, suffix:string}} trigger
  * @param {string} desc
  * @param {{charName?: string, userName?: string}} [macroFallback]
@@ -115,6 +117,6 @@ export function buildInlinePrompt(trigger, desc, macroFallback = {}) {
     };
     // Части склеиваются одним пробелом: normalizeTrigger триммит prefix/suffix,
     // поэтому прямой конкатенацией запятая на стыке даёт «{{char}},на пляже».
-    return [expand(trigger.prefix), String(desc || '').trim(), expand(trigger.suffix)]
+    return [expand(trigger.prefix), expand(String(desc || '').trim()), expand(trigger.suffix)]
         .map(s => s.trim()).filter(Boolean).join(' ');
 }

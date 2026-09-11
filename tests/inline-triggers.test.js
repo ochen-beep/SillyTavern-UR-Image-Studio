@@ -89,3 +89,16 @@ test('triggers: triggerAliases находит первый алиас в тек�
     assert.equal(triggerAliases(idx, ''), null);
     assert.equal(triggerAliases(idx, null), null);
 });
+
+test('triggers: triggerAliases экранирует метасимволы в алиасе', () => {
+    const idx = buildAliasIndex([{ id: 'x', aliases: ['img(1)'] }]);
+    assert.equal(triggerAliases(idx, 'го img(1)!')?.alias, 'img(1)');
+    assert.equal(triggerAliases(idx, 'го img1'), null);                          // метасимволы — литерал, не шаблон
+});
+
+test('triggers: buildInlinePrompt разворачивает макросы и в desc ({{char}} photo не уезжает буквально)', () => {
+    const img = DEFAULT_TRIGGERS.find(t => t.id === 'img');
+    const prompt = buildInlinePrompt(img, '{{char}} photo', { charName: 'Mira' });
+    assert.ok(prompt.includes('Mira photo'));
+    assert.ok(!prompt.includes('{{char}}'));
+});

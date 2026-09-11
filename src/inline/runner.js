@@ -24,10 +24,11 @@ import { state, getCtx } from '../core.js';
 import { resolveChatConfigSnapshot, buildCandidates } from '../pipeline-config.js';
 import { resolvePromptReferenceContext } from '../scene-context.js';
 import { imageToDataUrl } from '../references.js';
+import { composeReferencePrompt } from '../reference-binding.js';
 import { generateImageRequest } from '../image-api.js';
 import { recordDiagnosticEvent } from '../diagnostic-events.js';
 import { enqueueAutoLane } from '../autolane.js';
-import { itemKey, upsertItem } from './store.js';
+import { itemKey, getSlot, upsertItem } from './store.js';
 import { sanitizeTriggerList, buildAliasIndex, resolveProfile, buildInlinePrompt } from './triggers.js';
 
 /** Окно «генерация ещё возможно стартует» для pending без живого requestId, мс. */
@@ -133,16 +134,25 @@ export async function processJob({ msgId, idx, type, desc }) {
     const requestId = newInlineRequestId();
     const controller = new AbortController();
     state.activeGenerations.set(requestId, controller);
+    const startedAt = Date.now();
     recordDiagnosticEvent({ event: 'inline-start', requestId, details: { msgId, idx, type } });
     const descHash = stableHash(`${type}|${desc}`);
+    // Живой pending сразу: сохранённый requestId — единственный способ для
+    // planScan отличить работающую генерацию от осиротевшей. Без него задача,
+    // стоящая за длинным мостовым POST, флипается в render-error с платным
+    // retry, пока ещё выполняется. Store не даёт готовому ready откатиться
+    // в pending (его guard ready→pending), а keyword-задачи получают видимый
+    // живой pending ещё до первого скана.
+    upsertItem(msgId, { idx, type, descHash, status: 'pending', requestId, createdAt: Date.now() });
+    let outcome = 'error';      // 'ready' | 'cancelled' | 'error'
+    let errorCode = null;
+    let imagePath = null;
+    let cardId = null;
     try {
-        // АМЕНД 1 (ревью Task 6): неизвестный триггер между planScan и исполнением
-        // не должен оставлять висящий pending — сразу error-item, потом throw.
+        // Неизвестный триггер (АМЕНД 1, ревью Task 6): pending не должен
+        // повиснуть — catch ниже конвертирует его в error-item с кодом.
         const trigger = resolveProfile(buildAliasIndex(sanitizeTriggerList(state.settings?.inlineTriggers || [])), type);
-        if (!trigger) {
-            upsertItem(msgId, { idx, type, descHash, status: 'error', imagePath: null, cardId: null, requestId, error: 'TRIGGER_NOT_FOUND', createdAt: Date.now() });
-            throw Object.assign(new Error(`Unknown inline trigger "${type}"`), { code: 'TRIGGER_NOT_FOUND' });
-        }
+        if (!trigger) throw Object.assign(new Error(`Unknown inline trigger "${type}"`), { code: 'TRIGGER_NOT_FOUND' });
         const macroFallback = (() => {
             try {
                 const ctx = getCtx();
@@ -155,9 +165,13 @@ export async function processJob({ msgId, idx, type, desc }) {
         const connId = snapshot.imageProfileId;
         if (!connId) throw Object.assign(new Error('No image connection'), { code: 'NO_CONNECTION' });
 
-        // Референсы по политике профиля (зеркало bridge.generateOnce)
-        let references = [];
-        let referenceBindings = [];
+        // Референсы по политике профиля (зеркало bridge.generateOnce): pool-id
+        // у инлайна нет — только авто-резолвер сцены. Description-рефы
+        // КОМПОЗИРУЮТСЯ в промпт: провайдеры читают позиционные bindings
+        // ({index,label,description}) против references, сырой {name,description}
+        // им не подходит.
+        const references = [];
+        const descriptionEntries = [];
         if (plan.refs === 'auto') {
             const candidates = await buildCandidates(state.currentChatId || 'current');
             const resolution = await resolvePromptReferenceContext({
@@ -166,17 +180,24 @@ export async function processJob({ msgId, idx, type, desc }) {
             });
             for (const r of resolution.stage2Refs || []) {
                 if (r.bindingMode === 'description') {
-                    referenceBindings.push({ name: r.name, description: r.description, bindingMode: 'description' });
+                    descriptionEntries.push({ name: r.name, description: r.description, bindingMode: 'description' });
                     continue;
                 }
                 const dataUrl = await imageToDataUrl(r.imagePath);
                 if (dataUrl && !references.some(x => x.id === r.id)) references.push({ id: r.id, name: r.name, dataUrl });
             }
         }
+        let referenceBindings = [];
+        let prompt = plan.prompt;
+        if (descriptionEntries.length) {
+            const composed = composeReferencePrompt(prompt, descriptionEntries);
+            prompt = composed.effectivePrompt;
+            referenceBindings = composed.bindings;
+        }
 
         const result = await generateImageRequest(connId, {
             requestId,
-            prompt: plan.prompt,
+            prompt,
             aspectRatio: plan.aspect,
             references,
             referenceBindings,
@@ -185,21 +206,31 @@ export async function processJob({ msgId, idx, type, desc }) {
         }, () => {}, controller.signal, {});
 
         const entry = result?.galleryEntry || {};
-        upsertItem(msgId, { idx, type, descHash, status: 'ready', imagePath: entry.imagePath ?? null,
-            cardId: entry.id ?? null, requestId, error: null, createdAt: Date.now() });
-        recordDiagnosticEvent({ event: 'inline-end', requestId, outcome: 'ready', details: { msgId, type, cardId: entry.id ?? null } });
-        emitInline('uris:inline-end', { requestId, msgId, idx, type, imagePath: entry.imagePath ?? null });
-        return { requestId, imagePath: entry.imagePath ?? null, cardId: entry.id ?? null };
+        imagePath = entry.imagePath ?? null;
+        cardId = entry.id ?? null;
+        upsertItem(msgId, { idx, type, descHash, status: 'ready', imagePath, cardId, requestId, error: null, createdAt: Date.now() });
+        outcome = 'ready';
+        return { requestId, imagePath, cardId };
     } catch (e) {
         const cancelled = controller.signal.aborted || e?.name === 'AbortError';
-        upsertItem(msgId, { idx, type, descHash, status: 'error', imagePath: null, cardId: null, requestId,
-            error: cancelled ? 'aborted' : (e?.code || e?.message || String(e)), createdAt: Date.now() });
-        recordDiagnosticEvent({ event: 'inline-end', requestId, outcome: cancelled ? 'cancelled' : 'error',
-            details: { msgId, type, code: e?.code || null } });
+        outcome = cancelled ? 'cancelled' : 'error';
+        errorCode = cancelled ? 'aborted' : String(e?.code || e?.message || e);
+        // Провал реролла не откатывает платный ready-результат в ошибку: старая
+        // картинка остаётся видимой, провал уходит вызывающему (реролл/retry, Task 8).
+        const wasReady = getSlot(msgId).items.some(i => i.status === 'ready' && itemKey(i) === itemKey({ idx, type, descHash }));
+        if (!wasReady) {
+            upsertItem(msgId, { idx, type, descHash, status: 'error', imagePath: null, cardId: null, requestId, error: errorCode, createdAt: Date.now() });
+        }
         if (cancelled && e?.code == null) throw Object.assign(new Error('aborted'), { code: 'ABORTED' });
         throw e;
     } finally {
         state.activeGenerations.delete(requestId);
+        // Ровно один end-сигнал на задачу, включая провал/отмену — иначе рендер
+        // крутит спиннер до чужого события.
+        recordDiagnosticEvent({ event: 'inline-end', requestId, outcome,
+            durationMs: Date.now() - startedAt,
+            details: { msgId, type, code: outcome === 'ready' ? null : errorCode, cardId } });
+        emitInline('uris:inline-end', { requestId, msgId, idx, type, outcome, imagePath, error: outcome === 'ready' ? null : errorCode });
     }
 }
 

@@ -71,6 +71,19 @@ test('planScan: orphaned pending (за грейсом, не inFlight) → render
     assert.deepEqual(actions.map(a => a.action), ['render-error']);
 });
 
+// — Живой pending: processJob пишет requestId в store сразу (upsert до старта
+// генерации). Persisted requestId из inFlight держит render-pending и за
+// грейсом — иначе генерация, стоящая за длинным мостом/медленным POST,
+// получает render-error + платный retry, пока ещё выполняется.
+
+test('planScan: persisted inl_ requestId (реальный descHash) в inFlight → render-pending за грейсом', () => {
+    const markers = parseInline('[[img: чашка кофе]]');
+    const requestId = 'inl_3b241101-5f0e-4d0c-9a1b-c2d3e4f5a6b7';
+    const stored = { messageHash: 'h', items: [{ idx: 0, type: 'img', descHash: stableHash('img|чашка кофе'), status: 'pending', requestId, createdAt: Date.now() - 500_000 }] };
+    const actions = planScan({ msgId: 2, messageHash: 'h', markers, stored, auto: true, inFlight: new Set([requestId]), now: () => Date.now() });
+    assert.deepEqual(actions.map(a => a.action), ['render-pending']);
+});
+
 // — Fold: готовый item без файла — ошибка материализации, оболочке нужен retry.
 
 test('planScan: ready без imagePath → render-error', () => {
