@@ -37,6 +37,7 @@ import { imageToDataUrl } from './references.js';
 import { composeReferencePrompt } from './reference-binding.js';
 import { generatePromptText } from './text-api.js';
 import { listRefs } from './refs-library.js';
+import { enqueueAutoLane } from './autolane.js';
 
 /** Public contract version. Increment on breaking changes to the surface below. */
 export const BRIDGE_API_VERSION = 1;
@@ -141,7 +142,6 @@ let _bridge = null;
 let _readyResolve = null;
 let _readyPromise = null;
 let _ready = false;
-let _chain = Promise.resolve();
 /** @type {Map<string, {caller:string, startedAt:number, controller:AbortController, queued:boolean}>} */
 const _externalRuns = new Map();
 const _listeners = new Set();
@@ -363,10 +363,10 @@ async function generate(request, opts = {}) {
 
     // Serial by default: one external paid POST at a time (protects against a
     // consumer loop firing unbounded paid requests). queue:false = run now.
+    // The queue is the shared autolane (bridge + inline automation): one
+    // automatic paid POST at a time across both.
     if (options.queue === false) return run();
-    const pending = _chain.then(run, run);
-    _chain = pending.catch(() => {});
-    return pending;
+    return enqueueAutoLane(run);
 }
 
 /**
