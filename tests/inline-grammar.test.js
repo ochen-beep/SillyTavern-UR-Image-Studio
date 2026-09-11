@@ -33,9 +33,19 @@ test('grammar: cyrillic and digits in type, case-insensitive', () => {
 test('grammar: negative cases produce no markers', () => {
     assert.deepEqual(parseInline('[[img нет двоеточия]]'), []);
     assert.deepEqual(parseInline('[[img:]]'), []);                    // пустое описание
+    assert.deepEqual(parseInline('[[img:   ]]'), []);                 // trim-skip branch
     assert.deepEqual(parseInline('[[тип с пробелом: описание]]'), []);
     assert.deepEqual(parseInline('[[img: не закрыта'), []);
     assert.equal(parseInline('[[img:]][[scene: ok]]').length, 1);   // пустое описание пропущено
+    assert.equal(parseInline('[[img:   ]][[scene: ok]]').length, 1);
+});
+
+test('grammar: hostile input does not hang (ReDoS guard)', () => {
+    const t0 = Date.now();
+    assert.deepEqual(parseInline('[[img: ' + 'x'.repeat(100_000)), []);
+    // пробелы — реальный триггер квадратичного бэктрекинга (x-и не воспроизводят)
+    assert.deepEqual(parseInline('[[a:' + ' '.repeat(10_000)), []);
+    assert.ok(Date.now() - t0 < 1000);
 });
 
 test('grammar: markers inside code fences are ignored', () => {
