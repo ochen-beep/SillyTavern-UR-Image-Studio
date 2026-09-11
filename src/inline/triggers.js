@@ -5,7 +5,7 @@
  * в state.settings.inlineTriggers (проводка в Task 9); здесь — чистые операции.
  */
 
-export const REFS_POLICIES = ['auto', 'off'];
+export const REFS_POLICIES = Object.freeze(['auto', 'off']);
 
 export const DEFAULT_TRIGGERS = Object.freeze([
     Object.freeze({
@@ -33,21 +33,24 @@ export const DEFAULT_TRIGGERS = Object.freeze([
 ]);
 
 const ID_RE = /^[a-zа-яё0-9_-]{1,24}$/;
+const ASPECT_RE = /^\d{1,2}:\d{1,2}$/;
 
-/** Нормализация одной записи; бросает при отсутствии алиасов/невалидном id. */
+/** Нормализация одной записи; бросает при отсутствии алиасов/невалидном id.
+ * Алиасы: lower, ё→е, дедуп, >64 симв — отбрасываются. Невалидный aspect → '1:1'. */
 export function normalizeTrigger(data = {}) {
     // Алиасы проверяем первыми: контракт тестов — вызов без алиасов бросает
     // ошибку про aliases, даже если id тоже отсутствует.
     const aliases = [...new Set((Array.isArray(data.aliases) ? data.aliases : [])
         .map(a => String(a || '').trim().toLowerCase().replaceAll('ё', 'е'))
-        .filter(Boolean))];
+        .filter(a => a && a.length <= 64))];
     if (!aliases.length) throw new Error('trigger aliases required');
     const id = String(data.id || '').trim().toLowerCase().replaceAll('ё', 'е');
     if (!ID_RE.test(id)) throw new Error('trigger id invalid');
     const policy = REFS_POLICIES.includes(data.refsPolicy) ? data.refsPolicy : 'auto';
+    const aspect = String(data.aspect || '').trim();
     return {
         id, name: String(data.name || '').trim() || id, aliases,
-        aspect: String(data.aspect || '1:1').trim(),
+        aspect: ASPECT_RE.test(aspect) ? aspect : '1:1',
         prefix: String(data.prefix || '').trim(),
         suffix: String(data.suffix || '').trim(),
         refsPolicy: policy,
@@ -69,10 +72,16 @@ export function sanitizeTriggerList(list) {
     return out;
 }
 
-/** Алиас (lower, ё→е) → профиль. */
+/** Алиас (lower, ё→е) → профиль. Ключи нормализуются defensively: модуль
+ * остаётся total для сырых данных из настроек (Task 9). */
 export function buildAliasIndex(triggers) {
     const idx = new Map();
-    for (const t of triggers) for (const a of t.aliases) if (!idx.has(a)) idx.set(a, t);
+    for (const t of triggers) {
+        for (const a of t.aliases) {
+            const key = String(a || '').toLowerCase().replaceAll('ё', 'е');
+            if (key && !idx.has(key)) idx.set(key, t);
+        }
+    }
     return idx;
 }
 
@@ -91,7 +100,8 @@ export function buildInlinePrompt(trigger, desc, macroFallback = {}) {
         let out = String(s || '');
         const charName = macroFallback.charName || '{{char}}';
         const userName = macroFallback.userName || '{{user}}';
-        out = out.replaceAll('{{char}}', charName).replaceAll('{{user}}', userName);
+        // () => value — $-последовательности ($&, $', …) в именах не интерпретируются
+        out = out.replaceAll('{{char}}', () => charName).replaceAll('{{user}}', () => userName);
         return out;
     };
     return `${expand(trigger.prefix)}${String(desc || '').trim()}${expand(trigger.suffix)}`.trim();
