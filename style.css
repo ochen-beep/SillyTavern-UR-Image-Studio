@@ -2476,3 +2476,39 @@ div.pswp__img--placeholder,
     opacity: .7; font-size: var(--uris-font-xs);
     overflow-wrap: anywhere; white-space: normal;
 }
+
+/* ── Инлайн-оболочки в сообщениях чата (src/inline/render.js) ──
+   Контейнер картинки/заглушки в .mes_text; позиционирование бейджа —
+   относительно оболочки. Остальное (рамки, кнопки, pending-frame) — inline. */
+.uris-inl-shell {
+    max-width: min(100%, 420px);
+    margin: 6px 0;
+    position: relative;
+    line-height: 0;
+}
+.uris-inl-shell img {
+    max-width: 100%;
+    max-height: 420px;
+    width: auto;
+    border-radius: 10px;
+    border: 1px solid var(--SmartThemeBorderColor, #444);
+    cursor: zoom-in;
+    display: block;
+}
+.uris-inl-badge {
+    position: absolute;
+    top: 8px;
+    left: 8px;
+    z-index: 1;
+    max-width: calc(100% - 16px);
+    padding: 2px 8px;
+    border-radius: 999px;
+    background: rgba(0, 0, 0, 0.55);
+    color: #fff;
+    font-size: var(--uris-font-xs);
+    line-height: 1.5;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    pointer-events: none;
+}
