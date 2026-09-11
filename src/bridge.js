@@ -281,7 +281,7 @@ async function generateOnce(caller, requestId, norm, controller, onStatus) {
             });
             for (const r of resolution.stage2Refs || []) {
                 if (r.bindingMode === 'description') {
-                    descriptionEntries.push({ name: r.name, description: r.description, bindingMode: 'description' });
+                    descriptionEntries.push({ id: r.id, name: r.name, description: r.description, bindingMode: 'description' });
                     continue;
                 }
                 if (references.some(x => x.id === r.id)) continue;

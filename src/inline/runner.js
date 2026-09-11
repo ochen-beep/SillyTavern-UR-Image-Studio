@@ -180,7 +180,7 @@ export async function processJob({ msgId, idx, type, desc }) {
             });
             for (const r of resolution.stage2Refs || []) {
                 if (r.bindingMode === 'description') {
-                    descriptionEntries.push({ name: r.name, description: r.description, bindingMode: 'description' });
+                    descriptionEntries.push({ id: r.id, name: r.name, description: r.description, bindingMode: 'description' });
                     continue;
                 }
                 const dataUrl = await imageToDataUrl(r.imagePath);
