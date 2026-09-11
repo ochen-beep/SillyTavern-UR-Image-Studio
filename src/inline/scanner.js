@@ -9,7 +9,7 @@ import { recordDiagnosticEvent } from '../diagnostic-events.js';
 import { parseInline } from './grammar.js';
 import { buildAliasIndex, sanitizeTriggerList, triggerAliases } from './triggers.js';
 import { getSlot, upsertItem, getConfig, dropMessage } from './store.js';
-import { planScan, queueInlineJob } from './runner.js';
+import { planScan, queueInlineJob, cancelInlineJobs } from './runner.js';
 
 let _handlers = null;
 const _scanInFlight = new Set();
@@ -18,7 +18,7 @@ function inlineActive() {
     return state.settings?.inlineEnabled === true && getConfig().enabled === true;
 }
 
-export async function scanMessage(msgId) {
+export async function scanMessage(msgId, { auto = true } = {}) {
     if (!inlineActive()) return;
     const ctx = getCtx();
     const mes = ctx.chat?.[msgId]?.mes;
@@ -29,11 +29,11 @@ export async function scanMessage(msgId) {
     try {
         const markers = parseInline(mes);
         const registry = sanitizeTriggerList(state.settings?.inlineTriggers || []);
-        const knownTypes = new Set(registry.map(t => t.id));
+        const knownTypes = new Set(buildAliasIndex(registry).keys());
         const messageHash = hashMessage(mes);
         const stored = getSlot(msgId);
         const actions = planScan({
-            msgId, messageHash, markers, stored, auto: true,
+            msgId, messageHash, markers, stored, auto,
             knownTypes,
             inFlight: new Set(state.activeGenerations.keys()),
         });
@@ -74,14 +74,14 @@ export function bindScanner() {
     if (!ctx?.eventSource || !ctx?.event_types) return;
     const et = ctx.event_types;
     _handlers = {
-        ended: () => { const i = ctx.chat?.length ? ctx.chat.length - 1 : null; if (i != null) scanMessage(i); },
-        swiped: (i) => scanMessage(typeof i === 'number' ? i : (ctx.chat?.length ? ctx.chat.length - 1 : null)),
-        edited: (i) => scanMessage(typeof i === 'number' ? i : null),
+        ended: () => { const chat = getCtx().chat; const i = chat?.length ? chat.length - 1 : null; if (i != null) scanMessage(i).catch(() => {}); },
+        swiped: (i) => { cancelInlineJobs(); return scanMessage(typeof i === 'number' ? i : getCtx().chat?.length - 1, { auto: false }); },
+        edited: (i) => { cancelInlineJobs(); return scanMessage(typeof i === 'number' ? i : null, { auto: false }); },
         deleted: (i) => dropMessage(typeof i === 'number' ? i : null),
-        chatChanged: () => { try { window.dispatchEvent(new CustomEvent('uris:inline-update', {})); } catch { /* node */ } },
+        chatChanged: () => { cancelInlineJobs(); try { window.dispatchEvent(new CustomEvent('uris:inline-update', {})); } catch { /* node */ } },
         userSent: (i) => {
             if (!inlineActive() || !getConfig().listenUser) return;
-            const text = String(ctx.chat?.[i]?.mes || '');
+            const text = String(getCtx().chat?.[i]?.mes || '');
             const idx = buildAliasIndex(sanitizeTriggerList(state.settings?.inlineTriggers || []));
             const hit = triggerAliases(idx, text);
             if (!hit) return;
@@ -98,6 +98,7 @@ export function bindScanner() {
 }
 
 export function unbindScanner() {
+    cancelInlineJobs();
     const ctx = getCtx();
     if (_handlers && ctx?.eventSource) {
         const et = ctx.event_types;

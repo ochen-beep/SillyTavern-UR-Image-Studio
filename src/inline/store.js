@@ -29,7 +29,10 @@ function persist() {
 export function getSlot(msgId) {
     const store = meta();
     const slot = store?.msgs?.[String(msgId)];
-    if (!slot) return { messageHash: null, items: [] };
+    const currentText = globalThis.SillyTavern?.getContext?.()?.chat?.[Number(msgId)]?.mes;
+    if (!slot || (typeof slot.sourceText === 'string' && typeof currentText === 'string' && slot.sourceText !== currentText)) {
+        return { messageHash: null, items: [] };
+    }
     return {
         messageHash: slot.messageHash ?? null,
         items: Array.isArray(slot.items) ? slot.items : [],
@@ -37,7 +40,7 @@ export function getSlot(msgId) {
 }
 
 /** Белый список полей item'а — мусор из сырых данных не попадает в chatMetadata. */
-const FIELDS = new Set(['idx', 'type', 'descHash', 'status', 'imagePath', 'cardId', 'requestId', 'error', 'createdAt']);
+const FIELDS = new Set(['idx', 'type', 'descHash', 'desc', 'status', 'imagePath', 'cardId', 'requestId', 'error', 'createdAt']);
 
 /**
  * Вставить/обновить item по ключу (idx,type,descHash); опционально обновить
@@ -49,7 +52,12 @@ export function upsertItem(msgId, item, { messageHash } = {}) {
     const store = meta();
     if (!store) return null;
     const key = String(msgId);
-    const slot = store.msgs[key] || (store.msgs[key] = { messageHash: messageHash ?? null, items: [] });
+    const sourceText = globalThis.SillyTavern?.getContext?.()?.chat?.[Number(msgId)]?.mes;
+    let slot = store.msgs[key];
+    if (!slot || (typeof sourceText === 'string' && typeof slot.sourceText === 'string' && sourceText !== slot.sourceText)) {
+        slot = store.msgs[key] = { messageHash: messageHash ?? null, items: [] };
+    }
+    if (typeof sourceText === 'string') slot.sourceText = sourceText;
     if (messageHash != null) slot.messageHash = messageHash;
     const patch = Object.fromEntries(
         Object.entries(item).filter(([k, v]) => v !== undefined && FIELDS.has(k)));

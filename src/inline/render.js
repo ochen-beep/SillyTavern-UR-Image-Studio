@@ -112,7 +112,8 @@ export function reconcileVisible() {
         for (const entry of plan) {
             const cur = shellEls.find(el => el.getAttribute(SHELL_ATTR) === entry.key) || null;
             // keep только при совпадении и статуса: pending→ready обновится (аменда 1)
-            if (entry.domAction === 'keep' && cur && cur.getAttribute(STATUS_ATTR) === entry.status) continue;
+            if (entry.domAction === 'keep' && cur && cur.getAttribute(STATUS_ATTR) === entry.status
+                && cur.getAttribute('data-uris-image') === String(entry.item?.imagePath || '')) continue;
             mountShell(textEl, entry, cur);
         }
         pruneStaleShells(textEl, plan, items, shellEls);
@@ -157,6 +158,7 @@ function shellFor(msgId, entry) {
     el.classList.add('uris-inl-shell');
     el.setAttribute(SHELL_ATTR, entry.key);
     el.setAttribute(STATUS_ATTR, entry.status);
+    el.setAttribute('data-uris-image', String(entry.item?.imagePath || ''));
     if (entry.status === 'ready') {
         const profile = profileFor(entry.type);
         const img = document.createElement('img');

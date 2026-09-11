@@ -35,6 +35,7 @@ function currentTriggers() {
  * выключающие ветки идемпотентны (unbind/shutdown на неподключённом — no-op).
  */
 export function applyInlineRuntime() {
+    setConfig({ enabled: state.settings?.inlineEnabled === true });
     if (state.settings?.inlineEnabled === true) {
         bindScanner();
         initRender({ reroll: queueInlineJob });

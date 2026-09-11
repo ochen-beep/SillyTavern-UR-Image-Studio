@@ -130,9 +130,39 @@ function emitInline(type, detail) {
  * контроллер регистрируется в state.activeGenerations (Stop таверны накрывает),
  * requestId `inl_<uuid>` — тот же неймспейс, что у мостовых `ext_*`.
  */
-export async function processJob({ msgId, idx, type, desc }) {
+const liveJobs = new Map();
+
+export function cancelInlineJobs() {
+    for (const operation of liveJobs.values()) operation.controller.abort();
+}
+
+function sourceCurrent(operation, msgId) {
+    const ctx = getCtx();
+    return ctx.chatId === operation.chatId && ctx.chatMetadata === operation.metadata
+        && (msgId < 0 || (ctx.chat?.[msgId] === operation.message && operation.message?.mes === operation.text));
+}
+
+function captureOperation(job) {
+    const ctx = getCtx();
     const requestId = newInlineRequestId();
     const controller = new AbortController();
+    const message = ctx.chat?.[job.msgId];
+    const operation = { requestId, controller, chatId: ctx.chatId,
+        metadata: ctx.chatMetadata, message, text: message?.mes };
+    state.activeGenerations.set(requestId, controller);
+    liveJobs.set(requestId, operation);
+    return operation;
+}
+
+export async function processJob({ msgId, idx, type, desc }, operation = null) {
+    operation ||= captureOperation({ msgId, idx, type, desc });
+    const { requestId, controller } = operation;
+    const check = () => {
+        if (controller.signal.aborted || !sourceCurrent(operation, msgId)) {
+            controller.abort();
+            throw Object.assign(new Error('Inline source changed or request cancelled'), { code: 'ABORTED' });
+        }
+    };
     state.activeGenerations.set(requestId, controller);
     const startedAt = Date.now();
     recordDiagnosticEvent({ event: 'inline-start', requestId, details: { msgId, idx, type } });
@@ -143,12 +173,13 @@ export async function processJob({ msgId, idx, type, desc }) {
     // retry, пока ещё выполняется. Store не даёт готовому ready откатиться
     // в pending (его guard ready→pending), а keyword-задачи получают видимый
     // живой pending ещё до первого скана.
-    upsertItem(msgId, { idx, type, descHash, status: 'pending', requestId, createdAt: Date.now() });
+    if (msgId >= 0 && sourceCurrent(operation, msgId)) upsertItem(msgId, { idx, type, descHash, desc, status: 'pending', requestId, createdAt: Date.now() });
     let outcome = 'error';      // 'ready' | 'cancelled' | 'error'
     let errorCode = null;
     let imagePath = null;
     let cardId = null;
     try {
+        check();
         // Неизвестный триггер (АМЕНД 1, ревью Task 6): pending не должен
         // повиснуть — catch ниже конвертирует его в error-item с кодом.
         const trigger = resolveProfile(buildAliasIndex(sanitizeTriggerList(state.settings?.inlineTriggers || [])), type);
@@ -162,6 +193,7 @@ export async function processJob({ msgId, idx, type, desc }) {
         const plan = buildJobPlan({ trigger, desc, macros: macroFallback });
 
         const snapshot = await resolveChatConfigSnapshot();
+        check();
         const connId = snapshot.imageProfileId;
         if (!connId) throw Object.assign(new Error('No image connection'), { code: 'NO_CONNECTION' });
 
@@ -183,7 +215,9 @@ export async function processJob({ msgId, idx, type, desc }) {
                     descriptionEntries.push({ id: r.id, name: r.name, description: r.description, bindingMode: 'description' });
                     continue;
                 }
-                const dataUrl = await imageToDataUrl(r.imagePath);
+                check();
+                const dataUrl = await imageToDataUrl(r.imagePath, { signal: controller.signal });
+                check();
                 if (dataUrl && !references.some(x => x.id === r.id)) references.push({ id: r.id, name: r.name, dataUrl });
             }
         }
@@ -195,20 +229,21 @@ export async function processJob({ msgId, idx, type, desc }) {
             referenceBindings = composed.bindings;
         }
 
+        check();
         const result = await generateImageRequest(connId, {
             requestId,
             prompt,
             aspectRatio: plan.aspect,
             references,
             referenceBindings,
-            chatId: state.currentChatId ?? null,
+            chatId: operation.chatId ?? null,
             sourceMsgId: msgId,
-        }, () => {}, controller.signal, {});
+        }, () => {}, controller.signal, { route: snapshot.imageRoute });
 
         const entry = result?.galleryEntry || {};
         imagePath = entry.imagePath ?? null;
         cardId = entry.id ?? null;
-        upsertItem(msgId, { idx, type, descHash, status: 'ready', imagePath, cardId, requestId, error: null, createdAt: Date.now() });
+        if (msgId >= 0 && sourceCurrent(operation, msgId)) upsertItem(msgId, { idx, type, descHash, desc, status: 'ready', imagePath, cardId, requestId, error: null, createdAt: Date.now() });
         outcome = 'ready';
         return { requestId, imagePath, cardId };
     } catch (e) {
@@ -217,14 +252,16 @@ export async function processJob({ msgId, idx, type, desc }) {
         errorCode = cancelled ? 'aborted' : String(e?.code || e?.message || e);
         // Провал реролла не откатывает платный ready-результат в ошибку: старая
         // картинка остаётся видимой, провал уходит вызывающему (реролл/retry, Task 8).
-        const wasReady = getSlot(msgId).items.some(i => i.status === 'ready' && itemKey(i) === itemKey({ idx, type, descHash }));
-        if (!wasReady) {
-            upsertItem(msgId, { idx, type, descHash, status: 'error', imagePath: null, cardId: null, requestId, error: errorCode, createdAt: Date.now() });
+        const canWrite = msgId >= 0 && sourceCurrent(operation, msgId);
+        const wasReady = canWrite && getSlot(msgId).items.some(i => i.status === 'ready' && itemKey(i) === itemKey({ idx, type, descHash }));
+        if (canWrite && !wasReady) {
+            upsertItem(msgId, { idx, type, descHash, desc, status: 'error', imagePath: null, cardId: null, requestId, error: errorCode, createdAt: Date.now() });
         }
         if (cancelled && e?.code == null) throw Object.assign(new Error('aborted'), { code: 'ABORTED' });
         throw e;
     } finally {
         state.activeGenerations.delete(requestId);
+        liveJobs.delete(requestId);
         // Ровно один end-сигнал на задачу, включая провал/отмену — иначе рендер
         // крутит спиннер до чужого события.
         recordDiagnosticEvent({ event: 'inline-end', requestId, outcome,
@@ -236,7 +273,11 @@ export async function processJob({ msgId, idx, type, desc }) {
 
 /** Задача через автолейн (сериально с мостом). */
 export function queueInlineJob(job) {
-    return enqueueAutoLane(() => processJob(job));
+    const operation = captureOperation(job);
+    if (job.msgId >= 0) upsertItem(job.msgId, { idx: job.idx, type: job.type,
+        descHash: stableHash(`${job.type}|${job.desc}`), status: 'pending',
+        requestId: operation.requestId, createdAt: Date.now() });
+    return enqueueAutoLane(() => processJob(job, operation));
 }
 
 /** Ручной перезапуск (реролл/retry): старая картинка остаётся в галерее. */
