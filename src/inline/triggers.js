@@ -19,7 +19,7 @@ export const DEFAULT_TRIGGERS = Object.freeze([
         aliases: ['selfie', 'селфи'],
         aspect: '9:16',
         prefix: 'candid phone selfie of {{char}}, ',
-        suffix: ', natural lighting, authentic phone camera look',
+        suffix: 'natural lighting, authentic phone camera look',
         refsPolicy: 'auto',
     }),
     Object.freeze({
