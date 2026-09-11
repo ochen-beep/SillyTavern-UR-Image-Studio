@@ -248,3 +248,27 @@ test('launcher mode select: reflects stored mode, persists and notifies via uris
     assert.ok(saveCalls > 0, 'изменение должно сохраняться');
     assert.ok(events.includes('uris:launcher-mode-changed'), 'index.js перемонтирует лаунчеры по этому событию');
 });
+
+test('external bridge section: toggles render, persist and switch the lab tab', async () => {
+    // bridgeEnabled/bridgeTab отсутствуют (старые saves) — секция рендерится, мост включён, вкладка скрыта.
+    delete state.settings.bridgeEnabled;
+    delete state.settings.bridgeTab;
+    const root = makeRoot();
+    render(root);
+    const toggle = root.querySelector('#uris_bridge_enabled');
+    assert.ok(toggle, 'тумблер «Разрешить генерацию другим расширениям» должен рендериться');
+    assert.equal(toggle.checked, true, 'по умолчанию мост включён');
+    // Ручные вызовы переехали на вкладку «Мост» — в настройках только тумблеры.
+    assert.equal(root.querySelector('#urisBridgeRun'), null, 'кнопки ручного вызова в настройках быть не должно');
+    assert.equal(root.querySelector('#uris_bridge_tab')?.checked, false, 'вкладка «Мост» по умолчанию скрыта');
+
+    toggle.checked = false;
+    await toggle.dispatchEvent({ type: 'change', target: toggle });
+    assert.equal(state.settings.bridgeEnabled, false);
+
+    const tabToggle = root.querySelector('#uris_bridge_tab');
+    tabToggle.checked = true;
+    await tabToggle.dispatchEvent({ type: 'change', target: tabToggle });
+    assert.equal(state.settings.bridgeTab, true);
+    assert.ok(saveCalls > 0, 'переключения должны сохраняться');
+});

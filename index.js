@@ -31,6 +31,7 @@ import { render as renderReferences } from './src/ui/tab-references.js';
 import { render as renderGenerate, bindAbortUI, unbindAbortUI } from './src/ui/tab-generate.js';
 import { render as renderGallery } from './src/ui/tab-gallery.js';
 import { render as renderTemplates } from './src/ui/tab-templates.js';
+import { render as renderBridge } from './src/ui/tab-bridge.js';
 import { render as renderSettings } from './src/ui/tab-settings.js';
 import { setCurrentMsgId, getLastPostIndex } from './src/post-navigator.js';
 import { refreshPoolCache } from './src/refs-library.js';
@@ -41,6 +42,7 @@ import { exportDiagnosticDump, clearAllDiagnostics } from './src/diagnostic-dump
 import { loadDiagnosticEvents, flushDiagnosticEvents, recordDiagnosticEvent } from './src/diagnostic-events.js';
 import { flushTemplateWritesOnUnload } from './src/template-file-store.js';
 import { exportNetDump } from './src/netdump.js';
+import { activateBridge, deactivateBridge, markBridgeReady } from './src/bridge.js';
 
 // ── Lifecycle hooks ──
 
@@ -78,6 +80,9 @@ let _onLauncherModeChanged = null;
 async function init() {
     if (typeof SillyTavern === 'undefined' || !SillyTavern.getContext) { error('SillyTavern unavailable'); return; }
     const ctx = getCtx(); if (!ctx) { warn('context unavailable'); return; }
+    // Publish globalThis.URIS before any async work so consumers can grab the
+    // global early and await URIS.ready for actual readiness.
+    activateBridge();
     await loadSettings();
     applyUiScale();
     applyFontScale();
@@ -96,6 +101,8 @@ async function init() {
     registerTab({ id: 'generate',    label: 'Генерация',   render: renderGenerate });
     registerTab({ id: 'gallery',     label: 'Галерея',     render: renderGallery });
     registerTab({ id: 'templates',   label: 'Шаблоны',     render: renderTemplates });
+    // Experimental bridge lab: hidden unless enabled on the Settings tab.
+    registerTab({ id: 'bridge',      label: 'Мост',        render: renderBridge, visible: () => state.settings?.bridgeTab === true });
     registerTab({ id: 'settings',    label: 'Настройки',   render: renderSettings });
 
     // ST settings panel (minimal)
@@ -219,6 +226,8 @@ async function init() {
     window.addEventListener('pagehide', _pageHideHandler);
 
     log('Initialized v2 · catalog-v3 · nanogpt-image-catalog · no-model-toggle.');
+    // External bridge opens for business only after a fully successful init.
+    markBridgeReady();
 }
 
 // ── Launcher ──
@@ -402,6 +411,7 @@ function bindSettingsPanel(host) {
  * @returns {void}
  */
 function cleanup() {
+    deactivateBridge();
     unbindAbortUI();
     abortAllGenerations();
     if (state.queueAbort) state.queueAbort.abort();

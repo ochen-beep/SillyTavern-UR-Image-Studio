@@ -213,6 +213,8 @@ export const defaultSettings = Object.freeze({
     launcherMode: 'bar',       // 'bar' | 'floating' | 'both' — кнопка(и) запуска
     activeTab: 'generate',     // last selected floating window tab
     automationMode: 'manual',   // 'manual' | 'build-prompt' | 'full-pipeline'
+    bridgeEnabled: true,       // external bridge (globalThis.URIS) accepts generations from other extensions
+    bridgeTab: false,          // show the experimental "Мост" lab tab in the floating window
     experimentalTemplateFromDescription: false,
     generationFlow: 'ai-only', // 'ai-only' | 'user-only' | 'all' | 'manual'
     followLastPost: true,      // Generation tab navigator follows the last post

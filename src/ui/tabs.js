@@ -9,23 +9,30 @@ const registry = [];
 let _active = null;
 let _renderEpoch = 0;
 
-export function registerTab({ id, label, render }) {
-    if (!registry.find(t => t.id === id)) registry.push({ id, label, render });
+export function registerTab({ id, label, render, visible }) {
+    if (!registry.find(t => t.id === id)) registry.push({ id, label, render, visible });
+}
+
+/** A tab can hide itself (e.g. experimental labs behind a settings toggle). */
+function tabVisible(tab) {
+    if (!tab) return false;
+    if (typeof tab.visible === 'function') return !!tab.visible();
+    return tab.visible !== false;
 }
 
 /** Resolve a requested tab to a registered id, falling back to the supplied default. */
 export function resolveInitialTab(fallback = 'generate') {
     const active = getActiveTab();
-    if (registry.some(t => t.id === active)) return active;
+    if (registry.some(t => t.id === active && tabVisible(t))) return active;
     const stored = state.settings?.activeTab;
-    if (registry.some(t => t.id === stored)) return stored;
-    if (registry.some(t => t.id === fallback)) return fallback;
-    return registry[0]?.id ?? fallback;
+    if (registry.some(t => t.id === stored && tabVisible(t))) return stored;
+    if (registry.some(t => t.id === fallback && tabVisible(t))) return fallback;
+    return registry.filter(tabVisible)[0]?.id ?? fallback;
 }
 
 /** Activate a registered tab. Initialization can suppress persistence or rendering. */
 export function setActiveTab(id, { persist = true, render = true } = {}) {
-    if (!registry.some(t => t.id === id)) return false;
+    if (!registry.some(t => t.id === id && tabVisible(t))) return false;
     _active = id;
     const renderEpoch = ++_renderEpoch;
     if (persist && state.settings && state.settings.activeTab !== id) {
@@ -73,7 +80,7 @@ export function renderTabs() {
     const host = document.getElementById('urisTabs');
     if (!host) return;
     host.innerHTML = '';
-    for (const t of registry) {
+    for (const t of registry.filter(tabVisible)) {
         const btn = document.createElement('button');
         btn.className = 'uris-tab' + (t.id === _active ? ' uris-tab-active' : '');
         btn.textContent = t.label;

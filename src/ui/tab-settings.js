@@ -14,7 +14,7 @@ import { runExport, runImportInteractive } from '../data-port.js';
 import { exportDiagnosticDump, clearAllDiagnostics } from '../diagnostic-dump.js';
 import { exportNetDump } from '../netdump.js';
 import { recordUrisError } from '../error-pool.js';
-import { refreshActive } from './tabs.js';
+import { refreshActive, renderTabs } from './tabs.js';
 
 const percent = (scale) => String(Math.round(scale * 100));
 
@@ -85,6 +85,13 @@ export function render(root) {
                 <small class="uris-hint">Глобальные значения используются только если в текущем чате параметр не задан.</small>
             </section>
             <section class="uris-settings-section">
+                <h3>Внешний мост <small class="uris-hint">(эксперимент)</small></h3>
+                <label class="checkbox_label"><input type="checkbox" id="uris_bridge_enabled" ${state.settings.bridgeEnabled !== false ? 'checked' : ''}><span>Разрешить генерацию другим расширениям</span></label>
+                <small class="uris-hint">Публикует globalThis.URIS: сторонние расширения (телефон, визуальная новелла) вызывают генерацию одним вызовом. Каждый вызов помечается caller'ом — видно в диагностике и галерее.</small>
+                <label class="checkbox_label"><input type="checkbox" id="uris_bridge_tab" ${state.settings.bridgeTab === true ? 'checked' : ''}><span>Показывать вкладку «Мост»</span></label>
+                <small class="uris-hint">Лаборатория моста: ручные вызовы (caller, референсы из пула, резолвер сцены), шаблоны Stage 1 над произвольным текстом и статус. Вкладка появится/исчезнет сразу после переключения.</small>
+            </section>
+            <section class="uris-settings-section">
                 <h3>Уведомления</h3>
                 <div class="uris-notify-row">
                     <label class="checkbox_label"><input type="checkbox" id="uris_notify_stage1" ${state.settings.notifyStage1 === true ? 'checked' : ''}><span>Промпт построен (Шаг 1)</span></label>
@@ -121,7 +128,23 @@ export function render(root) {
     bindScaleControls(root);
     bindNotifyControls(root);
     bindBehaviorToggles(root);
+    bindBridgePanel(root);
     bindDataActions(root);
+}
+
+// ── Внешний мост: тумблеры. Ручные вызовы и лаборатория пайплайна живут
+// на вкладке «Мост» (tab-bridge.js), она включается здесь же.
+function bindBridgePanel(root) {
+    root.querySelector('#uris_bridge_enabled')?.addEventListener('change', e => {
+        state.settings.bridgeEnabled = e.target.checked === true;
+        saveSettings();
+    });
+    root.querySelector('#uris_bridge_tab')?.addEventListener('change', e => {
+        state.settings.bridgeTab = e.target.checked === true;
+        saveSettings();
+        // Перерисовать полосу вкладок — «Мост» появляется/исчезает сразу.
+        renderTabs();
+    });
 }
 
 /** Options list for the per-stage sound selects, from the shared catalog. */
