@@ -8,7 +8,7 @@ import { hashMessage } from '../generation-drafts.js';
 import { recordDiagnosticEvent } from '../diagnostic-events.js';
 import { parseInline } from './grammar.js';
 import { buildAliasIndex, sanitizeTriggerList, triggerAliases } from './triggers.js';
-import { getSlot, upsertItem, getConfig, dropMessage } from './store.js';
+import { getSlot, upsertItem, getConfig, reconcileMessageSlots } from './store.js';
 import { planScan, queueInlineJob, cancelInlineJobs } from './runner.js';
 
 let _handlers = null;
@@ -77,7 +77,7 @@ export function bindScanner() {
         ended: () => { const chat = getCtx().chat; const i = chat?.length ? chat.length - 1 : null; if (i != null) scanMessage(i).catch(() => {}); },
         swiped: (i) => { cancelInlineJobs(); return scanMessage(typeof i === 'number' ? i : getCtx().chat?.length - 1, { auto: false }); },
         edited: (i) => { cancelInlineJobs(); return scanMessage(typeof i === 'number' ? i : null, { auto: false }); },
-        deleted: (i) => dropMessage(typeof i === 'number' ? i : null),
+        deleted: () => reconcileMessageSlots(),
         chatChanged: () => { cancelInlineJobs(); try { window.dispatchEvent(new CustomEvent('uris:inline-update', {})); } catch { /* node */ } },
         userSent: (i) => {
             if (!inlineActive() || !getConfig().listenUser) return;

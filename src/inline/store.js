@@ -92,7 +92,26 @@ export function setConfig(patch) {
     return { ...store.cfg };
 }
 
-/** Удалить слот сообщения (MESSAGE_DELETED). */
+/** Rebind stored results after ST reindexes messages. Ambiguous matches stay detached. */
+export function reconcileMessageSlots() {
+    const ctx = globalThis.SillyTavern?.getContext?.();
+    const store = ctx?.chatMetadata?.[KEY];
+    if (!store?.msgs || !Array.isArray(ctx.chat)) return;
+    const moved = {};
+    for (const [key, slot] of Object.entries(store.msgs)) {
+        if (typeof slot?.sourceText !== 'string') continue;
+        if (ctx.chat[Number(key)]?.mes === slot.sourceText && !moved[key]) {
+            moved[key] = slot;
+            continue;
+        }
+        const matches = ctx.chat.flatMap((msg, index) => msg.mes === slot.sourceText ? [index] : []);
+        if (matches.length === 1 && !moved[String(matches[0])]) moved[String(matches[0])] = slot;
+    }
+    store.msgs = moved;
+    persist();
+}
+
+/** Remove an explicitly identified slot; ST MESSAGE_DELETED supplies length, not this id. */
 export function dropMessage(msgId) {
     const store = meta();
     if (!store?.msgs) return;
