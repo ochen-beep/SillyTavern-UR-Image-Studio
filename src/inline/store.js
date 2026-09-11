@@ -36,9 +36,14 @@ export function getSlot(msgId) {
     };
 }
 
+/** Белый список полей item'а — мусор из сырых данных не попадает в chatMetadata. */
+const FIELDS = new Set(['idx', 'type', 'descHash', 'status', 'imagePath', 'cardId', 'requestId', 'error', 'createdAt']);
+
 /**
  * Вставить/обновить item по ключу (idx,type,descHash); опционально обновить
- * messageHash слота. Возвращает сохранённый item.
+ * messageHash слота. Возвращает сохранённый item. Мерж защищён: белый список
+ * полей, undefined-значения не затирают сохранённые, готовый (оплаченный)
+ * результат не откатывается в pending (идемпотентность сканера).
  */
 export function upsertItem(msgId, item, { messageHash } = {}) {
     const store = meta();
@@ -46,12 +51,19 @@ export function upsertItem(msgId, item, { messageHash } = {}) {
     const key = String(msgId);
     const slot = store.msgs[key] || (store.msgs[key] = { messageHash: messageHash ?? null, items: [] });
     if (messageHash != null) slot.messageHash = messageHash;
+    const patch = Object.fromEntries(
+        Object.entries(item).filter(([k, v]) => v !== undefined && FIELDS.has(k)));
     const k = itemKey(item);
-    const existing = slot.items.find(i => itemKey(i) === k);
-    if (existing) Object.assign(existing, item);
-    else slot.items.push({ ...item });
+    let existing = slot.items.find(i => itemKey(i) === k);
+    if (!existing) {
+        existing = { ...patch };
+        slot.items.push(existing);
+    } else {
+        if (existing.status === 'ready' && patch.status === 'pending') delete patch.status;
+        Object.assign(existing, patch);
+    }
     persist();
-    return existing || slot.items[slot.items.length - 1];
+    return existing;
 }
 
 /** Ключ сопоставления item'ов. */

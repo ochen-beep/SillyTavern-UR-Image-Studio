@@ -44,3 +44,30 @@ test('store: dropMessage removes slot', () => {
     dropMessage(9);
     assert.deepEqual(getSlot(9).items, []);
 });
+
+test('store: stale pending does not downgrade ready item', () => {
+    upsertItem(5, { idx: 0, type: 'img', descHash: 'ee', status: 'ready', imagePath: 'p.png' });
+    upsertItem(5, { idx: 0, type: 'img', descHash: 'ee', status: 'pending' });
+    const slot = getSlot(5);
+    assert.equal(slot.items[0].status, 'ready');
+    assert.equal(slot.items[0].imagePath, 'p.png');
+});
+
+test('store: undefined fields do not clobber stored values', () => {
+    upsertItem(6, { idx: 0, type: 'img', descHash: 'ff', status: 'ready', imagePath: 'keep.png' });
+    upsertItem(6, { idx: 0, type: 'img', descHash: 'ff', status: 'pending', imagePath: undefined });
+    const slot = getSlot(6);
+    assert.equal(slot.items[0].status, 'ready');
+    assert.equal(slot.items[0].imagePath, 'keep.png');
+});
+
+test('store: junk fields are not persisted', () => {
+    upsertItem(8, { idx: 0, type: 'img', descHash: 'gg', status: 'pending', junk: { fn: () => {} }, extra: 'x' });
+    const slot = getSlot(8);
+    assert.deepEqual(Object.keys(slot.items[0]).sort(), ['descHash', 'idx', 'status', 'type']);
+});
+
+test('store: string and numeric msgId hit the same slot', () => {
+    upsertItem('5', { idx: 0, type: 'img', descHash: 'dd', status: 'ready', imagePath: 'x.png' });
+    assert.equal(getSlot(5).items.length, 1);
+});
