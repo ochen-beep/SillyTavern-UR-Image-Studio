@@ -44,6 +44,18 @@ test('triggers: buildInlinePrompt = prefix + macros(desc) + suffix', () => {
     const prompt = buildInlinePrompt(selfie, 'на пляже', { charName: 'Илюха' });
     assert.ok(prompt.startsWith('candid phone selfie of Илюха'));
     assert.ok(prompt.includes('на пляже'));
+    // склейка: запятая на стыке читается «…, на пляже», а не «…,на пляже»
+    assert.ok(prompt.startsWith('candid phone selfie of Илюха, на пляже'));
+});
+
+test('triggers: buildInlinePrompt joins non-empty parts with a single space', () => {
+    // prefix без хвостового пробела + desc → ровно один пробел (не «ab», не «a  b»)
+    assert.equal(buildInlinePrompt({ prefix: 'a', suffix: '' }, 'b'), 'a b');
+    // prefix с запятой на стыке → «a, b»
+    assert.equal(buildInlinePrompt({ prefix: 'a,', suffix: '' }, 'b'), 'a, b');
+    // пустые части выпадают, лишние пробелы схлопываются
+    assert.equal(buildInlinePrompt({ prefix: '', suffix: ' c ' }, '  b  '), 'b c');
+    assert.equal(buildInlinePrompt({ prefix: '  ', suffix: '' }, 'only'), 'only');
 });
 
 test('triggers: sanitizeTriggerList dedups ids (first-wins), keeps img', () => {

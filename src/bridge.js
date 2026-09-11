@@ -203,6 +203,7 @@ async function generateOnce(caller, requestId, norm, controller, onStatus) {
             caller,
             connectionId: norm.connectionId,
             modelId: norm.modelId,
+            trigger: norm.trigger,
             referenceCount: norm.references.length,
             useSceneRefs: norm.useSceneRefs,
             expandMacros: norm.expandMacros,
@@ -242,7 +243,8 @@ async function generateOnce(caller, requestId, norm, controller, onStatus) {
         let refsPolicyOverride = null;           // 'off' форсит отказ от авторефов
         if (norm.trigger) {
             const registry = sanitizeTriggerList(state.settings?.inlineTriggers || DEFAULT_TRIGGERS);
-            const profile = registry.find(t => t.id === norm.trigger);
+            const wanted = norm.trigger.toLowerCase().replaceAll('ё', 'е');
+            const profile = registry.find(t => t.id === wanted);
             if (!profile) throw bridgeError('TRIGGER_NOT_FOUND',
                 `Unknown trigger "${norm.trigger}". Known: ${registry.map(t => t.id).join(', ')}`);
             aspect = profile.aspect || aspect;

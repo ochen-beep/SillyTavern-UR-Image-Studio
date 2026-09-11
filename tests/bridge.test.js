@@ -205,3 +205,29 @@ test('bridge: generate with unknown trigger → TRIGGER_NOT_FOUND', async () => 
         assert.equal(globalThis.URIS, undefined);
     }
 });
+
+test('bridge: generate trigger lookup is case/ё-insensitive (symmetric with parseInline)', async () => {
+    const { state } = await import('../src/core.js');
+    const savedSettings = state.settings;
+    const bridge = activateBridge();
+    try {
+        state.settings = { enabled: true, bridgeEnabled: true };
+        // Триггер матчится по id (не по алиасу), но без учёта регистра:
+        // 'SELFIE' резолвится в профиль selfie → ошибка уже НЕ про триггер
+        // (дальше конвейер падает на отсутствии соединения).
+        await assert.rejects(
+            () => bridge.generate({ trigger: 'SELFIE', prompt: 'x', connectionId: 'conn-x' }, { caller: 'lab' }),
+            e => !(e instanceof UrisBridgeError && e.code === 'TRIGGER_NOT_FOUND'),
+        );
+        // Ё/е и регистр симметричны с parseInline: 'ЁЖИК' → id 'ежик'.
+        state.settings = { enabled: true, bridgeEnabled: true, inlineTriggers: [{ id: 'ёжик', aliases: ['ёжик'] }] };
+        await assert.rejects(
+            () => bridge.generate({ trigger: 'ЁЖИК', prompt: 'x', connectionId: 'conn-x' }, { caller: 'lab' }),
+            e => !(e instanceof UrisBridgeError && e.code === 'TRIGGER_NOT_FOUND'),
+        );
+    } finally {
+        state.settings = savedSettings;
+        deactivateBridge();
+        assert.equal(globalThis.URIS, undefined);
+    }
+});

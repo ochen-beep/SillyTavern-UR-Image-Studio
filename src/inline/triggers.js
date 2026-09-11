@@ -97,12 +97,13 @@ export function resolveProfile(aliasIndex, type) {
  */
 export function buildInlinePrompt(trigger, desc, macroFallback = {}) {
     const expand = (s) => {
-        let out = String(s || '');
         const charName = macroFallback.charName || '{{char}}';
         const userName = macroFallback.userName || '{{user}}';
         // () => value — $-последовательности ($&, $', …) в именах не интерпретируются
-        out = out.replaceAll('{{char}}', () => charName).replaceAll('{{user}}', () => userName);
-        return out;
+        return String(s || '').replaceAll('{{char}}', () => charName).replaceAll('{{user}}', () => userName);
     };
-    return `${expand(trigger.prefix)}${String(desc || '').trim()}${expand(trigger.suffix)}`.trim();
+    // Части склеиваются одним пробелом: normalizeTrigger триммит prefix/suffix,
+    // поэтому прямой конкатенацией запятая на стыке даёт «{{char}},на пляже».
+    return [expand(trigger.prefix), String(desc || '').trim(), expand(trigger.suffix)]
+        .map(s => s.trim()).filter(Boolean).join(' ');
 }
