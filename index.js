@@ -33,6 +33,10 @@ import { render as renderGallery } from './src/ui/tab-gallery.js';
 import { render as renderTemplates } from './src/ui/tab-templates.js';
 import { render as renderBridge } from './src/ui/tab-bridge.js';
 import { render as renderSettings } from './src/ui/tab-settings.js';
+import { render as renderMedia } from './src/ui/tab-media.js';
+import { bindScanner, unbindScanner } from './src/inline/scanner.js';
+import { initRender, shutdownRender } from './src/inline/render.js';
+import { queueInlineJob } from './src/inline/runner.js';
 import { setCurrentMsgId, getLastPostIndex } from './src/post-navigator.js';
 import { refreshPoolCache } from './src/refs-library.js';
 import { runExport, runImportInteractive } from './src/data-port.js';
@@ -103,6 +107,8 @@ async function init() {
     registerTab({ id: 'templates',   label: 'Шаблоны',     render: renderTemplates });
     // Experimental bridge lab: hidden unless enabled on the Settings tab.
     registerTab({ id: 'bridge',      label: 'Мост',        render: renderBridge, visible: () => state.settings?.bridgeTab === true });
+    // Inline media tab: hidden unless the inline master toggle is on (Settings / Media).
+    registerTab({ id: 'media',       label: 'Медиа',       render: renderMedia, visible: () => state.settings?.inlineEnabled === true });
     registerTab({ id: 'settings',    label: 'Настройки',   render: renderSettings });
 
     // ST settings panel (minimal)
@@ -224,6 +230,13 @@ async function init() {
     document.addEventListener('visibilitychange', _visibilityHandler);
     _pageHideHandler = () => flushTemplateWritesOnUnload();
     window.addEventListener('pagehide', _pageHideHandler);
+
+    // Inline engine: event scanner + DOM render only when the master toggle is on
+    // (toggled live from the Media / Settings tabs via tab-media.applyInlineRuntime).
+    if (state.settings.inlineEnabled) {
+        bindScanner();
+        initRender({ reroll: queueInlineJob });
+    }
 
     log('Initialized v2 · catalog-v3 · nanogpt-image-catalog · no-model-toggle.');
     // External bridge opens for business only after a fully successful init.
@@ -416,6 +429,8 @@ function cleanup() {
     abortAllGenerations();
     if (state.queueAbort) state.queueAbort.abort();
     unbindEvents();
+    unbindScanner();
+    shutdownRender();
     removeViewportSync();
     if (_launcherObserver) { _launcherObserver.disconnect(); _launcherObserver = null; }
     if (_visibilityHandler) { document.removeEventListener('visibilitychange', _visibilityHandler); _visibilityHandler = null; }

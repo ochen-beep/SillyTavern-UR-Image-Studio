@@ -8,6 +8,9 @@ import { decompress as fzstdDecompress } from './vendor/fzstd.esm.js';
 // only at runtime (inside fetchWithTimeout), not at module load time.
 import { recordFromFetch, recordFromFetchError } from './netdump.js';
 import { tunnelBypassHeaders } from './tunnel-bypass.js';
+// Inline trigger registry: pure module (no core import) — no cycle. Used by
+// loadSettings to normalize settings.inlineTriggers (see defaultSettings).
+import { sanitizeTriggerList, DEFAULT_TRIGGERS } from './inline/triggers.js';
 
 export const MODULE_NAME = 'ur_image_studio';
 export const DISPLAY_NAME = 'UR Image Studio';
@@ -248,6 +251,11 @@ export const defaultSettings = Object.freeze({
     // Default for a missing key = open. See src/ui/accordion-state.js.
     accordionState: {},
 
+    // ── Inline generation in chat (markers / keywords / 📷 button) ──
+    inlineEnabled: false,      // инлайн-генерация в чате (маркеры/ключевые слова/кнопка)
+    inlineListenUser: false,   // дефолт реагировать на ключевые слова в сообщениях юзера
+    inlineTriggers: null,      // профили; null → sanitizeTriggerList(DEFAULT_TRIGGERS) в потребителях
+
     // ── Text-LLM source (for building the image prompt) ──
     // 'profile' = Connection Manager ST (routed by ST server — no CORS/405).
     // 'custom'  = direct browser fetch to OpenAI-compatible endpoint (needs CORS headers).
@@ -472,6 +480,12 @@ export function loadSettings() {
     if (typeof s.accordionState !== 'object' || s.accordionState === null || Array.isArray(s.accordionState)) {
         s.accordionState = {};
     }
+    // Инлайн: флаги — строгие booleans; триггер-профили всегда нормализованы.
+    // null/мусор (дефолт) разворачивается в sanitizeTriggerList(DEFAULT_TRIGGERS),
+    // а не в [img] — иначе нормализация стёрла бы дефолтные selfie/scene.
+    s.inlineEnabled = s.inlineEnabled === true;
+    s.inlineListenUser = s.inlineListenUser === true;
+    s.inlineTriggers = sanitizeTriggerList(Array.isArray(s.inlineTriggers) ? s.inlineTriggers : DEFAULT_TRIGGERS);
     s.uiScale = normalizeUiScale(s.uiScale);
     s.fontScale = normalizeFontScale(s.fontScale);
     // Notification flags are strict booleans (never truthy strings); stage2

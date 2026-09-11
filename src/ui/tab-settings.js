@@ -15,6 +15,7 @@ import { exportDiagnosticDump, clearAllDiagnostics } from '../diagnostic-dump.js
 import { exportNetDump } from '../netdump.js';
 import { recordUrisError } from '../error-pool.js';
 import { refreshActive, renderTabs } from './tabs.js';
+import { applyInlineRuntime } from './tab-media.js';
 
 const percent = (scale) => String(Math.round(scale * 100));
 
@@ -83,6 +84,8 @@ export function render(root) {
                 <small class="uris-hint">Подробный технический trace для диагностики. Секреты и бинарные изображения не записываются.</small>
                 <label class="checkbox_label"><input type="checkbox" id="uris_use_all_params" ${state.settings.useParametersForAllChats === true ? 'checked' : ''}><span>Использовать параметры генерации для всех чатов</span></label>
                 <small class="uris-hint">Глобальные значения используются только если в текущем чате параметр не задан.</small>
+                <label class="checkbox_label"><input type="checkbox" id="uris_inline_enabled" ${state.settings.inlineEnabled ? 'checked' : ''}><span>Инлайн-генерация в чате (вкладка «Медиа»)</span></label>
+                <small class="uris-hint">[[тип: описание]] в ответах персонажа и 📷-кнопка превращаются в картинки. Профили триггеров и тестовый стенд — вкладка «Медиа».</small>
             </section>
             <section class="uris-settings-section">
                 <h3>Внешний мост <small class="uris-hint">(эксперимент)</small></h3>
@@ -231,6 +234,14 @@ function bindBehaviorToggles(root) {
     root.querySelector('#uris_use_all_params')?.addEventListener('change', e => {
         state.settings.useParametersForAllChats = e.target.checked === true;
         saveSettings();
+    });
+    root.querySelector('#uris_inline_enabled')?.addEventListener('change', e => {
+        state.settings.inlineEnabled = e.target.checked === true;
+        saveSettings();
+        // Сканер/DOM-рендер инлайна — общий хелпер вкладки «Медиа».
+        applyInlineRuntime();
+        // Вкладка «Медиа» появляется/исчезает из полосы сразу.
+        renderTabs();
     });
 }
 
