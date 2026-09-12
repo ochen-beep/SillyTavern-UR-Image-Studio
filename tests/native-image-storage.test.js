@@ -5,7 +5,7 @@ import { afterEach, beforeEach, test } from 'node:test';
 let originalFetch;
 let originalSt;
 
-beforeEach(() => {
+beforeEach(async () => {
     originalFetch = globalThis.fetch;
     originalSt = globalThis.SillyTavern;
     globalThis.SillyTavern = {
@@ -13,6 +13,11 @@ beforeEach(() => {
             getRequestHeaders: () => ({ Authorization: 'Bearer st-token' }),
         }),
     };
+    // The gallery card store is a module-level singleton, and every test builds
+    // its own SillyTavern context — drop the loaded mirror between tests or
+    // cards from an earlier case leak into later assertions.
+    const { resetGalleryStoreForTests } = await import('../src/gallery-index.js');
+    resetGalleryStoreForTests();
 });
 
 afterEach(() => {
@@ -161,7 +166,12 @@ test('gallery facade materializes legacy provider URLs before indexing a native 
 
     assert.equal(card.imagePath, 'user/images/UR%20Image%20Studio/uris_legacy.png');
     assert.equal(card.src, 'user/images/UR%20Image%20Studio/uris_legacy.png');
-    assert.deepEqual(calls.map(call => call.url), ['https://images.example/legacy.png', '/api/images/upload']);
+    // Cards live in a server file now, so the user-files traffic (probe, read,
+    // index write) is expected noise here — this case is about materialization order.
+    const materializationCalls = calls
+        .map(call => call.url)
+        .filter(url => !String(url).startsWith('/api/files/') && !String(url).startsWith('/user/files/'));
+    assert.deepEqual(materializationCalls, ['https://images.example/legacy.png', '/api/images/upload']);
 });
 
 test('gallery authority is shared index only and clearGallery removes only the active chat cards', async () => {
@@ -262,7 +272,11 @@ test('addToGallery rejects a foreign chat ID collision before materializing an i
         /belongs to another chat/,
     );
 
-    assert.deepEqual(calls, []);
+    // No materialization may happen before the collision is rejected. Card-file
+    // traffic (probe, read) is storage plumbing, not materialization.
+    const materializationCalls = calls
+        .filter(url => !String(url).startsWith('/api/files/') && !String(url).startsWith('/user/files/'));
+    assert.deepEqual(materializationCalls, []);
     assert.deepEqual((await getGallery('chat-a')).map(card => ({ id: card.id, prompt: card.prompt, imagePath: card.imagePath })), [
         { id: 'shared-id', prompt: 'original', imagePath: 'user/images/UR%20Image%20Studio/original.png' },
     ]);

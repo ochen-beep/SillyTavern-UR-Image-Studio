@@ -1849,6 +1849,33 @@
 .uris-settings-actions { display: flex; flex-wrap: wrap; gap: 6px; }
 .uris-settings-actions .uris-btn { flex: 1 1 auto; }
 
+/* ── Панель «Хранилище» ──
+   Read-only отчёт: где какие данные лежат и сколько осталось в settings.json.
+   Позволяет проверить результат переезда без консоли. */
+.uris-store-list { display: flex; flex-direction: column; gap: 5px; margin-bottom: 8px; }
+.uris-store-row {
+    display: flex; align-items: baseline; gap: 8px;
+    font-size: var(--uris-font-sm); color: var(--uris-text-strong);
+}
+.uris-store-name {
+    flex: 1 1 auto; min-width: 0;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.uris-store-mode {
+    flex: 0 0 auto; padding: 0 6px; border-radius: 999px;
+    border: 1px solid var(--uris-border-soft);
+    font-size: var(--uris-font-xs); text-transform: uppercase; letter-spacing: .04em;
+}
+.uris-store-mode-file { color: var(--uris-accent); border-color: var(--uris-accent); }
+.uris-store-mode-legacy { color: var(--uris-text-dim); }
+.uris-store-mode-readonly { color: var(--uris-warning, #c9a030); border-color: var(--uris-warning, #c9a030); }
+.uris-store-mode-unknown { color: var(--uris-text-dim); opacity: .7; }
+.uris-store-mode-info { color: var(--uris-text-dim); border-style: dashed; }
+.uris-store-detail {
+    flex: 0 0 auto; font-size: var(--uris-font-xs); color: var(--uris-text-dim);
+    font-variant-numeric: tabular-nums;
+}
+
 /* ── Разворачиваемый редактор текста (кнопка у компактных полей) ──
    Паттерн ST: компактное поле + иконка fa-maximize -> большой popup-редактор
    (native <dialog> через callGenericPopup, класс maximized_textarea — его

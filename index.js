@@ -44,7 +44,10 @@ import { sweepStaleRunningDrafts } from './src/generation-drafts.js';
 import { recordUrisError } from './src/error-pool.js';
 import { exportDiagnosticDump, clearAllDiagnostics } from './src/diagnostic-dump.js';
 import { loadDiagnosticEvents, flushDiagnosticEvents, recordDiagnosticEvent } from './src/diagnostic-events.js';
-import { flushTemplateWritesOnUnload } from './src/template-file-store.js';
+import { flushTemplateWrites, flushTemplateWritesOnUnload } from './src/template-file-store.js';
+import { ensureGalleryStoreReady, flushGalleryWrites, flushGalleryWritesOnUnload } from './src/gallery-index.js';
+import { ensureRefsStoreReady, flushRefsWrites, flushRefsWritesOnUnload } from './src/refs-library.js';
+import { ensureParamPresetStoreReady, flushParamPresetWrites, flushParamPresetWritesOnUnload } from './src/param-presets.js';
 import { exportNetDump } from './src/netdump.js';
 import { activateBridge, deactivateBridge, markBridgeReady } from './src/bridge.js';
 
@@ -98,6 +101,17 @@ async function init() {
 
     // Populate the browser-local reference cache before UI consumers read it.
     await refreshPoolCache();
+
+    // Resolve the file-backed stores before the first render: their contents
+    // live on the server now, and the first read must see the migrated/persisted
+    // data rather than an empty mirror. This is also what performs the one-time
+    // migration out of extensionSettings (and drops the settings copy, which is
+    // what keeps settings.json small).
+    await Promise.all([
+        ensureGalleryStoreReady(),
+        ensureRefsStoreReady(),
+        ensureParamPresetStoreReady(),
+    ]);
 
     // v4: 6 tabs (API / References / Generation / Gallery / Templates / Settings)
     registerTab({ id: 'api',         label: 'API',         render: renderApi });
@@ -218,17 +232,25 @@ async function init() {
 
     // Flush on page unload (removed in cleanup). flushSettings() only re-arms
     // ST's internal debounce (instant saveSettings is not exposed to extensions),
-    // but the template file store performs a real keepalive flush here.
+    // but the file stores perform a real keepalive flush here.
     _visibilityHandler = () => {
         if (document.visibilityState === 'hidden') {
             flushSettings();
             flushTemplateWritesOnUnload();
+            flushGalleryWritesOnUnload();
+            flushRefsWritesOnUnload();
+            flushParamPresetWritesOnUnload();
             flushDiagnosticEvents();
             try { getCtx().saveMetadata?.(); } catch {}
         }
     };
     document.addEventListener('visibilitychange', _visibilityHandler);
-    _pageHideHandler = () => flushTemplateWritesOnUnload();
+    _pageHideHandler = () => {
+        flushTemplateWritesOnUnload();
+        flushGalleryWritesOnUnload();
+        flushRefsWritesOnUnload();
+        flushParamPresetWritesOnUnload();
+    };
     window.addEventListener('pagehide', _pageHideHandler);
 
     // Inline engine: event scanner + DOM render only when the master toggle is on
@@ -428,6 +450,12 @@ function cleanup() {
     unbindAbortUI();
     abortAllGenerations();
     if (state.queueAbort) state.queueAbort.abort();
+    // Land any in-flight card/template/pool writes before teardown; a disable
+    // must not drop a queued mutation.
+    void flushGalleryWrites();
+    void flushTemplateWrites();
+    void flushRefsWrites();
+    void flushParamPresetWrites();
     unbindEvents();
     unbindScanner();
     shutdownRender();

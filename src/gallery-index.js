@@ -1,8 +1,32 @@
 // @ts-check
-/** Shared metadata-only index for images stored in the native ST gallery. */
-import { getCtx, getImageConnectionSettings, IMAGE_CONNECTION_SETTINGS_KEY, uid } from './core.js';
+/**
+ * Shared metadata index for images stored in the native ST gallery.
+ *
+ * The cards live in ONE server file per user, `data/<user>/user/files/uris_gallery.json`,
+ * not in `extensionSettings`. They were 4,8 MB of a 7,8 MB settings.json: ST's
+ * `saveSettingsDebounced` re-POSTs the whole settings object, so every unrelated
+ * settings change (in any extension) rewrote the entire gallery index. The
+ * official extension guide forbids exactly this ("Don't store large data in
+ * extensionSettings"). See `src/file-store.js` for the shared machinery and
+ * `docs/plans/2026-09-12-storage-externalization.md` for the rationale.
+ *
+ * The first load migrates the legacy `extensionSettings` copy into the file and
+ * drops it — keeping a copy would defeat the entire point at this size. The
+ * migration is written before the copy is dropped, so an interrupted migration
+ * simply repeats on the next load.
+ *
+ * Native image FILES are untouched by any of this: they stay in ST's gallery
+ * folders and are only referenced by `imagePath`.
+ */
+
+import { getCtx, getImageConnectionSettings, IMAGE_CONNECTION_SETTINGS_KEY, uid, log, warn, saveSettings } from './core.js';
 import { listNativeImages } from './native-image-storage.js';
 import { canonicalizeNativeImagePath, NATIVE_IMAGE_FOLDER } from './native-image-path.js';
+import { createFileStore } from './file-store.js';
+
+export const GALLERY_FILE_NAME = 'uris_gallery.json';
+export const GALLERY_STORE_VERSION = 1;
+const GALLERY_STORE_KEY = 'cards';
 
 const SECRET_KEY = /(?:api[_-]?key|authorization|token|secret|password|credential)/i;
 const PAYLOAD_KEY = /(?:dataurl|base64|bytes|blob|src|result)/i;
@@ -28,32 +52,83 @@ const ALLOWED = [
     'hidden',
 ];
 
-function settings() {
+/** The shared image-connections settings object — the legacy card store. */
+function imageSettings() {
     const ctx = getCtx();
     if (!ctx.extensionSettings) ctx.extensionSettings = {};
     if (!ctx.extensionSettings.ur_image_studio || typeof ctx.extensionSettings.ur_image_studio !== 'object') {
         ctx.extensionSettings.ur_image_studio = {};
     }
     const moduleSettings = ctx.extensionSettings.ur_image_studio;
-    moduleSettings[IMAGE_CONNECTION_SETTINGS_KEY] = getImageConnectionSettings(moduleSettings);
+    if (!moduleSettings[IMAGE_CONNECTION_SETTINGS_KEY] || typeof moduleSettings[IMAGE_CONNECTION_SETTINGS_KEY] !== 'object') {
+        moduleSettings[IMAGE_CONNECTION_SETTINGS_KEY] = getImageConnectionSettings(moduleSettings);
+    }
     return moduleSettings[IMAGE_CONNECTION_SETTINGS_KEY];
 }
 
-function index() {
-    const store = settings();
-    if (!Array.isArray(store.galleryIndex)) store.galleryIndex = [];
-    return store.galleryIndex;
+const galleryStore = createFileStore({
+    label: 'gallery',
+    name: GALLERY_FILE_NAME,
+    version: GALLERY_STORE_VERSION,
+    key: GALLERY_STORE_KEY,
+    empty: () => [],
+    legacyRead: () => imageSettings().galleryIndex,
+    legacyWrite: value => {
+        imageSettings().galleryIndex = value;
+        saveSettings();
+    },
+    legacyStrip: () => {
+        const current = imageSettings().galleryIndex;
+        const freedBytes = Array.isArray(current) ? JSON.stringify(current).length : 0;
+        delete imageSettings().galleryIndex;
+        saveSettings();
+        return freedBytes;
+    },
+    stripLegacyOnLoad: true,
+    countEntries: value => (Array.isArray(value) ? value.length : null),
+});
+
+/** Resolve the card store (probe / load / migrate) exactly once per session. */
+export function ensureGalleryStoreReady() {
+    return galleryStore.ready();
 }
 
-function persist() {
-    getCtx().saveSettingsDebounced?.();
+export function galleryStoreMode() { return galleryStore.mode(); }
+
+/** Await durability of queued card writes. */
+export function flushGalleryWrites() {
+    return galleryStore.flush();
+}
+
+/**
+ * Last-chance durability on page unload. The card file is usually larger than
+ * the ~64 KB keepalive cap, so this generally logs 'skipped' and relies on the
+ * normal serialized write having landed — `addCard`/`updateCard` are awaited by
+ * their callers before the generation is reported complete.
+ */
+export function flushGalleryWritesOnUnload() {
+    galleryStore.flushOnUnload();
+}
+
+/**
+ * Synchronous read of the loaded cards. Requires a resolved store — every async
+ * entry point below awaits `ready()` first, and `init()` warms it before the UI
+ * renders, so the mirror is always populated by the time callers read it.
+ */
+function cards() {
+    const list = galleryStore.snapshot();
+    if (list === null) {
+        warn('gallery-index: read before the card store was ready; returning no cards');
+        return [];
+    }
+    return list;
 }
 
 function cleanText(value, fallback = '') {
     return typeof value === 'string' ? value : fallback;
 }
 
-/** Keep settings portable: recursively remove secrets, raw image payloads, and unsupported values. */
+/** Keep cards portable: recursively remove secrets, raw image payloads, and unsupported values. */
 function sanitizeMetadata(value, depth = 0) {
     if (depth > 8 || value == null) return null;
     if (typeof value === 'string') {
@@ -102,49 +177,54 @@ export function sanitizeGalleryCard(input = {}, existing = null) {
 }
 
 export async function addCard(input) {
-    const cards = index();
-    const existing = typeof input?.id === 'string' ? cards.find(card => card.id === input.id) : null;
-    const card = sanitizeGalleryCard(input, existing);
-    if (existing) cards.splice(cards.indexOf(existing), 1, card);
-    else cards.unshift(card);
-    persist();
+    const card = await galleryStore.mutate(list => {
+        const existing = typeof input?.id === 'string' ? list.find(item => item.id === input.id) : null;
+        // Throws before the list is touched when the image path is unusable.
+        const next = sanitizeGalleryCard(input, existing);
+        if (existing) list.splice(list.indexOf(existing), 1, next);
+        else list.unshift(next);
+        return next;
+    });
+    if (card) log('Gallery card stored', card.id);
     return card;
 }
 
 export async function updateCard(id, patch) {
-    const cards = index();
-    const existing = cards.find(card => card.id === id);
-    if (!existing) return null;
-    const card = sanitizeGalleryCard({ ...existing, ...patch, id, imagePath: existing.imagePath }, existing);
-    cards.splice(cards.indexOf(existing), 1, card);
-    persist();
-    return card;
+    return galleryStore.mutate(list => {
+        const existing = list.find(item => item.id === id);
+        if (!existing) return null;
+        const card = sanitizeGalleryCard({ ...existing, ...patch, id, imagePath: existing.imagePath }, existing);
+        list.splice(list.indexOf(existing), 1, card);
+        return card;
+    });
 }
 
 export async function removeCard(id) {
-    const cards = index();
-    const position = cards.findIndex(card => card.id === id);
-    if (position === -1) return false;
-    cards.splice(position, 1);
-    persist();
-    return true;
+    return galleryStore.mutate(list => {
+        const position = list.findIndex(item => item.id === id);
+        if (position === -1) return false;
+        list.splice(position, 1);
+        return true;
+    });
 }
 
 /** Remove all metadata cards. Native image files remain untouched. */
 export async function clearCards() {
-    const cards = index();
-    cards.splice(0, cards.length);
-    persist();
+    await galleryStore.mutate(list => { list.splice(0, list.length); });
 }
 
-/** Count how many cards reference the given canonical image path. */
+/**
+ * Count how many cards reference the given canonical image path.
+ * Synchronous by design (delete paths branch on it); requires a resolved store.
+ */
 export function countCardsByImagePath(imagePath) {
     const canonical = canonicalizeNativeImagePath(imagePath);
     if (!canonical) return 0;
-    return index().filter(card => canonicalizeNativeImagePath(card.imagePath) === canonical).length;
+    return cards().filter(card => canonicalizeNativeImagePath(card.imagePath) === canonical).length;
 }
 
 export async function reconcileCards(paths = null) {
+    await galleryStore.ready();
     let nativePaths;
     if (paths) {
         // paths is a precomputed array (used by tests / direct callers)
@@ -155,33 +235,55 @@ export async function reconcileCards(paths = null) {
     } else {
         // Scan every distinct folder referenced by cards, plus the legacy folder,
         // so reconcile stays correct once cards live across character folders.
-        const cards = index();
         const folders = new Set([NATIVE_IMAGE_FOLDER]);
-        for (const card of cards) {
+        for (const card of cards()) {
             const folder = decodeFolderFromPath(card.imagePath);
             if (folder) folders.add(folder);
         }
         const lists = await Promise.all([...folders].map(folder => listNativeImages({ folder }).catch(() => [])));
         nativePaths = new Set(lists.flat());
     }
-    const cards = index();
-    for (let i = cards.length - 1; i >= 0; i--) {
-        const canonical = canonicalizeNativeImagePath(cards[i]?.imagePath);
-        if (!canonical) {
-            cards.splice(i, 1);
-            continue;
+
+    // Recompute without writing, then persist only on a real change. Cards are
+    // sanitized on write, so re-sanitizing every card on read would bump every
+    // `updatedAt` and turn each gallery open into a full rewrite of the file.
+    const changed = await galleryStore.mutate(list => {
+        let dirty = false;
+        for (let i = list.length - 1; i >= 0; i--) {
+            const card = list[i];
+            const canonical = canonicalizeNativeImagePath(card?.imagePath);
+            if (!canonical) {
+                list.splice(i, 1);
+                dirty = true;
+                continue;
+            }
+            const status = nativePaths.has(canonical) ? 'ready' : 'missing';
+            if (canonical !== card.imagePath || status !== card.status) {
+                list[i] = sanitizeGalleryCard({ ...card, imagePath: canonical, status }, card);
+                dirty = true;
+            }
         }
-        cards[i] = sanitizeGalleryCard({ ...cards[i], imagePath: canonical, status: nativePaths.has(canonical) ? 'ready' : 'missing' }, cards[i]);
-    }
-    const known = new Set(cards.map(card => card.imagePath));
-    for (const imagePath of nativePaths) {
-        if (!known.has(imagePath)) cards.unshift(sanitizeGalleryCard({ imagePath, prompt: '', status: 'ready', provenance: 'native' }));
-    }
-    persist();
-    return [...cards];
+        const known = new Set(list.map(card => card.imagePath));
+        for (const imagePath of nativePaths) {
+            if (known.has(imagePath)) continue;
+            list.unshift(sanitizeGalleryCard({ imagePath, prompt: '', status: 'ready', provenance: 'native' }));
+            known.add(imagePath);
+            dirty = true;
+        }
+        return dirty;
+    }, { persist: false });
+    if (changed) await galleryStore.persist();
+    return cards();
 }
 
 export async function listCards({ reconcile = true } = {}) {
     if (reconcile) return reconcileCards();
-    return [...index()];
+    await galleryStore.ready();
+    return cards();
+}
+
+// ── Test-only surface ──
+
+export function resetGalleryStoreForTests() {
+    galleryStore.reset();
 }
