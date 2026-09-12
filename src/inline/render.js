@@ -445,12 +445,12 @@ function ensureManualButton(mesEl, msgId, chat) {
     } catch { /* кнопка не критична */ }
 }
 
-/** M1: reroll({msgId, idx:-1, type:'img', desc: первые 240 символов}) +
+/** M1: reroll({msgId, idx:-1, type:'img', desc: первые 4000 символов}) +
  * ручная pending-оболочка (data-manual="1") в конец .mes_text. */
 function onManualClick(msgId, mesEl) {
     let text = '';
     try { text = String(getCtx()?.chat?.[Number(msgId)]?.mes || ''); } catch { /* ST недоступен */ }
-    const desc = text.slice(0, 240);
+    const desc = text.slice(0, 4000);
     if (typeof _onManual === 'function') {
         try { _onManual({ msgId: Number(msgId), idx: -1, type: 'img', desc }); } catch (e) { startRerollErrorToast(e); }
         return;

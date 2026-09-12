@@ -233,6 +233,9 @@ export async function processJob({ msgId, idx, type, desc }, operation = null) {
         const result = await generateImageRequest(connId, {
             requestId,
             prompt,
+            // Галерейная карточка берёт snapshot.effectivePrompt — он должен
+            // показывать итоговый промпт (шелл + описание), а не голое описание.
+            effectivePrompt: prompt,
             aspectRatio: plan.aspect,
             references,
             referenceBindings,

@@ -55,8 +55,8 @@ test('grammar: markers inside code fences are ignored', () => {
     assert.equal(m[0].type, 'scene');
 });
 
-test('grammar: description length guard (600 chars)', () => {
-    const long = 'x'.repeat(601);
+test('grammar: description length guard (4000 chars)', () => {
+    const long = 'x'.repeat(4001);
     assert.deepEqual(parseInline(`[[img: ${long}]]`), []);
-    assert.equal(parseInline(`[[img: ${'x'.repeat(600)}]]`).length, 1);
+    assert.equal(parseInline(`[[img: ${'x'.repeat(4000)}]]`).length, 1);
 });
