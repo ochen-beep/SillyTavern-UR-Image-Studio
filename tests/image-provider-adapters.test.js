@@ -105,6 +105,23 @@ test('openai-images sends edits as multipart with repeated image fields by defau
   assert.equal(transport.calls[0].timeoutMs, 4200);
 });
 
+test('openai-images multipart edit: reference filenames carry a proper extension', async () => {
+  // Relay upstreams derive the expected file type from the multipart filename:
+  // a bare "image" name fails with "Image edit file content does not match its
+  // declared MIME type" even for perfectly valid bytes (novaproxy.space,
+  // incident 2026-09-09: same jpeg bytes → 400 as "image", 200 as "ref.jpg").
+  const transport = makeTransport(jsonResponse({ data: [{ b64_json: 'cmVzdWx0' }] }));
+  await invokeImageProvider({
+    endpoint: 'https://api.example', apiKey: 'secret',
+    connection: { timeoutMs: 4200 },
+    route: route('openai-images', 'dall-e-2'),
+    request: { prompt: 'Edit this', references: [{ dataUrl: PNG }, { dataUrl: JPEG }] }, transport,
+  });
+  const files = transport.calls[0].options.body.getAll('image');
+  assert.deepEqual(files.map(file => file.name), ['image_1.png', 'image_2.jpg']);
+  assert.deepEqual(files.map(file => file.type), ['image/png', 'image/jpeg']);
+});
+
 test('openai-images sends input_fidelity for gpt-image-1 edits only', async () => {
   // gpt-image-1 (incl. namespaced) keeps the documented fidelity parameter...
   for (const modelId of ['gpt-image-1', 'openai/gpt-image-1']) {

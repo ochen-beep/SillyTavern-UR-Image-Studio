@@ -85,6 +85,13 @@ function editProtocol(connection) {
   return connection?.editProtocol === 'json' ? 'json' : 'multipart';
 }
 
+// Multipart filenames must carry an extension consistent with the declared
+// MIME: relay upstreams derive the expected file type from the filename, and a
+// bare "image" name fails validation with "Image edit file content does not
+// match its declared MIME type" even for perfectly valid bytes (novaproxy.space
+// incident 2026-09-09: same jpeg bytes → 400 as "image", 200 as "ref.jpg").
+const FILE_EXT_BY_MIME = { 'image/png': 'png', 'image/jpeg': 'jpg', 'image/webp': 'webp' };
+
 function formData(route, request, references) {
   const form = new FormData();
   form.append('model', route.modelId);
@@ -96,7 +103,7 @@ function formData(route, request, references) {
   const quality = acceptedQuality(route, request?.quality);
   if (quality) form.append('quality', quality);
   if (GPT_IMAGE_MODEL.test(String(route.modelId || ''))) form.append('input_fidelity', 'high');
-  for (const reference of references) form.append('image', new Blob([Uint8Array.from(atob(reference.data), c => c.charCodeAt(0))], { type: reference.mimeType }), 'image');
+  references.forEach((reference, index) => form.append('image', new Blob([Uint8Array.from(atob(reference.data), c => c.charCodeAt(0))], { type: reference.mimeType }), `image_${index + 1}.${FILE_EXT_BY_MIME[reference.mimeType] || 'bin'}`));
   return form;
 }
 
