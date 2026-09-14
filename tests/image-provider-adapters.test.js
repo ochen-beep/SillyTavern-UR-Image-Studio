@@ -3,6 +3,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import { invokeImageProvider } from '../src/image-provider-registry.js';
+import { VALID_PARAMS, MODEL_FAMILIES } from '../src/dispatch-plan.js';
 
 const PNG = 'data:image/png;base64,cG5n';
 const JPEG = 'data:image/jpeg;base64,anBlZw==';
@@ -634,8 +635,12 @@ test('openai-images maps the gpt-image quality scale onto dall-e-3 (low/medium�
   }
 });
 
-test('openai-images omits dall-e-incompatible quality values with a warning', async () => {
-  for (const requested of ['auto', 'standard', 'hd']) {
+test('openai-images keeps dall-e quality in its own vocabulary (standard/hd, auto = omit)', async () => {
+  // The Select shows dall-e's own list (dispatch-plan VALID_PARAMS), so both of
+  // its values must reach the wire verbatim. 'auto' means "omit the parameter":
+  // dall-e then defaults to standard, so it is not a dropped value and must not
+  // be reported as one.
+  for (const [requested, wire] of [['standard', 'standard'], ['hd', 'hd'], ['auto', undefined]]) {
     const transport = makeTransport(jsonResponse({ data: [{ b64_json: 'cG5n' }] }));
     const result = await invokeImageProvider({
       endpoint: 'https://api.example/v1', apiKey: 'secret',
@@ -643,8 +648,49 @@ test('openai-images omits dall-e-incompatible quality values with a warning', as
       route: route('openai-images', 'dall-e-3'),
       request: { prompt: 'A lighthouse', aspectRatio: '1:1', quality: requested, references: [] }, transport,
     });
-    assert.equal(JSON.parse(transport.calls[0].options.body).quality, undefined, `${requested} is not a dall-e-3 wire value`);
+    assert.equal(JSON.parse(transport.calls[0].options.body).quality, wire, `${requested} → ${wire}`);
+    assert.deepEqual(result.warnings, [], `${requested} is a legitimate choice — no warning`);
+  }
+});
+
+test('openai-images omits quality values no dall-e vocabulary knows, with a warning', async () => {
+  for (const requested of ['ultra', '4k']) {
+    const transport = makeTransport(jsonResponse({ data: [{ b64_json: 'cG5n' }] }));
+    const result = await invokeImageProvider({
+      endpoint: 'https://api.example/v1', apiKey: 'secret',
+      connection: { timeoutMs: 4100 },
+      route: route('openai-images', 'dall-e-3'),
+      request: { prompt: 'A lighthouse', aspectRatio: '1:1', quality: requested, references: [] }, transport,
+    });
+    assert.equal(JSON.parse(transport.calls[0].options.body).quality, undefined, `${requested} is unknown`);
     assert.match(result.warnings.map(w => w.feature).join(','), /Quality/);
+  }
+});
+
+test('every quality value the UI declares per family survives the wire', async () => {
+  // Contract test for the drift that made two dall-e options dead: the Select
+  // offered standard/hd while the adapter accepted only low/medium/high, so the
+  // chosen value was dropped with a warning. VALID_PARAMS is the single source
+  // both sides read now — anything declared for a family must be accepted, and
+  // never reported as unsupported.
+  const familyModel = { [MODEL_FAMILIES.DALL_E]: 'dall-e-3', [MODEL_FAMILIES.GPT_IMAGE]: 'gpt-image-1' };
+  for (const [family, model] of Object.entries(familyModel)) {
+    const declared = VALID_PARAMS.quality[family];
+    assert.ok(declared?.length, `${family} declares quality values`);
+    for (const requested of declared) {
+      const transport = makeTransport(jsonResponse({ data: [{ b64_json: 'cG5n' }] }));
+      const result = await invokeImageProvider({
+        endpoint: 'https://api.example/v1', apiKey: 'secret',
+        connection: { timeoutMs: 4100 },
+        route: route('openai-images', model),
+        request: { prompt: 'A lighthouse', aspectRatio: '1:1', quality: requested, references: [] }, transport,
+      });
+      assert.deepEqual(result.warnings, [], `${model}: «${requested}» must not be reported as unsupported`);
+      // Either the value travels, or 'auto' deliberately omits it.
+      const sent = JSON.parse(transport.calls[0].options.body).quality;
+      assert.ok(sent === undefined ? requested === 'auto' : typeof sent === 'string',
+        `${model}: «${requested}» resolved to ${JSON.stringify(sent)}`);
+    }
   }
 });
 
