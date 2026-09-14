@@ -29,7 +29,7 @@ import {
     resolveDispatchPlan,
     referenceEncoding,
     detectModelFamily,
-    MODEL_FAMILIES,
+    VALID_PARAMS,
     getVisibleModelChoices,
     classifyModelCapability,
 } from '../dispatch-plan.js';
@@ -408,13 +408,12 @@ function bindEmptyState(root) {
     });
 }
 
-// Quality values that survive the wire for a model family (kept in sync with
-// providers/image-openai.js acceptedQualityValues). Unknown families and
-// non-OpenAI dialects keep the generic scale.
-const QUALITY_BY_FAMILY = {
-    [MODEL_FAMILIES.DALL_E]: ['auto', 'standard', 'hd'],
-    default: ['auto', 'low', 'medium', 'high'],
-};
+// Quality values that survive the wire, per model family. Read from
+// dispatch-plan so the Select and the provider adapter share one table — a local
+// copy is exactly how two dall-e options ended up dead (offered here, rejected
+// there with a warning). The tie is enforced by the contract test in
+// tests/image-provider-adapters.test.js.
+const QUALITY_BY_FAMILY = VALID_PARAMS.quality;
 
 /** Quality dropdown options for the selected model's family. */
 export function qualityOptionsFor(modelId, current = '') {

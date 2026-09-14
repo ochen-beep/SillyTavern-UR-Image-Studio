@@ -33,24 +33,40 @@ const ASPECT_SIZES_DALLE = new Map([
   ['2:3', '1024x1792'], ['3:4', '1024x1792'], ['4:5', '1024x1792'], ['9:16', '1024x1792'],
 ]);
 const QUALITY_VALUES = new Set(['auto', 'low', 'medium', 'high']);
-// dall-e-3 speaks the legacy quality scale (standard/hd) and REJECTS
-// 'auto'/gpt-image values with HTTP 400. low/medium map to the faster
-// 'standard', high to the qualitative 'hd' — user intent survives; 'auto'
-// is dropped (warning) because dall-e has no "provider default" knob.
-const DALLE_QUALITY_MAP = new Map([['low', 'standard'], ['medium', 'standard'], ['high', 'hd']]);
+// dall-e speaks the legacy quality scale (standard/hd) and REJECTS the
+// gpt-image values with HTTP 400. Both vocabularies are accepted as INPUT: the
+// value is persisted per chat (and the external bridge only ever sends the
+// intent scale), so it outlives a model switch, and mapping low/medium→standard
+// + high→hd keeps a deliberate choice from being silently replaced by the
+// provider default. 'auto' has no dall-e spelling — omitting the parameter IS
+// "standard" — so it resolves to undefined instead of a warning.
+// The list OFFERED per family lives in dispatch-plan VALID_PARAMS and is tied
+// to this table by a contract test (tests/image-provider-adapters.test.js), so
+// the two sides cannot drift apart again.
+const DALLE_QUALITY_MAP = new Map([
+  ['low', 'standard'], ['medium', 'standard'], ['high', 'hd'],
+  ['standard', 'standard'], ['hd', 'hd'],
+]);
 
-/** dall-e-3 family: its own size table and legacy quality vocabulary. */
+/** dall-e family: its own size table and legacy quality vocabulary. */
 function isDalleModel(route) {
   return /dall[-_. ]?e/i.test(String(route?.modelId || ''));
 }
 
-/** Quality values this route's model family actually accepts on the wire. */
-function acceptedQualityValues(route) {
-  return isDalleModel(route) ? new Set(DALLE_QUALITY_MAP.keys()) : QUALITY_VALUES;
-}
-function acceptedQuality(route, quality) {
-  if (typeof quality !== 'string' || !acceptedQualityValues(route).has(quality)) return undefined;
-  return isDalleModel(route) ? DALLE_QUALITY_MAP.get(quality) : quality;
+/**
+ * The `quality` value that goes on the wire, or undefined to omit the
+ * parameter. Unknown values are omitted, never guessed; paramWarnings reports
+ * them to the user.
+ *
+ * @param {{modelId?: string}} route
+ * @param {unknown} quality
+ * @returns {string|undefined}
+ */
+function wireQuality(route, quality) {
+  if (typeof quality !== 'string' || !quality) return undefined;
+  if (!isDalleModel(route)) return QUALITY_VALUES.has(quality) ? quality : undefined;
+  if (quality === 'auto') return undefined;
+  return DALLE_QUALITY_MAP.get(quality);
 }
 
 function generationUrl(endpoint) { return `${endpointBase(endpoint)}/images/generations`; }
@@ -62,7 +78,7 @@ function sizesForRoute(route) {
 
 function generationBody(route, request) {
   const size = sizesForRoute(route).get(request?.aspectRatio);
-  const quality = acceptedQuality(route, request?.quality);
+  const quality = wireQuality(route, request?.quality);
   // output_format is intentionally omitted: gpt-image-1 defaults to PNG on
   // OpenAI, and other providers (Imagen proxies, etc.) may reject or ignore
   // the parameter. The response-side parser sniffs the actual format from
@@ -126,7 +142,7 @@ function formData(route, request, references) {
   // No response_format: GPT Image rejects it (see generationBody).
   const size = sizesForRoute(route).get(request?.aspectRatio);
   if (size) form.append('size', size);
-  const quality = acceptedQuality(route, request?.quality);
+  const quality = wireQuality(route, request?.quality);
   if (quality) form.append('quality', quality);
   if (GPT_IMAGE_MODEL.test(String(route.modelId || ''))) form.append('input_fidelity', 'high');
   references.forEach((reference, index) => form.append('image', new Blob([Uint8Array.from(atob(reference.data), c => c.charCodeAt(0))], { type: reference.mimeType }), `image_${index + 1}.${FILE_EXT_BY_MIME[reference.mimeType] || 'bin'}`));
@@ -140,7 +156,7 @@ function formData(route, request, references) {
 // (CloseAI, etc.). Selected per connection via `editProtocol: 'json'`.
 function editJsonBody(route, request, references) {
   const size = sizesForRoute(route).get(request?.aspectRatio);
-  const quality = acceptedQuality(route, request?.quality);
+  const quality = wireQuality(route, request?.quality);
   const body = {
     model: route.modelId,
     prompt: String(request?.prompt || ''),
@@ -219,14 +235,16 @@ function shouldFallbackToProxyJson(error, connection) {
 /**
  * Warnings for parameters this API cannot carry: an unmapped aspect ratio or a
  * quality it does not know are dropped from the body today — surface that as a
- * warning instead of letting the user's selection silently vanish.
+ * warning instead of letting the user's selection silently vanish. 'auto' is
+ * not a dropped value: it resolves to "omit the parameter", which the provider
+ * then fills with its own default, so it never warns.
  */
 function paramWarnings(route, request) {
   const warnings = [];
   if (request?.aspectRatio && !sizesForRoute(route).get(request.aspectRatio)) {
     warnings.push({ feature: 'Стороны', details: `соотношение ${request.aspectRatio} не поддерживается OpenAI Images API — параметр size опущен` });
   }
-  if (request?.quality && acceptedQuality(route, request.quality) === undefined) {
+  if (request?.quality && request.quality !== 'auto' && wireQuality(route, request.quality) === undefined) {
     warnings.push({ feature: 'Quality', details: `значение «${request.quality}» не поддерживается этой моделью — параметр опущен` });
   }
   return warnings;
