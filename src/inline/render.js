@@ -1,8 +1,9 @@
 // @ts-check
 /**
  * DOM-слой инлайна: оболочки в сообщениях (реконсиляция по data-uris-inl),
- * ручная 📷-кнопка в .mes_buttons, клик → showSingleImage (PhotoSwipe),
- * реролл = замена (старая остаётся в галерее).
+ * ручная 📷-кнопка в .mes_buttons, клик по готовой картинке → общий лайтбокс
+ * по всем картинкам сообщения (showLightbox, с рабочими галерейными
+ * действиями), реролл = замена (старая остаётся в галерее).
  *
  * Реконсиляция идемпотентна: оболочка помечена data-uris-inl="<key>"
  * (idx|type|descHash) и data-uris-status; при том же ключе и статусе — keep,
@@ -16,7 +17,7 @@ import { parseInline } from './grammar.js';
 import { getSlot, upsertItem, itemKey } from './store.js';
 import { sanitizeTriggerList, buildAliasIndex, resolveProfile } from './triggers.js';
 import { stableHash, queueInlineJob, DEFAULT_GRACE } from './runner.js';
-import { showSingleImage } from '../ui/lightbox.js';
+import { showSingleImage, showLightbox } from '../ui/lightbox.js';
 
 const SHELL_ATTR = 'data-uris-inl';
 const STATUS_ATTR = 'data-uris-status';
@@ -28,6 +29,19 @@ let _onInlineEvent = null;
 let _onManual = null;
 let _reroll = null;
 let _debounceId = null;
+
+// Test-only viewer seam (same pattern as tab-gallery.js): fake-dom tests cannot
+// load PhotoSwipe, so the click regression test swaps the viewer for a stub.
+let _viewer = { showLightbox };
+export function setViewerForTests(viewer) { _viewer = viewer; }
+export function resetViewerForTests() { _viewer = { showLightbox }; }
+
+// Card lookup seam, mirroring setRefStoreForTests in refs-library.js. Null means
+// "the real file-backed gallery store", imported lazily on click so the DOM
+// layer does not pull it into its static graph for every page load.
+let _loadCards = null;
+export function setCardLookupForTests(fn) { _loadCards = fn; }
+export function resetCardLookupForTests() { _loadCards = null; }
 
 /** Подписка MutationObserver на #chat (debounce 250мс) + события uris:inline-*;
  * reroll сохраняется в модульную переменную (по умолчанию — автолейн). */
@@ -174,10 +188,8 @@ function shellFor(msgId, entry) {
         img.setAttribute('src', `/${String(entry.item?.imagePath || '').replace(/^\/+/, '')}`);
         img.setAttribute('loading', 'lazy');
         img.setAttribute('alt', entry.desc || profile?.name || entry.type);
-        img.addEventListener('click', () => {
-            try { showSingleImage({ src: img.getAttribute('src'), prompt: entry.desc || '' }); } catch { /* просмотрщик недоступен */ }
-        });
-        img.addEventListener('dblclick', () => startReroll(jobOf(msgId, entry)));
+        img.setAttribute('title', `${profile?.name || entry.type} — клик: просмотр всех картинок поста`);
+        img.addEventListener('click', () => { void openMessageLightbox(msgId, entry); });
         el.appendChild(img);
         el.appendChild(badge(profile?.name || entry.type));
         return el;
@@ -236,6 +248,80 @@ function badge(text) {
     b.classList.add('uris-inl-badge');
     b.textContent = text;
     return b;
+}
+
+// ── Просмотр: все готовые картинки поста в общем лайтбоксе ──
+//
+// Раньше клик отдавал showSingleImage({src, prompt}) — без cardId. Тулбар
+// лайтбокса в галерейном режиме читает id/sourceMsgId, поэтому на инлайне
+// «Перегенерировать» падало на msgId=undefined, а «Удалить» молча ничего не
+// делало. Теперь оболочка открывает общий просмотрщик по ВСЕМ готовым
+// результатам сообщения и обогащает каждый item его галерейной карточкой —
+// действия работают ровно так же, как из сетки галереи.
+
+/** Карточки галереи по id. Ошибка стораджа — не повод не открыть просмотр. */
+async function cardsByIds(ids) {
+    const wanted = new Set((Array.isArray(ids) ? ids : []).filter(Boolean));
+    if (!wanted.size) return new Map();
+    try {
+        const load = _loadCards || (async () => (await import('../gallery-index.js')).listCards({ reconcile: false }));
+        const cards = await load();
+        const byId = new Map();
+        for (const card of Array.isArray(cards) ? cards : []) {
+            if (card && wanted.has(card.id)) byId.set(card.id, card);
+        }
+        return byId;
+    } catch { return new Map(); }
+}
+
+/**
+ * Чистое: items для лайтбокса по слоту сообщения. Берём готовые результаты с
+ * файлом, порядок — по idx (затем по createdAt: у ручных idx=-1, их несколько).
+ * Карточка авторитетна для промпта/параметров/размеров, item — для файла и
+ * идентичности слайда.
+ *
+ * @param {Array} items элементы слота
+ * @param {Map<string, object>|null} [cards] Map<cardId, card>
+ * @param {number|string|null} [msgId]
+ * @returns {Array<object>}
+ */
+export function messageLightboxItems(items, cards = null, msgId = null) {
+    const list = Array.isArray(items) ? items : [];
+    return list
+        .filter(item => item && item.status === 'ready' && item.imagePath)
+        .slice()
+        .sort((a, b) => (Number(a.idx) - Number(b.idx)) || ((a.createdAt || 0) - (b.createdAt || 0)))
+        .map(item => {
+            const card = (item.cardId && cards?.get?.(item.cardId)) || null;
+            const msg = Number(msgId);
+            return {
+                ...(card || {}),
+                id: card?.id || null,
+                src: `/${String(item.imagePath).replace(/^\/+/, '')}`,
+                imagePath: item.imagePath,
+                prompt: card?.prompt || item.desc || '',
+                sourceMsgId: card?.sourceMsgId ?? (msg >= 0 ? msg : null),
+                // Ключ слайда: по нему обработчик выбирает открытую картинку.
+                __inlineKey: `${item.idx}|${item.type}|${item.descHash}`,
+            };
+        });
+}
+
+/** Открыть общий просмотрщик по всем готовым картинкам сообщения. */
+async function openMessageLightbox(msgId, entry) {
+    const slot = getSlot(msgId);
+    const cards = await cardsByIds((slot.items || []).map(item => item?.cardId));
+    const items = messageLightboxItems(slot.items, cards, msgId);
+    if (!items.length) return;
+    const clicked = items.findIndex(item => item.__inlineKey === entry.key);
+    try {
+        await _viewer.showLightbox(items, clicked < 0 ? 0 : clicked, { chatId: getCtx()?.chatId ?? null });
+    } catch {
+        // Просмотрщик недоступен (нет PhotoSwipe) — деградируем к одиночному.
+        try {
+            void showSingleImage({ src: `/${String(entry.item?.imagePath || '').replace(/^\/+/, '')}`, prompt: entry.desc || '' });
+        } catch { /* и одиночный не поднялся */ }
+    }
 }
 
 function profileFor(type) {

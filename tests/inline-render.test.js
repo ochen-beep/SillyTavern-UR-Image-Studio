@@ -28,11 +28,15 @@ beforeEach(() => {
     };
     state.settings = { inlineEnabled: true, inlineTriggers: [] };
     state.activeGenerations = new Map();
+    resetViewerForTests();
+    resetCardLookupForTests();
 });
 
 const {
     computeShellPlan, reconcileVisible, ensureManualButtons,
     initRender, shutdownRender,
+    messageLightboxItems, setViewerForTests, resetViewerForTests,
+    setCardLookupForTests, resetCardLookupForTests,
 } = await import('../src/inline/render.js');
 
 const HASH_A = stableHash('img|a');
@@ -361,5 +365,100 @@ test('render: осиротевшая ручная pending-оболочка → e
     const shell = textEl.querySelector(`[data-uris-inl="-1|img|${descHash}"]`);
     assert.equal(shell.getAttribute('data-uris-status'), 'error');
     assert.equal(shell.getAttribute('data-manual'), '1', 'ручная оболочка остаётся ручной');
+    shutdownRender();
+});
+
+// ── Просмотр: клик открывает ВСЕ готовые картинки поста ──
+//
+// Регрессия: клик отдавал showSingleImage({src, prompt}) без cardId, а
+// галерейный тулбар лайтбокса читает id/sourceMsgId — «Перегенерировать»
+// падало на msgId=undefined, «Удалить» молча ничего не делало.
+
+test('messageLightboxItems: готовые с файлом, порядок по idx, поля карточки важнее item', () => {
+    const items = [
+        { idx: 1, type: 'img', descHash: 'b', status: 'ready', imagePath: 'two.png', desc: 'второе', cardId: 'c2' },
+        { idx: 0, type: 'img', descHash: 'a', status: 'ready', imagePath: 'one.png', desc: 'первое', cardId: 'c1' },
+        { idx: 2, type: 'img', descHash: 'c', status: 'pending', imagePath: null },
+        { idx: 3, type: 'img', descHash: 'd', status: 'ready', imagePath: null },
+    ];
+    const cards = new Map([
+        ['c1', { id: 'c1', prompt: 'промпт один', negativePrompt: 'neg', quality: 'hd', sourceMsgId: 7, width: 1024, height: 1792, thumbPath: 't1.webp' }],
+    ]);
+    const out = messageLightboxItems(items, cards, 0);
+
+    assert.deepEqual(out.map(i => i.imagePath), ['one.png', 'two.png'],
+        'только готовые с файлом, отсортированные по idx');
+    assert.equal(out[0].src, '/one.png', 'src — корневой путь, как у оболочки');
+    assert.equal(out[0].id, 'c1');
+    assert.equal(out[0].prompt, 'промпт один', 'промпт карточки важнее описания маркера');
+    assert.equal(out[0].negativePrompt, 'neg');
+    assert.equal(out[0].quality, 'hd');
+    assert.equal(out[0].sourceMsgId, 7, 'sourceMsgId карточки — для regenerate');
+    assert.equal(out[0].width, 1024);
+    assert.equal(out[0].thumbPath, 't1.webp');
+    assert.equal(out[0].__inlineKey, '0|img|a');
+
+    // Карточки нет (удалена из галереи) — слайд остаётся, id null,
+    // sourceMsgId падает на само сообщение, промпт — на описание.
+    assert.equal(out[1].id, null);
+    assert.equal(out[1].prompt, 'второе');
+    assert.equal(out[1].sourceMsgId, 0);
+});
+
+test('messageLightboxItems: ручные результаты (idx<0) сортируются по createdAt', () => {
+    const out = messageLightboxItems([
+        { idx: -1, type: 'img', descHash: 'new', status: 'ready', imagePath: 'n.png', createdAt: 200 },
+        { idx: -1, type: 'img', descHash: 'old', status: 'ready', imagePath: 'o.png', createdAt: 100 },
+    ], null, 4);
+    assert.deepEqual(out.map(i => i.imagePath), ['o.png', 'n.png']);
+    assert.equal(out[0].sourceMsgId, 4);
+});
+
+test('клик по инлайн-картинке открывает все готовые картинки поста с данными карточки', async () => {
+    const { textEl } = buildChatDOM();
+    upsertItem(0, { ...readyItem('one.png'), cardId: 'c1' });
+    // Ручной результат того же сообщения — попадает в тот же просмотр.
+    upsertItem(0, { idx: -1, type: 'img', descHash: 'manual', status: 'ready', imagePath: 'two.png', createdAt: 5 });
+    reconcileVisible();
+
+    const shell = textEl.querySelector(`[data-uris-inl="0|img|${HASH_A}"]`);
+    assert.ok(shell, 'готовая оболочка отрисована');
+    const img = shell.querySelector('img');
+    assert.ok(img, 'картинка внутри оболочки');
+
+    const calls = [];
+    setViewerForTests({ showLightbox: (...args) => { calls.push(args); } });
+    setCardLookupForTests(async () => [
+        { id: 'c1', prompt: 'кофе на столе', sourceMsgId: 0, width: 512, height: 512, thumbPath: 't.webp' },
+    ]);
+    img.click();
+    await new Promise(resolve => setTimeout(resolve, 0)); // lookup карточек асинхронный
+
+    assert.equal(calls.length, 1, 'showLightbox вызван один раз');
+    const [items, index, options] = calls[0];
+    assert.deepEqual(items.map(i => i.src), ['/two.png', '/one.png'], 'оба готовых результата поста');
+    assert.equal(index, 1, 'открыто именно нажатое изображение');
+    assert.equal(items[index].id, 'c1', 'id карточки — без него не работают regen/delete');
+    assert.equal(items[index].prompt, 'кофе на столе');
+    assert.equal(items[index].width, 512);
+    assert.equal(options.chatId, null, 'chatId резолвится из контекста');
+});
+
+test('клик: двойной клик не ставит платную задачу (dblclick-реролл убран)', () => {
+    const { textEl } = buildChatDOM();
+    upsertItem(0, { ...readyItem(), cardId: 'c1' });
+    reconcileVisible();
+    const jobs = [];
+    initRender({ reroll: (job) => { jobs.push(job); return Promise.resolve(); } });
+    setViewerForTests({ showLightbox: () => {} });
+    setCardLookupForTests(async () => []);
+    const shell = textEl.querySelector(`[data-uris-inl="0|img|${HASH_A}"]`);
+    const img = shell.querySelector('img');
+    // Двойной клик — это click + click + dblclick; ни одна из фаз не должна
+    // ставить платную задачу (раньше dblclick шёл в startReroll).
+    img.click();
+    img.click();
+    img.dispatchEvent({ type: 'dblclick' });
+    assert.deepEqual(jobs, [], 'двойной клик больше не запускает генерацию');
     shutdownRender();
 });
