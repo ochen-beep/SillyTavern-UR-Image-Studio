@@ -227,6 +227,13 @@ export async function regenerate(item, root, regenBtn) {
 
 /** Delete a gallery card. Returns false on cancel/failure — the lightbox keeps the viewer open. */
 export async function deleteImage(item, chatId, root) {
+    // A slide can legitimately have no card: the inline viewer shows every ready
+    // result of a message, and its card may already be gone from the gallery.
+    // Without this guard the user confirmed a dialog and nothing happened at all.
+    if (!item?.id) {
+        toastr?.info('Карточка не найдена в галерее — возможно, уже удалена');
+        return false;
+    }
     const ctx = getCtx();
     const deleteFile = await confirmDeleteModal(ctx);
     if (deleteFile === null) return false; // cancelled
