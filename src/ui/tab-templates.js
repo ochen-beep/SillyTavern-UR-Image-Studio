@@ -1,9 +1,10 @@
 // @ts-check
 /** Templates tab: instruction templates only. */
-import { state, escapeHtml, showConfirmModal, showInputModal, debounceSave } from '../core.js';
+import { state, escapeHtml, showConfirmModal, showInputModal, debounceSave, error } from '../core.js';
 import { listTemplates, saveTemplate, deleteTemplate, createInstructionTemplate } from '../prompt-templates.js';
 import { patchChatConfig } from '../chat-binding.js';
 import { refreshActive } from './tabs.js';
+import { recordUrisError } from '../error-pool.js';
 import { generatePromptText } from '../text-api.js';
 import { editTextModal } from './text-editor.js';
 
@@ -23,11 +24,20 @@ async function renderActions(root) {
     host.innerHTML = renderTemplateCreateActions(state.settings.experimentalTemplateFromDescription === true);
     host.querySelectorAll('[data-create-type]').forEach(button => {
         button.addEventListener('click', async () => {
-            if (button.dataset.createType === 'instruction') {
-                await createInstructionTemplate({ name: 'Новый instruction' });
-                refreshActive();
-            } else if (button.dataset.createType === 'description') {
-                await createTemplateFromDescription();
+            // createTemplateFromDescription throws on invalid LLM JSON or a
+            // disabled flag — without this handler the rejection vanished
+            // (unhandled promise rejection, no toast) and the feature looked dead.
+            try {
+                if (button.dataset.createType === 'instruction') {
+                    await createInstructionTemplate({ name: 'Новый instruction' });
+                    refreshActive();
+                } else if (button.dataset.createType === 'description') {
+                    await createTemplateFromDescription();
+                }
+            } catch (e) {
+                error('Templates: create failed:', e?.message || e);
+                recordUrisError({ scope: 'Шаблоны', message: e?.message || String(e) });
+                toastr?.error('Не удалось создать шаблон: ' + (e?.message || e));
             }
         });
     });

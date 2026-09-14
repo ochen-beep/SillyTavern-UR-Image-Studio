@@ -288,11 +288,6 @@ function renderErrorPanel(winEl, errors, pending = []) {
     });
 }
 
-export async function refreshErrorPanel(winEl) {
-    const pending = await listPendingBrowserRequests();
-    renderErrorPanel(winEl, listUrisErrors(), pending);
-}
-
 function bindErrorPool(el) {
     const badge = el.querySelector('#urisErrorBadge');
     const panel = el.querySelector('#urisErrorPanel');

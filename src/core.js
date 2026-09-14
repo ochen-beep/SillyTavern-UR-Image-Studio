@@ -161,6 +161,12 @@ export const state = {
 
     // Active profiles are managed by the per-chat schema-v5 config.
     activeImageProfileId: null,
+    // Chat-scoped automation config (schema-v5 projection, see chat-binding.js).
+    // Runtime-only: deliberately NOT part of state.settings — writing them there
+    // leaked the last visited chat's mode into the globally persisted
+    // settings.json, and it came back as the next session's startup default.
+    chatAutomationMode: 'manual',  // 'manual' | 'build-prompt' | 'full-pipeline'
+    chatGenerationFlow: 'ai-only', // 'ai-only' | 'user-only' | 'all' | 'manual'
     lastInstruction: null,     // last built Stage 1 instruction
     styleOverride: '',         // runtime style override from UI (overrides pinned/random/llm-pick)
     // pendingSourceMsgId / pendingSourceMesHash are set in runStage1
@@ -215,11 +221,14 @@ export const defaultSettings = Object.freeze({
     collapsed: true,           // window hidden until first open
     launcherMode: 'bar',       // 'bar' | 'floating' | 'both' — кнопка(и) запуска
     activeTab: 'generate',     // last selected floating window tab
-    automationMode: 'manual',   // 'manual' | 'build-prompt' | 'full-pipeline'
+    automationMode: 'manual',   // DEPRECATED runtime shadow of the chat config; kept for
+                                // settings-shape compatibility — the authoritative value lives
+                                // in the per-chat schema-v5 config (state.chatAutomationMode)
     bridgeEnabled: true,       // external bridge (globalThis.URIS) accepts generations from other extensions
     bridgeTab: false,          // show the experimental "Мост" lab tab in the floating window
     experimentalTemplateFromDescription: false,
-    generationFlow: 'ai-only', // 'ai-only' | 'user-only' | 'all' | 'manual'
+    generationFlow: 'ai-only', // DEPRECATED: authoritative value lives in the per-chat
+                               // schema-v5 config (state.chatGenerationFlow)
     followLastPost: true,      // Generation tab navigator follows the last post
     historyRich: true,         // store objects instead of strings in history
     maxRetries: 0,
@@ -524,19 +533,22 @@ export function getDefaultChatConfigEnvelope() {
 
 /**
  * Escape a string for safe interpolation into HTML text OR a double/single-quoted
- * attribute. `textContent`->`innerHTML` serializes `&`, `<`, `>` (and nbsp) but
- * NOT quotes, so a value containing `"` would break out of `attr="${escapeHtml(x)}"`
- * (attribute injection). The two trailing replaces close that hole, making the
- * result safe in every context this codebase uses (text nodes, `data-*`, `title`,
- * `alt`, `src`, `value`, `style`-inline). Keep using this single helper; there is
- * no separate attribute escaper.
+ * attribute. Values containing `"` would otherwise break out of `attr="${escapeHtml(x)}"`
+ * (attribute injection), so quotes are escaped too — the result is safe in every
+ * context this codebase uses (text nodes, `data-*`, `title`, `alt`, `src`, `value`,
+ * `style`-inline). Keep using this single helper; there is no separate attribute
+ * escaper. Pure string implementation: no `document` dependency, the same function
+ * is importable from Node-tested modules (ui/server-connection-form.js).
  * @param {string|number|null|undefined} t
  * @returns {string}
  */
 export function escapeHtml(t) {
-    const d = document.createElement('div');
-    d.textContent = t == null ? '' : String(t);
-    return d.innerHTML.replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+    return String(t == null ? '' : t)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
 }
 export function decodeEntities(s) {
     // First numeric entities (&#NN; / &#xHH;), then named,
@@ -567,6 +579,33 @@ export function debounceSave(saver, id, collect, ms = 400) {
     };
 }
 export function uid() { return Date.now().toString(36) + Math.random().toString(36).slice(2, 8); }
+
+/**
+ * FNV-1a 32-bit hash — каноническое ядро для новых 32-битных идентификаторов
+ * (прежде всего inline descHash). Возвращает число; hex-обёртка ниже строится
+ * на нём. Исторический 16-разрядный messageHash черновиков намеренно остаётся
+ * отдельным: смена его формата/значений инвалидировала бы сохранённые черновики
+ * и заставила бы заново строить промпты Stage 1.
+ * @param {string|number|null|undefined} value
+ * @returns {number} uint32
+ */
+export function fnv1a32(value) {
+    let h = 0x811c9dc5; // FNV-1a 32-bit offset basis
+    const bytes = new TextEncoder().encode(String(value == null ? '' : value));
+    for (let i = 0; i < bytes.length; i++) { h ^= bytes[i]; h = Math.imul(h, 0x01000193) >>> 0; }
+    return h >>> 0;
+}
+
+/**
+ * FNV-1a 32-bit, hex — inline descHash. ЗОЛОТОЕ ЗНАЧЕНИЕ: fnv1aHex('img|d')
+ * === '6998fd64' зафиксировано тестом — смена алгоритма тихо осиротит все
+ * сохранённые descHash и инлайн перегенерирует всё за деньги.
+ * @param {string|number|null|undefined} value
+ * @returns {string}
+ */
+export function fnv1aHex(value) {
+    return fnv1a32(value).toString(16);
+}
 
 /**
  * Call fn with retry on network errors.

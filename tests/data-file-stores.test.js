@@ -312,3 +312,34 @@ describe('backup round-trip with file-backed data', () => {
         assert.deepEqual(storedDoc(refs.REFS_FILE_NAME).data.refs, [], 'the backup says the pool is empty');
     });
 });
+
+it('export/import попадают в журнал диагностики', async () => {
+    const backup = await import('../src/data-port.js');
+    const journal = await import('../src/diagnostic-events.js');
+    journal.resetDiagnosticEventsForTests();
+
+    await refs.ensureRefsStoreReady();
+    await refs.createRef({ name: 'Aria' });
+    await refs.flushRefsWrites();
+    await presets.ensureParamPresetStoreReady();
+    await presets.createImageParam({ name: 'Cinematic' });
+    await presets.flushParamPresetWrites();
+
+    const exported = await backup.exportUrisData();
+    await backup.importUrisData(exported, { mode: 'replace' });
+    await refs.flushRefsWrites();
+
+    const events = journal.listDiagnosticEvents();
+    const exp = events.find(e => e.event === 'export-run');
+    assert.ok(exp, 'export writes a journal event');
+    assert.equal(exp.outcome, 'ok');
+    assert.ok(Number.isFinite(exp.durationMs));
+    assert.ok(exp.details.refs >= 1);
+    const imp = events.find(e => e.event === 'import-run');
+    assert.ok(imp, 'import writes a journal event');
+    assert.equal(imp.outcome, 'ok');
+    assert.equal(imp.details.mode, 'replace');
+    const crud = events.find(e => e.event === 'preset-crud');
+    assert.ok(crud, 'preset CRUD writes a journal event');
+    assert.equal(crud.operation, 'create');
+});

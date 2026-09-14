@@ -89,11 +89,13 @@ export function nextFolderSortMode(sort) {
  * @param {string[]} [opts.selectedIds] pre-checked folders (multi mode)
  * @param {(folder: Object, isSelected: boolean) => void} [opts.onToggle]
  * @param {(folder: Object) => void} [opts.onPick] pick-one mode
+ * @param {(string[]) => void} [opts.onDone] multi mode confirmation callback
+ * @param {() => void} [opts.onCancel] cancel/Escape callback
  * @param {(name: string) => Promise<Object>} [opts.onCreate] create-on-type
  *   (multi mode); must persist the folder and return its record.
- * @returns {{ close: () => void, overlay: HTMLElement }}
+ * @returns {{ close: () => void, overlay: HTMLElement, result: Promise<*> }}
  */
-export function openFolderSheet({ folders = [], title = 'Папки', mode = 'multi', selectedIds = [], onToggle, onPick, onCreate } = {}) {
+export function openFolderSheet({ folders = [], title = 'Папки', mode = 'multi', selectedIds = [], onToggle, onPick, onDone, onCancel, onCreate } = {}) {
     const items = (Array.isArray(folders) ? folders : []).slice();
     const selected = new Set((selectedIds || []).map(String));
     let query = '';
@@ -125,6 +127,16 @@ export function openFolderSheet({ folders = [], title = 'Папки', mode = 'mu
 
     let settle;
     const closed = new Promise(resolve => { settle = resolve; });
+    let settled = false;
+    const finish = (value, kind, picked = null) => {
+        if (settled) return;
+        settled = true;
+        try {
+            if (kind === 'done') onDone?.(Array.isArray(picked) ? picked : [...selected]);
+            else if (kind === 'cancel') onCancel?.();
+        } catch { /* lifecycle callbacks must not strand the overlay */ }
+        settle(value);
+    };
 
     const cleanup = () => {
         document.removeEventListener('keydown', onKey, true);
@@ -134,7 +146,7 @@ export function openFolderSheet({ folders = [], title = 'Папки', mode = 'mu
     const onKey = (e) => {
         if (e.key === 'Escape') {
             e.stopPropagation();
-            settle(null);
+            finish(null, 'cancel');
         }
     };
     document.addEventListener('keydown', onKey, true);
@@ -169,7 +181,7 @@ export function openFolderSheet({ folders = [], title = 'Папки', mode = 'mu
                 if (!folder) return;
                 if (mode === 'pick-one') {
                     onPick?.(folder);
-                    settle(folder);
+                    finish(folder, 'pick');
                     return;
                 }
                 const isOn = !selected.has(folder.id);
@@ -196,12 +208,12 @@ export function openFolderSheet({ folders = [], title = 'Папки', mode = 'mu
         query = e.target.value || '';
         renderRows();
     });
-    overlay.querySelector('.uris-folder-sheet-done')?.addEventListener('click', () => settle(null));
-    overlay.querySelector('.uris-folder-sheet-cancel')?.addEventListener('click', () => settle(null));
+    overlay.querySelector('.uris-folder-sheet-done')?.addEventListener('click', () => finish(null, 'done'));
+    overlay.querySelector('.uris-folder-sheet-cancel')?.addEventListener('click', () => finish(null, 'cancel'));
     closed.then(() => cleanup());
 
     renderRows();
-    return { overlay, close: () => settle(null), result: closed };
+    return { overlay, close: () => finish(null, 'cancel'), result: closed };
 }
 
 // ── Field (chips + «+ Папка» for the editor) ─────────────────────────────────

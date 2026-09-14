@@ -17,7 +17,7 @@ import { validatePollinationsToken } from '../providers/image-pollinations.js';
 import { validateNaisteraToken } from '../providers/image-naistera.js';
 import { getVisibleModelChoices, partitionLikelyImageModels } from '../dispatch-plan.js';
 import { recordUrisError } from '../error-pool.js';
-import { showConfirmModal, log } from '../core.js';
+import { showConfirmModal, log, escapeHtml } from '../core.js';
 import { forgetAccordion, getAccordionOpen, setAccordionOpen } from './accordion-state.js';
 import { setStatus } from './window.js';
 
@@ -34,15 +34,6 @@ const DIALECT_OPTIONS = [
     [CONTRACTS.POLLINATIONS_IMAGES, 'Pollinations (sk_ token)'],
     [CONTRACTS.NAISTERA, 'Naistera (токен из Telegram-бота)'],
 ];
-
-function escapeHtml(value) {
-    return String(value ?? '')
-        .replace(/&/g, '&amp;')
-        .replace(/</g, '&lt;')
-        .replace(/>/g, '&gt;')
-        .replace(/"/g, '&quot;')
-        .replace(/'/g, '&#39;');
-}
 
 function modelPartition(draft) {
     return partitionLikelyImageModels(

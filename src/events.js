@@ -35,8 +35,8 @@ export function bindEvents(handlers) {
 
     _onAutomation = handlers?.onAutomation || null;
 
-    // Sync the post-navigator filter with the saved setting.
-    setFilter(state.settings?.generationFlow || POST_FILTER.AI_ONLY);
+    // Sync the post-navigator filter with the chat config projection loaded at init.
+    setFilter(state.chatGenerationFlow || POST_FILTER.AI_ONLY);
 
     const et = ctx.event_types;
 
@@ -56,7 +56,7 @@ export function bindEvents(handlers) {
         // matchesFilter: content-based filtering would make getLastPostIndex()
         // fall back to an OLDER post and silently generate for it.
         if (!isGenerationEligible(msg)) return;
-        const automationMode = state.settings.automationMode || 'manual';
+        const automationMode = state.chatAutomationMode || 'manual';
         if (automationMode === 'manual') return;
         // getContext() returns a fresh snapshot per call — scalar fields like
         // chatId are frozen at call time, and the ctx captured by bindEvents()
@@ -94,7 +94,7 @@ export function bindEvents(handlers) {
     // makeLast: run after ST handlers so the new post is already in ctx.chat.
     _onGenerationEnded = () => {
         if (!state.settings.enabled) return;
-        const automationMode = state.settings.automationMode || 'manual';
+        const automationMode = state.chatAutomationMode || 'manual';
         if (automationMode === 'manual') return;
         const filter = state.generationFlow || POST_FILTER.AI_ONLY;
         if (filter === POST_FILTER.USER_ONLY || filter === POST_FILTER.MANUAL) return;
@@ -106,7 +106,7 @@ export function bindEvents(handlers) {
     // MESSAGE_SENT → dispatch automation when the flow includes user messages.
     _onMessageSent = (msgId) => {
         if (!state.settings.enabled) return;
-        const automationMode = state.settings.automationMode || 'manual';
+        const automationMode = state.chatAutomationMode || 'manual';
         if (automationMode === 'manual') return;
         const filter = state.generationFlow || POST_FILTER.AI_ONLY;
         if (filter === POST_FILTER.AI_ONLY || filter === POST_FILTER.MANUAL) return;
@@ -161,7 +161,6 @@ export function bindEvents(handlers) {
                     return;
                 }
                 applyChatConfigToState(cfg);
-                setFilter(state.settings?.generationFlow || POST_FILTER.AI_ONLY);
                 _chatConfigReady = true;
                 window.dispatchEvent(new CustomEvent('uris:chat-changed'));
             } catch (e) {

@@ -15,7 +15,7 @@ import { state, getCtx } from '../core.js';
 import { parseInline } from './grammar.js';
 import { getSlot, upsertItem, itemKey } from './store.js';
 import { sanitizeTriggerList, buildAliasIndex, resolveProfile } from './triggers.js';
-import { stableHash, queueInlineJob } from './runner.js';
+import { stableHash, queueInlineJob, DEFAULT_GRACE } from './runner.js';
 import { showSingleImage } from '../ui/lightbox.js';
 
 const SHELL_ATTR = 'data-uris-inl';
@@ -108,7 +108,8 @@ export function reconcileVisible() {
         const textEl = mesEl.querySelector('.mes_text');
         if (!textEl) continue;
         const existingKeys = new Set(shellEls.map(el => el.getAttribute(SHELL_ATTR)).filter(Boolean));
-        const plan = computeShellPlan({ msgId, markers, items, hashFn: stableHash, existingKeys });
+        const inFlight = state.activeGenerations instanceof Map ? new Set(state.activeGenerations.keys()) : null;
+        const plan = computeShellPlan({ msgId, markers, items, hashFn: stableHash, existingKeys, inFlight });
         for (const entry of plan) {
             const cur = shellEls.find(el => el.getAttribute(SHELL_ATTR) === entry.key) || null;
             // keep только при совпадении и статуса: pending→ready обновится (аменда 1)
@@ -117,18 +118,20 @@ export function reconcileVisible() {
             mountShell(textEl, entry, cur);
         }
         pruneStaleShells(textEl, plan, items, shellEls);
-        reconcileManualShells(mesEl, textEl, items);
+        reconcileManualShells(mesEl, textEl, items, { inFlight });
     }
 }
 
 /**
  * Чистая реконсиляция: план оболочек по ключам. Для каждого маркера
  * key = `${idx}|${type}|${hashFn(type+'|'+desc)}`; status — из items
- * (ready/pending/error; ready без файла → error), при item с тем же idx|type,
- * но другим descHash — changed, без item вовсе — button. domAction: mount,
- * если оболочки с таким ключом ещё нет, иначе keep.
+ * (ready/pending/error; ready без файла → error; pending с requestId вне
+ * inFlight и за грейс-окном → error: осиротевшая генерация не должна крутить
+ * спиннер вечно), при item с тем же idx|type, но другим descHash — changed,
+ * без item вовсе — button. domAction: mount, если оболочки с таким ключом
+ * ещё нет, иначе keep.
  */
-export function computeShellPlan({ msgId, markers, items, hashFn = stableHash, existingKeys = [] }) {
+export function computeShellPlan({ msgId, markers, items, hashFn = stableHash, existingKeys = [], inFlight = null, now = Date.now, grace = DEFAULT_GRACE }) {
     const existing = existingKeys instanceof Set ? existingKeys : new Set(existingKeys || []);
     const list = Array.isArray(items) ? items : [];
     const plan = [];
@@ -138,16 +141,22 @@ export function computeShellPlan({ msgId, markers, items, hashFn = stableHash, e
         const key = `${idx}|${marker.type}|${descHash}`;
         let item = list.find(i => i && Number(i.idx) === idx && i.type === marker.type && i.descHash === descHash) || null;
         let status;
+        let orphaned = false;
         if (item) {
             status = (item.status === 'ready' && !item.imagePath) ? 'error' : (item.status || 'pending');
+            if (status === 'pending') {
+                const live = !!(inFlight && item.requestId != null && inFlight.has(item.requestId));
+                const fresh = (now() - (item.createdAt || 0)) < grace;
+                if (!live && !fresh) { status = 'error'; orphaned = true; }
+            }
         } else {
-            // Тот же idx|type с другим descHash → changed (item — прежний, как в
-            // planScan render-changed); item нет вовсе → button.
+            // Тот же idx|type с другим descHash → changed (item — прежний);
+            // item нет вовсе → button.
             const prev = list.find(i => i && Number(i.idx) === idx && i.type === marker.type);
             status = prev ? 'changed' : 'button';
             if (prev) item = prev;
         }
-        plan.push({ msgId, idx, type: marker.type, desc: marker.desc, descHash, key, marker, item, status, domAction: existing.has(key) ? 'keep' : 'mount' });
+        plan.push({ msgId, idx, type: marker.type, desc: marker.desc, descHash, key, marker, item, status, orphaned, domAction: existing.has(key) ? 'keep' : 'mount' });
     });
     return plan;
 }
@@ -207,7 +216,9 @@ function shellFor(msgId, entry) {
     if (entry.status === 'changed') {
         btn.textContent = 'Описание изменилось — клик: перерисовать';
     } else if (entry.status === 'error') {
-        btn.textContent = `Ошибка: ${entry.item?.error || 'неизвестно'} — клик: retry`;
+        btn.textContent = entry.orphaned
+            ? 'Генерация прервана — клик: retry'
+            : `Ошибка: ${entry.item?.error || 'неизвестно'} — клик: retry`;
     } else {
         btn.textContent = '📷 Нарисовать';
     }
@@ -341,10 +352,12 @@ function removeNode(el) {
 }
 
 /** Ручные оболочки (data-manual): pending → ready/error из store (аменда 1).
+ * Осиротевший pending (requestId вне inFlight, грейс истёк) → error: ручная
+ * генерация, убитая перезагрузкой, не должна крутить спиннер вечно.
  * Гард сходимости — как в marker-пути: тот же ключ и статус → узел уже
  * актуален, безгардовая replaceWith() создавала бы новый DOM-узел каждый
  * проход (чурн ~4 Гц через MutationObserver на error-оболочках). */
-function reconcileManualShells(mesEl, textEl, items) {
+function reconcileManualShells(mesEl, textEl, items, { inFlight = null, now = Date.now, grace = DEFAULT_GRACE } = {}) {
     if (!textEl) return;
     let manualEls = [];
     try { manualEls = Array.from(mesEl.querySelectorAll('[data-manual="1"]')); } catch { return; }
@@ -353,13 +366,20 @@ function reconcileManualShells(mesEl, textEl, items) {
         const key = el.getAttribute(SHELL_ATTR);
         if (!key) continue;
         const item = (items || []).find(i => itemKey(i) === key) || null;
-        if (!item || (item.status !== 'ready' && item.status !== 'error')) continue;
-        const computedStatus = (item.status === 'ready' && !item.imagePath) ? 'error' : item.status;
+        if (!item) continue;
+        let computedStatus = (item.status === 'ready' && !item.imagePath) ? 'error' : item.status;
+        let orphaned = false;
+        if (computedStatus === 'pending') {
+            const live = !!(inFlight && item.requestId != null && inFlight.has(item.requestId));
+            const fresh = (now() - (item.createdAt || 0)) < grace;
+            if (!live && !fresh) { computedStatus = 'error'; orphaned = true; }
+        }
+        if (computedStatus !== 'ready' && computedStatus !== 'error') continue; // живой/свежий pending — оболочка уже показана
         if (el.getAttribute(SHELL_ATTR) === key && el.getAttribute(STATUS_ATTR) === computedStatus) continue;
         const desc = el.getAttribute('data-uris-desc') || '';
         const entry = {
             msgId, idx: item.idx, type: item.type, desc, descHash: item.descHash,
-            key, item, status: computedStatus,
+            key, item, status: computedStatus, orphaned,
             marker: { raw: null },
         };
         const shell = shellFor(msgId, entry);
@@ -385,7 +405,10 @@ function startReroll(job) {
 
 /** Отмена pending (аменда 2): живой requestId → abort (processJob запишет
  * error и пришлёт uris:inline-end → reconcile покажет error-оболочку);
- * мёртвый requestId → item в error, чтобы реконсиляция не пересоздала спиннер. */
+ * мёртвый requestId → item в error, чтобы реконсиляция не пересоздала
+ * спиннер. Пишем только по действительно pending-item: гонка «клик ✕ в тик
+ * после готовности» не должна гасить оплаченный результат в error (второй,
+ * store-уровневый гард — ready не откатывается в upsertItem). */
 function cancelPending(entry) {
     const rid = entry.item?.requestId || null;
     if (rid) {
@@ -396,6 +419,8 @@ function cancelPending(entry) {
             return;
         }
     }
+    const itemStatus = entry.item?.status || 'pending';
+    if (itemStatus !== 'pending') { reconcileVisible(); return; }
     try {
         upsertItem(entry.msgId, {
             idx: entry.idx, type: entry.type, descHash: entry.descHash,

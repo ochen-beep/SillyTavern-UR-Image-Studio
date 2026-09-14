@@ -149,11 +149,15 @@ test('folder sheet multi: клик переключает и сразу зовё
         { id: 'b', name: 'Beta', color: '#c94040' },
     ];
     const toggles = [];
+    let doneIds = null;
+    let cancelled = false;
     const sheet = openFolderSheet({
         title: 'Папки референса',
         folders,
         selectedIds: ['b'],
         onToggle: (folder, isOn) => toggles.push([folder.id, isOn]),
+        onDone: ids => { doneIds = ids; },
+        onCancel: () => { cancelled = true; },
     });
 
     let rows = [...document.querySelectorAll('.uris-fs-row')].filter(row => row.dataset.folderId);
@@ -172,6 +176,8 @@ test('folder sheet multi: клик переключает и сразу зовё
     document.querySelector('.uris-folder-sheet-done').click();
     await sheet.result;
     await new Promise(resolve => setTimeout(resolve, 0));
+    assert.deepEqual(doneIds, ['b'], '«Готово» передаёт выбранные ids');
+    assert.equal(cancelled, false, 'подтверждение не вызывает onCancel');
     assert.equal(document.querySelector('.uris-folder-sheet'), null, '«Готово» закрывает шит');
 });
 

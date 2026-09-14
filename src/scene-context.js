@@ -97,25 +97,6 @@ export function normalizeAliases(value) {
 }
 
 /**
- * Detect mentions of an entity in scene text using aliases only.
- * Returns an array of matched phrases (one per matching phrase, not per occurrence).
- *
- * @param {SceneEntity} entity
- * @param {string} text
- * @returns {string[]}
- */
-export function detectEntityMentions(entity, text) {
-    const phrases = [entity.name, ...entity.aliases].filter(Boolean);
-    const matched = new Set();
-    for (const phrase of phrases) {
-        if (matchesScenePhrase(phrase, text)) {
-            matched.add(phrase);
-        }
-    }
-    return Array.from(matched);
-}
-
-/**
  * @typedef {object} SceneContextSnapshot
  * @property {string} chatId
  * @property {number} msgId
@@ -184,6 +165,7 @@ function resolveEntitiesFromText({ text, candidates, corrections }) {
         let entityFirstIndex = Infinity;
         for (const phrase of phrases) {
             const re = phraseRegex(phrase);
+            if (!re) continue;
             const match = re.exec(searchText);
             if (match) {
                 const index = match.index;
@@ -363,11 +345,14 @@ export async function resolvePromptReferenceContext({ prompt, candidates, correc
 
 /**
  * @param {string} phrase
- * @returns {RegExp}
+ * @returns {RegExp|null} null для пустой фразы (после фильтра алиасов не
+ * встречается, но универсальный матч пустой строки опаснее, чем null).
+ * Нормализация единая с matchesScenePhrase (normalizePhrase) — вторая копия
+ * escape-логики здесь уже разъезжалась с первой.
  */
 function phraseRegex(phrase) {
-    const parts = String(phrase || '').trim().split(/\s+/).filter(Boolean);
-    const normalized = parts.map(p => p.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('\\s+');
+    const normalized = normalizePhrase(phrase);
+    if (!normalized) return null;
     return new RegExp(`(?<![\\p{L}\\p{N}])${normalized}(?![\\p{L}\\p{N}])`, 'giu');
 }
 

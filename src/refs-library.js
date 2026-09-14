@@ -23,6 +23,7 @@ import { normalizeAliases } from './scene-context.js';
 import { canonicalizeNativeImagePath } from './native-image-path.js';
 import { normalizeReferenceCap } from './reference-limits.js';
 import { createFileStore } from './file-store.js';
+import { recordDiagnosticEvent } from './diagnostic-events.js';
 
 export const REFS_FILE_NAME = 'uris_refs.json';
 export const REFS_STORE_VERSION = 1;
@@ -247,6 +248,7 @@ export async function createRef(data = {}) {
     const response = await store.create('refs', item);
     const persisted = normalizePoolReference({ ...item, ...(response || {}) });
     await refreshPoolCache();
+    recordDiagnosticEvent({ event: 'refs-crud', stage: 'refs', operation: 'create', details: { id: persisted.id } });
     log('Reference created', persisted.id, persisted.name);
     return persisted;
 }
@@ -284,6 +286,7 @@ export async function updateRef(id, patch) {
     const response = await store.update('refs', id, payload);
     const persisted = normalizePoolReference({ ...payload, ...(response || {}) });
     await refreshPoolCache();
+    recordDiagnosticEvent({ event: 'refs-crud', stage: 'refs', operation: 'update', details: { id } });
     return persisted;
 }
 
@@ -291,6 +294,7 @@ export async function deleteRef(id) {
     const store = await requireSharedStore();
     await store.delete('refs', id);
     await refreshPoolCache();
+    recordDiagnosticEvent({ event: 'refs-crud', stage: 'refs', operation: 'delete', details: { id } });
     log('Reference deleted', id);
 }
 
@@ -362,7 +366,9 @@ export async function createFolder(name, opts = {}) {
         order: folders.length,
     }, folders.length);
     const store = await requireSharedStore();
-    return normalizeFolder(await store.create('ref-folders', item), folders.length);
+    const created = normalizeFolder(await store.create('ref-folders', item), folders.length);
+    recordDiagnosticEvent({ event: 'refs-crud', stage: 'refs', operation: 'folder-create', details: { id: created.id } });
+    return created;
 }
 
 export async function updateFolder(id, patch = {}) {
@@ -400,6 +406,7 @@ export async function deleteFolder(id) {
     const prefs = getFolderPrefs();
     if (prefs.pinned.includes(id)) saveFolderPrefs({ pinned: prefs.pinned.filter(pinnedId => pinnedId !== id) });
     await refreshPoolCache();
+    recordDiagnosticEvent({ event: 'refs-crud', stage: 'refs', operation: 'folder-delete', details: { id } });
     log('Folder deleted', id);
 }
 
@@ -426,6 +433,7 @@ export async function mergeFolders(sourceId, targetId) {
         saveFolderPrefs({ pinned: prefs.pinned.filter(pinnedId => pinnedId !== sourceId) });
     }
     await refreshPoolCache();
+    recordDiagnosticEvent({ event: 'refs-crud', stage: 'refs', operation: 'folder-merge', details: { id: sourceId, targetId, refs: affected } });
     log('Folder merged', sourceId, '→', targetId, `(${affected} refs)`);
     return affected;
 }

@@ -6,7 +6,6 @@ import {
     matchesScenePhrase,
     normalizeSceneEntity,
     normalizeAliases,
-    detectEntityMentions,
     resolvePromptReferenceContext,
 } from '../src/scene-context.js';
 import { materializeStage2References } from '../src/references.js';
@@ -58,20 +57,6 @@ test('normalizeAliases handles array, comma, newline, and empty', () => {
     assert.deepEqual(normalizeAliases(null), []);
     assert.deepEqual(normalizeAliases(''), []);
     assert.deepEqual(normalizeAliases([]), []);
-});
-
-test('detectEntityMentions uses only name and aliases, never keywords or description', () => {
-    const entity = normalizeSceneEntity({
-        id: 'aria',
-        name: 'Aria Rose',
-        aliases: ['Aria'],
-        keywords: ['red dress'],
-        description: 'red dress',
-        imagePath: '/aria.png',
-    });
-    assert.equal(detectEntityMentions(entity, 'The red dress waits').length, 0);
-    assert.equal(detectEntityMentions(entity, 'Aria waits').length, 1);
-    assert.equal(detectEntityMentions(entity, 'Aria Rose waits').length, 2);
 });
 
 import { buildSceneContextSnapshot } from '../src/scene-context.js';

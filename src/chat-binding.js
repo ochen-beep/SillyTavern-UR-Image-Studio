@@ -102,14 +102,6 @@ export function normalizeChatBinding(binding) {
     };
 }
 
-/**
- * Public alias for normalizeChatBinding with explicit migration semantics.
- * Handles v4 → v5 migration (drops dead fields copyToStGallery/galleryMode).
- */
-export function normalizeChatConfig(binding) {
-    return normalizeChatBinding(binding);
-}
-
 // ── persistence ──
 
 /**
@@ -140,13 +132,16 @@ export async function saveChatConfig(binding) {
 /**
  * Deep-merge only known config fields of the current chat and persist.
  * Preserves refs and unknown metadata fields. Returns the new binding.
+ *
+ * A pre-v4 legacy binding is migrated to v5 defaults with the patch applied
+ * on top; the original record is kept under `legacy` (next normalizeChatBinding
+ * drops it again, but a silent total discard — the old behavior — destroyed
+ * caller data with no trace and no error).
  */
 export async function patchChatConfig(patch) {
     const existing = getBinding();
-    if (existing && existing.schemaVersion < 4) {
-        return createDefaultChatConfig();
-    }
-    const current = await loadChatConfig();
+    const isLegacy = !!(existing && existing.schemaVersion < 4);
+    const current = isLegacy ? createDefaultChatConfig() : await loadChatConfig();
     const next = deepClone(current);
     if (patch && typeof patch === 'object') {
         for (const key of Object.keys(patch)) {
@@ -161,7 +156,12 @@ export async function patchChatConfig(patch) {
             }
         }
     }
-    return await saveChatConfig(next);
+    const normalized = await saveChatConfig(next);
+    if (isLegacy) {
+        log('patchChatConfig: pre-v4 binding migrated to v5 (original kept under `legacy`)');
+        setBinding({ ...normalized, legacy: existing });
+    }
+    return normalized;
 }
 
 /**
@@ -184,8 +184,11 @@ export function applyChatConfigToState(cfg) {
         imageSize: chatDefaults.imageSize ?? globalDefaults.imageSize ?? null,
         quality: chatDefaults.quality ?? globalDefaults.quality ?? null,
     };
-    state.settings.automationMode = config.automationMode ?? defaultSettings.automationMode;
-    const flow = config.generationFlow ?? defaultSettings.generationFlow;
-    state.settings.generationFlow = flow;
-    setFilter(flow || POST_FILTER.AI_ONLY);
+    // Runtime projection only. automationMode/generationFlow MUST NOT go into
+    // state.settings: that object is persisted globally by ST, so the last
+    // visited chat's mode leaked into settings.json and came back as the next
+    // session's startup default for every other chat.
+    state.chatAutomationMode = config.automationMode ?? defaultSettings.automationMode;
+    state.chatGenerationFlow = config.generationFlow ?? defaultSettings.generationFlow;
+    setFilter(state.chatGenerationFlow || POST_FILTER.AI_ONLY);
 }

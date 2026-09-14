@@ -24,6 +24,7 @@ import { invalidateTemplateCache, replaceTemplateStoreRecords, getTemplateRecord
 import { recordUrisError } from './error-pool.js';
 import { invalidatePoolCache, getRefsForExport, replaceRefsRecords } from './refs-library.js';
 import { getParamPresetsForExport, replaceParamPresetRecords } from './param-presets.js';
+import { recordDiagnosticEvent } from './diagnostic-events.js';
 
 const BACKUP_VERSION = 8;
 const BACKUP_MODULE = MODULE_NAME;
@@ -393,6 +394,7 @@ export function sanitizeBackupValue(value) {
  * @returns {Promise<Object>}
  */
 export async function exportUrisData(options = {}) {
+    const startedAt = Date.now();
     const includeSettings = options.includeSettings !== false;
     const keys = await collectUrisKeys();
     const data = {
@@ -448,6 +450,19 @@ export async function exportUrisData(options = {}) {
     }
 
     log('Exported keys:', keys.length);
+    // An export is the recovery instrument for everything else — the journal
+    // must show when it ran and what it carried.
+    recordDiagnosticEvent({
+        event: 'export-run', stage: 'data', outcome: 'ok',
+        durationMs: Date.now() - startedAt,
+        details: {
+            keys: keys.length,
+            includeSettings,
+            refs: Array.isArray(data.shared?.refs) ? data.shared.refs.length : 0,
+            presets: Array.isArray(data.shared?.presets) ? data.shared.presets.length : 0,
+            templates: Array.isArray(data.shared?.templates) ? data.shared.templates.length : 0,
+        },
+    });
     return data;
 }
 
@@ -642,9 +657,10 @@ async function restoreSafeSnapshot(snapshot) {
  * @param {Object} data — object from exportUrisData
  * @param {Object} [options]
  * @param {'merge'|'replace'} [options.mode='merge'] — merge with current or full replace
- * @returns {Promise<{importedKeys: number, importedChatBindings: number, connectionsSynced: number, summary: Object}>}
+ * @returns {Promise<{importedKeys: number, importedChatBindings: number, summary: Object}>}
  */
 export async function importUrisData(data, options = {}) {
+    const startedAt = Date.now();
     const normalized = normalizeBackup(data);
     const mode = options.mode === 'replace' ? 'replace' : 'merge';
     const incomingLf = normalized.data.localforage || {};
@@ -750,15 +766,25 @@ export async function importUrisData(data, options = {}) {
         try { invalidatePoolCache(); } catch (e) { warn('importUrisData: refs pool cache invalidation failed', e?.message); }
 
         log('Imported keys:', Object.keys(incomingLf).length, 'chat bindings:', importedChatBindings);
+        recordDiagnosticEvent({
+            event: 'import-run', stage: 'data', outcome: 'ok',
+            durationMs: Date.now() - startedAt,
+            details: { mode, importedKeys: Object.keys(incomingLf).length, importedChatBindings },
+        });
         return {
             importedKeys: Object.keys(incomingLf).length,
             importedChatBindings,
-            connectionsSynced: 0,
             summary: summarizeBackup(normalized),
         };
     } catch (e) {
         error('importUrisData: write error, performing rollback:', e.message);
         const rollbackErrors = await restoreSafeSnapshot(snapshot);
+        recordDiagnosticEvent({
+            event: 'import-run', stage: 'data', level: 'error',
+            outcome: rollbackErrors.length > 0 ? 'rollback-failed' : 'rolled-back',
+            durationMs: Date.now() - startedAt,
+            details: { mode, error: String(e?.message || e), rollbackErrors: rollbackErrors.length },
+        });
         if (rollbackErrors.length > 0) {
             throw new ImportRollbackError(e, rollbackErrors);
         }

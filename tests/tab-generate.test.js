@@ -695,7 +695,6 @@ test('refreshReferencePanel refreshes ambiguity controls with the effective prev
         ['#urisRefsPanel', {}],
         ['#urisRefsModeBadge', { innerHTML: 'old' }],
         ['#urisRefsPreview', { innerHTML: '', querySelector: () => null }],
-        ['#urisRefsCap', { innerHTML: '' }],
         ['#urisRefsWhitelist', { innerHTML: '', querySelector: () => null, querySelectorAll: () => [] }],
         ['.uris-scene-context', { innerHTML: 'stale' }],
     ]);

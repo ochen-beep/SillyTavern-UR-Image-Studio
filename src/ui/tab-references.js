@@ -50,7 +50,11 @@ const REFS_MOBILE_BREAK = 480;
 
 export function render(root) {
     root.classList.add('uris-body-flush');
-    _mobileScreen = 'folders';
+    // _mobileScreen is NOT reset here: render() doubles as refreshActive(), and
+    // an unconditional reset kicked mobile users from card/grid back to the
+    // folder list on every background refresh (image replace, autosave). The
+    // screen survives refreshes; the folder list is one tap away. Search
+    // queries are still cleared — a stale filter after data reload misleads.
     _mobileSearchQuery = '';
     _folderSearchQuery = '';
     // A full tab re-entry must not inherit a stale editor session: close any
@@ -361,11 +365,18 @@ async function _renderGrid(root, folders, refsOverride, searchQuery = '') {
 }
 
 // ── Overlay panel ──
+// Epoch guard: tile clicks fire _renderOverlay unawaited; two rapid clicks race
+// two getRef() calls and the slower one used to win, showing reference A while
+// _editingRefId was already B (subsequent autosaves targeted the shown record).
+let _overlayEpoch = 0;
 async function _renderOverlay(root, folders) {
+    const epoch = ++_overlayEpoch;
+    const requestedId = _editingRefId;
     const host = root.querySelector('#urisRefsOverlay');
     if (!host) return;
     if (!_editingRefId) { host.innerHTML = ''; host.classList.remove('uris-refs-overlay-open'); host.removeAttribute('role'); host.removeAttribute('aria-modal'); host.removeAttribute('aria-label'); return; }
     const ref = await getRef(_editingRefId);
+    if (epoch !== _overlayEpoch || _editingRefId !== requestedId) return;
     if (!ref) { _editingRefId = null; host.innerHTML = ''; host.removeAttribute('role'); host.removeAttribute('aria-modal'); host.removeAttribute('aria-label'); return; }
     host.classList.add('uris-refs-overlay-open');
     host.setAttribute('role', 'dialog');
@@ -426,6 +437,14 @@ function _bindOverlay(root, host, ref, folders) {
 
 // ── Mobile stack ──
 let _mobileScreen = 'folders';  // 'folders' | 'grid' | 'card'
+
+/** Test-only: reset mobile navigation state. It is module-level and, by design
+ * (refresh must not kick the user back to folders), survives render(). */
+export function __resetMobileNavForTests() {
+    _mobileScreen = 'folders';
+    _mobileSearchQuery = '';
+    _folderSearchQuery = '';
+}
 
 async function _renderMobileAll(root) {
     root.innerHTML = `

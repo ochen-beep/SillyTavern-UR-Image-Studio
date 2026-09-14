@@ -88,12 +88,13 @@ test('computeShellPlan: уже существующая оболочка → kee
     assert.equal(plan[0].domAction, 'keep');
 });
 
-test('computeShellPlan: pending item → status pending', () => {
+test('computeShellPlan: pending item → status pending (свежий, в грейс-окне)', () => {
     const plan = computeShellPlan({
         ...baseInput(),
-        items: [{ idx: 0, type: 'img', descHash: 'aa', status: 'pending', requestId: 'r1' }],
+        items: [{ idx: 0, type: 'img', descHash: 'aa', status: 'pending', requestId: 'r1', createdAt: Date.now() }],
     });
     assert.equal(plan[0].status, 'pending');
+    assert.equal(plan[0].orphaned, false);
 });
 
 test('computeShellPlan: тот же idx|type с другим descHash → changed', () => {
@@ -126,6 +127,40 @@ test('computeShellPlan: error item → status error, текст ошибки д�
     });
     assert.equal(plan[0].status, 'error');
     assert.equal(plan[0].item.error, 'NO_CONNECTION');
+});
+
+// — Осиротевший pending (перезагрузка/краш): requestId вне inFlight и грейс
+// истёк → error с retry, а не вечный спиннер. Логика переехала сюда из
+// planScan (render-ветки удалены) — только у DOM-слоя есть живые requestId.
+
+test('computeShellPlan: осиротевший pending (за грейсом, вне inFlight) → error', () => {
+    const plan = computeShellPlan({
+        ...baseInput(),
+        items: [{ idx: 0, type: 'img', descHash: 'aa', status: 'pending', requestId: 'dead', createdAt: 0 }],
+        now: () => 1_000_000,
+    });
+    assert.equal(plan[0].status, 'error');
+    assert.equal(plan[0].orphaned, true);
+});
+
+test('computeShellPlan: живой requestId в inFlight держит pending даже за грейсом', () => {
+    const plan = computeShellPlan({
+        ...baseInput(),
+        items: [{ idx: 0, type: 'img', descHash: 'aa', status: 'pending', requestId: 'r1', createdAt: 0 }],
+        inFlight: new Set(['r1']),
+        now: () => 1_000_000,
+    });
+    assert.equal(plan[0].status, 'pending');
+    assert.equal(plan[0].orphaned, false);
+});
+
+test('computeShellPlan: свежий pending без requestId (ещё стартует) → pending', () => {
+    const plan = computeShellPlan({
+        ...baseInput(),
+        items: [{ idx: 0, type: 'img', descHash: 'aa', status: 'pending', requestId: null, createdAt: 0 }],
+        now: () => 60_000,
+    });
+    assert.equal(plan[0].status, 'pending');
 });
 
 // ── reconcileVisible (smoke через fake-dom) ──
@@ -164,7 +199,7 @@ test('reconcileVisible: inlineEnabled=false → ничего не делает',
 
 test('reconcileVisible: pending → спиннер; ready в store → замена на img (аменда 1)', () => {
     const { textEl } = buildChatDOM();
-    upsertItem(0, { idx: 0, type: 'img', descHash: HASH_A, status: 'pending', requestId: 'r1' });
+    upsertItem(0, { idx: 0, type: 'img', descHash: HASH_A, status: 'pending', requestId: 'r1', createdAt: Date.now() });
     reconcileVisible();
     let shell = textEl.querySelector('[data-uris-inl]');
     assert.equal(shell.getAttribute('data-uris-status'), 'pending');
@@ -179,11 +214,29 @@ test('reconcileVisible: pending → спиннер; ready в store → заме�
     assert.equal(textEl.querySelectorAll('[data-uris-inl]').length, 1, 'замена, а не дубль');
 });
 
-test('reconcileVisible: ✕ у pending с живым requestId → abort контроллера (аменда 2)', () => {
+test('reconcileVisible: осиротевший pending → error-оболочка с retry, не вечный спиннер', () => {
+    const { textEl } = buildChatDOM();
+    // createdAt: 0 — за грейсом; requestId 'dead' вне state.activeGenerations.
+    upsertItem(0, { idx: 0, type: 'img', descHash: HASH_A, status: 'pending', requestId: 'dead', createdAt: 0 });
+    reconcileVisible();
+    const shell = textEl.querySelector('[data-uris-inl]');
+    assert.equal(shell.getAttribute('data-uris-status'), 'error');
+    assert.ok(!textEl.querySelector('.fa-spinner'), 'спиннер снят');
+    assert.ok(shell.textContent.includes('прервана'), 'текст «прервана» с retry');
+    // Клик по retry ставит новую платную задачу с тем же ключом.
+    const jobs = [];
+    initRender({ reroll: (job) => { jobs.push(job); return Promise.resolve(); } });
+    shell.querySelector('.uris-inl-btn').click();
+    assert.equal(jobs.length, 1);
+    assert.deepEqual(jobs[0], { msgId: 0, idx: 0, type: 'img', desc: 'a' });
+    shutdownRender();
+});
+
+test('reconcileVisible: ✕ у живого pending → abort контроллера (аменда 2)', () => {
     const { textEl } = buildChatDOM();
     const controller = new AbortController();
     state.activeGenerations.set('r1', controller);
-    upsertItem(0, { idx: 0, type: 'img', descHash: HASH_A, status: 'pending', requestId: 'r1' });
+    upsertItem(0, { idx: 0, type: 'img', descHash: HASH_A, status: 'pending', requestId: 'r1', createdAt: Date.now() });
     reconcileVisible();
     const cancel = textEl.querySelector('[data-uris-cancel]');
     assert.ok(cancel, 'кнопка отмены на месте');
@@ -193,7 +246,7 @@ test('reconcileVisible: ✕ у pending с живым requestId → abort кон�
 
 test('reconcileVisible: ✕ у pending без живого requestId → error-оболочка с retry', () => {
     const { textEl } = buildChatDOM();
-    upsertItem(0, { idx: 0, type: 'img', descHash: HASH_A, status: 'pending', requestId: 'dead' });
+    upsertItem(0, { idx: 0, type: 'img', descHash: HASH_A, status: 'pending', requestId: 'dead', createdAt: Date.now() });
     reconcileVisible();
     textEl.querySelector('[data-uris-cancel]').click();
     const shell = textEl.querySelector('[data-uris-inl]');
@@ -283,7 +336,7 @@ test('render: manual error shell converges (stable identity across passes)', () 
 
 test('render: маркерные оболочки тоже сходятся (identity после замены статуса)', () => {
     const { textEl } = buildChatDOM();
-    upsertItem(0, { idx: 0, type: 'img', descHash: HASH_A, status: 'pending', requestId: 'r1' });
+    upsertItem(0, { idx: 0, type: 'img', descHash: HASH_A, status: 'pending', requestId: 'r1', createdAt: Date.now() });
     reconcileVisible();
     upsertItem(0, { idx: 0, type: 'img', descHash: HASH_A, status: 'ready', imagePath: 'p.png', requestId: 'r1' });
     reconcileVisible();
@@ -293,4 +346,20 @@ test('render: маркерные оболочки тоже сходятся (ide
     reconcileVisible();
     assert.equal(textEl.querySelector('[data-uris-inl]'), first, 'тот же узел на следующих проходах');
     assert.equal(textEl.querySelectorAll('[data-uris-inl]').length, 1);
+});
+
+test('render: осиротевшая ручная pending-оболочка → error, спиннер не живёт вечно', () => {
+    const { textEl, buttonsEl } = buildChatDOM();
+    const jobs = [];
+    initRender({ reroll: (job) => { jobs.push(job); return Promise.resolve(); } });
+    ensureManualButtons();
+    buttonsEl.querySelector('[data-uris-manual]').click();
+    const descHash = stableHash(`img|${jobs[0].desc}`);
+    // Генерация убита перезагрузкой: item pending с мёртвым requestId, грейс истёк.
+    upsertItem(0, { idx: -1, type: 'img', descHash, status: 'pending', requestId: 'dead', createdAt: 0 });
+    reconcileVisible();
+    const shell = textEl.querySelector(`[data-uris-inl="-1|img|${descHash}"]`);
+    assert.equal(shell.getAttribute('data-uris-status'), 'error');
+    assert.equal(shell.getAttribute('data-manual'), '1', 'ручная оболочка остаётся ручной');
+    shutdownRender();
 });

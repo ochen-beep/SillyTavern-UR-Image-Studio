@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
     DEFAULT_TRIGGERS, REFS_POLICIES, normalizeTrigger, buildAliasIndex, resolveProfile,
-    buildInlinePrompt, sanitizeTriggerList, triggerAliases,
+    buildInlinePrompt, sanitizeTriggerList, findAliasMatch,
 } from '../src/inline/triggers.js';
 
 test('triggers: defaults include img/selfie/scene with correct shape', () => {
@@ -79,21 +79,47 @@ test('triggers: buildInlinePrompt is $-safe for names', () => {
     assert.ok(!prompt.includes('{{char}}'));
 });
 
-test('triggers: triggerAliases находит первый алиас в тексте (границы слов)', () => {
+test('triggers: findAliasMatch — самое раннее вхождение в тексте (границы слов)', () => {
     const idx = buildAliasIndex(DEFAULT_TRIGGERS);
-    const hit = triggerAliases(idx, 'сделай селфи на пляже');
+    const hit = findAliasMatch(idx, 'сделай селфи на пляже');
     assert.equal(hit.alias, 'селфи');
     assert.equal(hit.profile.id, 'selfie');
-    assert.equal(triggerAliases(idx, 'selfieee — не слово'), null);             // подстрока ≠ алиас
-    assert.equal(triggerAliases(idx, 'Сделай СЕЛФИ')?.profile.id, 'selfie');    // регистр не важен
-    assert.equal(triggerAliases(idx, ''), null);
-    assert.equal(triggerAliases(idx, null), null);
+    assert.equal(hit.index, 'сделай '.length);
+    assert.equal(hit.length, 'селфи'.length);
+    assert.equal(findAliasMatch(idx, 'selfieee — не слово'), null);             // подстрока ≠ алиас
+    assert.equal(findAliasMatch(idx, 'Сделай СЕЛФИ')?.profile.id, 'selfie');    // регистр не важен
+    assert.equal(findAliasMatch(idx, ''), null);
+    assert.equal(findAliasMatch(idx, null), null);
 });
 
-test('triggers: triggerAliases экранирует метасимволы в алиасе', () => {
+test('triggers: findAliasMatch экранирует метасимволы в алиасе', () => {
     const idx = buildAliasIndex([{ id: 'x', aliases: ['img(1)'] }]);
-    assert.equal(triggerAliases(idx, 'го img(1)!')?.alias, 'img(1)');
-    assert.equal(triggerAliases(idx, 'го img1'), null);                          // метасимволы — литерал, не шаблон
+    assert.equal(findAliasMatch(idx, 'го img(1)!')?.alias, 'img(1)');
+    assert.equal(findAliasMatch(idx, 'го img1'), null);                          // метасимволы — литерал, не шаблон
+});
+
+test('triggers: границы алиаса учитывают цифры (img2 ≠ img)', () => {
+    const idx = buildAliasIndex(sanitizeTriggerList(null));
+    assert.equal(findAliasMatch(idx, 'нарисуй img2 быстро'), null);
+    const hit = findAliasMatch(idx, 'нарисуй img 2 быстро');
+    assert.equal(hit?.alias, 'img');
+});
+
+test('triggers: findAliasMatch берёт раннее вхождение, а не первый алиас реестра', () => {
+    const idx = buildAliasIndex([
+        { id: 'img', name: 'И', aliases: ['img'], aspect: '1:1' },
+        { id: 'scene', name: 'С', aliases: ['scene'], aspect: '16:9' },
+    ]);
+    const hit = findAliasMatch(idx, 'сначала scene, потом img');
+    assert.equal(hit.alias, 'scene');
+    assert.equal(hit.index, 'сначала '.length);
+});
+
+test('triggers: «фотограф сказал фото» матчит слово «фото», а не кусок «фотограф»', () => {
+    const idx = buildAliasIndex(sanitizeTriggerList(null));
+    const hit = findAliasMatch(idx, 'фотограф сказал фото');
+    assert.equal(hit.alias, 'фото');
+    assert.equal(hit.index, 'фотограф сказал '.length);
 });
 
 test('triggers: buildInlinePrompt разворачивает макросы и в desc ({{char}} photo не уезжает буквально)', () => {

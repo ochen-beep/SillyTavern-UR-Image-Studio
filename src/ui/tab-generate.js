@@ -12,13 +12,14 @@ import { buildSceneContextSnapshot, resolvePromptReferenceContext } from '../sce
 import { getGenerationDraft, updateGenerationDraft, hashMessage, normalizeTemplateSelection, resolveDraftTemplateId } from '../generation-drafts.js';
 import { listTemplates } from '../prompt-templates.js';
 import { patchChatConfig, loadChatConfig } from '../chat-binding.js';
-import { setStatus, lockBodyScroll, unlockBodyScroll } from './window.js';
+import { setStatus } from './window.js';
 import { getActiveTab, refreshActive } from './tabs.js';
 import {
     getChatRefs, saveChatRefs, getRefSync, listFolders, listRefs,
 } from '../refs-library.js';
 import { effectiveReferenceCap } from '../reference-limits.js';
 import { showPoolPicker } from './tab-references.js';
+import { openFolderSheet } from './folder-picker.js';
 import { showSingleImage } from './lightbox.js';
 import { bindDetailsToggle, getAccordionOpen } from './accordion-state.js';
 import { editTextModal } from './text-editor.js';
@@ -330,10 +331,10 @@ export function renderGenerateMarkup(vm) {
                     </select></span>
                 <span class="uris-param"><span class="uris-param-label">Флоу генерации</span>
                     <select class="text_pole" id="urisGenerationFlow">
-                        <option value="${POST_FILTER.AI_ONLY}" ${state.settings.generationFlow === POST_FILTER.AI_ONLY ? 'selected' : ''}>Только AI</option>
-                        <option value="${POST_FILTER.USER_ONLY}" ${state.settings.generationFlow === POST_FILTER.USER_ONLY ? 'selected' : ''}>Только пользователь</option>
-                        <option value="${POST_FILTER.ALL}" ${state.settings.generationFlow === POST_FILTER.ALL ? 'selected' : ''}>Все сообщения</option>
-                        <option value="${POST_FILTER.MANUAL}" ${state.settings.generationFlow === POST_FILTER.MANUAL ? 'selected' : ''}>Ручной выбор</option>
+                        <option value="${POST_FILTER.AI_ONLY}" ${state.chatGenerationFlow === POST_FILTER.AI_ONLY ? 'selected' : ''}>Только AI</option>
+                        <option value="${POST_FILTER.USER_ONLY}" ${state.chatGenerationFlow === POST_FILTER.USER_ONLY ? 'selected' : ''}>Только пользователь</option>
+                        <option value="${POST_FILTER.ALL}" ${state.chatGenerationFlow === POST_FILTER.ALL ? 'selected' : ''}>Все сообщения</option>
+                        <option value="${POST_FILTER.MANUAL}" ${state.chatGenerationFlow === POST_FILTER.MANUAL ? 'selected' : ''}>Ручной выбор</option>
                     </select></span>
             </div>
 
@@ -346,7 +347,6 @@ export function renderGenerateMarkup(vm) {
                     <div class="uris-refs-keywords-row" id="urisRefsStage2Keywords"></div>
                 </div>
                 <div class="uris-refs-panel-preview" id="urisRefsPreview" data-drop-zone="stage2"></div>
-                <input type="hidden" id="urisRefsCap">
                 <div class="uris-refs-sources-section">
                     <div class="uris-refs-sources-label">Whitelist референсов</div>
                     <div class="uris-refs-panel-extras" id="urisRefsWhitelist"></div>
@@ -582,7 +582,7 @@ export async function render(root) {
         draft: effectiveDraft,
         snapshot,
         referenceResolution,
-        automationMode: state.settings.automationMode,
+        automationMode: state.chatAutomationMode,
         templates,
         messageText,
         activeTemplateId: state.activeTemplateId,
@@ -900,21 +900,21 @@ export function bindGenerate(root) {
         });
     }
 
-    // Generation flow selector
+    // Generation flow selector — chat-scoped (schema-v5 config), never the
+    // globally persisted settings: the last visited chat must not become the
+    // next session's startup default for every other chat.
     root.querySelector('#urisGenerationFlow')?.addEventListener('change', async e => {
         const flow = e.target.value;
-        state.settings.generationFlow = flow;
+        state.chatGenerationFlow = flow;
         setFilter(flow);
         await patchChatConfig({ generationFlow: flow });
-        getCtx().saveSettingsDebounced();
     });
 
-    // Automation mode selector
+    // Automation mode selector — chat-scoped, same as above.
     root.querySelector('#urisAutomationMode')?.addEventListener('change', async e => {
         const mode = e.target.value;
-        state.settings.automationMode = mode;
+        state.chatAutomationMode = mode;
         await patchChatConfig({ automationMode: mode });
-        getCtx().saveSettingsDebounced();
     });
 
     // Template is a chat-wide default. Keep legacy draft override fields aligned
@@ -977,19 +977,32 @@ async function applyReferenceCorrection(root, candidateId, include) {
 
 /**
  * Pin selected pool IDs in Stage 2 and add them to the chat whitelist.
+ * All corrections are applied in ONE draft update and followed by ONE render —
+ * the per-ref loop used to run applyReferenceCorrection N times, and each of
+ * those ended in a full tab re-render (N picks = N complete re-renders).
  * @param {HTMLElement} root
  * @param {string[]} refIds
  */
 async function addStage2Includes(root, refIds) {
+    if (!Array.isArray(refIds) || refIds.length === 0) return;
     const chatRefs = getChatRefs();
     const nextIds = [...chatRefs.referenceIds];
     for (const refId of refIds) {
         if (!nextIds.includes(refId)) nextIds.push(refId);
     }
     saveChatRefs({ referenceIds: nextIds });
-    for (const refId of refIds) {
-        await applyReferenceCorrection(root, refId, true);
-    }
+    const ctx = getCtx();
+    const msgId = state.currentMsgId;
+    if (msgId == null) return;
+    const messageText = ctx.chat?.[msgId]?.mes || '';
+    await updateGenerationDraft(ctx.chatId, msgId, messageText, d => {
+        let references = d.references;
+        for (const refId of refIds) {
+            references = updateReferenceCorrections(references, refId, true);
+        }
+        return { ...d, references };
+    });
+    await render(root);
 }
 
 export async function enqueueCurrent(root, requestedAction) {
@@ -1052,9 +1065,6 @@ export async function refreshReferencePanel(root, referenceResolution = null, st
     await renderLivePreview(root, referenceResolution);
     renderPromptAmbiguities(root, referenceResolution);
 
-    // Cap warning leaves a separate #urisRefsCap as a fallback/legacy host.
-    await renderCap(root, referenceResolution);
-
     // Pool-backed source sections: persistent open/close (src/ui/accordion-state.js).
     // Previously open was derived from data presence — now it is fully manual: the user
     // decides whether to collapse or expand, and the choice persists across reloads.
@@ -1091,28 +1101,13 @@ async function showFolderPicker({ title = 'Выберите папки', exclude
         return [];
     }
     return new Promise(resolve => {
-        const overlay = document.createElement('div');
-        overlay.className = 'uris-picker-overlay';
-        overlay.setAttribute('role', 'dialog');
-        overlay.setAttribute('aria-modal', 'true');
-        overlay.innerHTML = `<div class="uris-picker-dialog uris-folder-picker-dialog">
-            <h4>${escapeHtml(title)}</h4>
-            <div class="uris-folder-picker-list">${available.map(folder => `<button type="button" class="uris-folder-picker-item" data-folder-id="${escapeHtml(folder.id)}">
-                <span class="uris-folder-dot" style="background:${escapeHtml(folder.color)}"></span>${escapeHtml(folder.name)}
-            </button>`).join('')}</div>
-            <div class="uris-picker-actions"><button type="button" class="uris-btn uris-btn-ghost uris-folder-picker-cancel">Отмена</button><button type="button" class="uris-btn uris-btn-primary uris-folder-picker-ok">Готово</button></div>
-        </div>`;
-        document.body.appendChild(overlay);
-        lockBodyScroll();
-        const selected = new Set();
-        overlay.querySelectorAll('.uris-folder-picker-item').forEach(item => item.addEventListener('click', () => {
-            const id = item.dataset.folderId;
-            if (selected.has(id)) selected.delete(id); else selected.add(id);
-            item.classList.toggle('uris-pick-selected', selected.has(id));
-        }));
-        const finish = value => { overlay.remove(); unlockBodyScroll(); resolve(value); };
-        overlay.querySelector('.uris-folder-picker-cancel')?.addEventListener('click', () => finish([]));
-        overlay.querySelector('.uris-folder-picker-ok')?.addEventListener('click', () => finish([...selected]));
+        openFolderSheet({
+            title,
+            folders: available,
+            mode: 'multi',
+            onDone: ids => resolve(Array.isArray(ids) ? ids : []),
+            onCancel: () => resolve([]),
+        });
     });
 }
 
@@ -1389,32 +1384,14 @@ export async function renderLivePreview(root, referenceResolution) {
     });
 }
 
-/**
- * Cap warning: effective ref count over the hard limit or unsupported provider.
- * @param {HTMLElement} root
- * @param {import('../scene-context.js').SceneContextSnapshot|null} referenceResolution
- */
-async function renderCap(root, referenceResolution = null) {
-    const cap = root.querySelector('#urisRefsCap');
-    if (!cap) return;
-
-    const refs = referenceResolution?.stage2Refs || [];
-    const policy = await safeReferencePolicy();
-    const panelState = buildReferencePanelState(refs, policy);
-
-    // Cap indicator N/M (primary in renderLivePreview; here as fallback/legacy host).
-    cap.textContent = panelState.unsupported ? panelState.message : `${panelState.count}/${panelState.max}`;
-    cap.hidden = false;
-}
-
 function updatePostInfo(root) {
     const info = root.querySelector('#urisPostInfo');
     if (!info) return;
     info.textContent = getPostInfo();
-    // The reference panel is refreshed on post change — smart-matching
-    // depends on the current message text. refreshReferencePanel is async;
-    // it does not block the UI (fire-and-forget).
-    refreshReferencePanel(root);
+    // Панель референсов обновляет render() — один await-вызов с реальной
+    // resolution. Дублирующий fire-and-forget вызов здесь запускал второй
+    // параллельный refreshReferencePanel: поздний null-args прогон затирал
+    // Stage2-чипы/превью до «нет совпадений» и ×2–×4 нагружал policy-резолвы.
 }
 
 /**

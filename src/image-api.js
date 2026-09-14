@@ -269,9 +269,16 @@ export async function generateImageRequest(imageConnId, request, onStatus, signa
         recordDiagnosticEvent({ event: 'gallery-write', stage: 'stage2', requestId: request.requestId, outcome: 'ready', details: { galleryId: galleryEntry.id } });
         // Grid thumbnail, best-effort and fire-and-forget: a failure leaves the
         // card rendering the full image (the grid falls back), it never blocks
-        // or fails the paid generation result.
+        // or fails the paid generation result. Success is logged too — without
+        // it the background pipeline is invisible next to thumbnail-error.
+        const thumbnailStartedAt = Date.now();
         makeThumbnailForPath(imagePath, { filename: `uris_${request.requestId}` })
             .then(thumbPath => updateCard(galleryEntry.id, { thumbPath }))
+            .then(() => recordDiagnosticEvent({
+                event: 'thumbnail-done', stage: 'stage2', requestId: request.requestId,
+                outcome: 'ready', durationMs: Date.now() - thumbnailStartedAt,
+                details: { galleryId: galleryEntry.id },
+            }))
             .catch(thumbError => recordDiagnosticEvent({
                 event: 'thumbnail-error', stage: 'stage2', requestId: request.requestId,
                 outcome: 'error', details: { message: thumbError?.message || String(thumbError) },

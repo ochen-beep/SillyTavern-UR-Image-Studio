@@ -107,8 +107,18 @@ async function mountChunkLoader(root, grid, items, chatId) {
             sentinel.remove();
         }
     };
+    // In-flight guard: appendChunk awaits bindCards, and a second
+    // IntersectionObserver callback during that await re-read the same card
+    // count and appended the same slice twice (duplicate cards on fast scroll).
+    let appending = false;
+    const guardedAppend = async () => {
+        if (appending) return;
+        appending = true;
+        try { await appendNext(); }
+        finally { appending = false; }
+    };
     const observer = typeof IntersectionObserver === 'function'
-        ? new IntersectionObserver(entries => { if (entries.some(entry => entry.isIntersecting)) void appendNext(); })
+        ? new IntersectionObserver(entries => { if (entries.some(entry => entry.isIntersecting)) void guardedAppend(); })
         : null;
     if (!observer) {
         while (grid.querySelectorAll('.uris-card').length < items.length) await appendNext();

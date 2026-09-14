@@ -4,6 +4,7 @@
  * localforage is read-only migration input for legacy chat entries.
  */
 import { LF_GALLERY_PREFIX, uid, log, getCtx } from './core.js';
+import { recordDiagnosticEvent, hashDiagnosticId } from './diagnostic-events.js';
 import { addCard, clearCards, countCardsByImagePath, listCards, removeCard, updateCard } from './gallery-index.js';
 import { listRefs } from './refs-library.js';
 import { materializeImageResult, uploadGeneratedImage } from './native-image-storage.js';
@@ -137,6 +138,10 @@ export async function deleteGalleryCard(chatId, id, { deleteFile = false } = {})
         const referenced = await isReferencedByPool(card.imagePath);
         if (shared || referenced) {
             await updateCard(id, { hidden: true });
+            recordDiagnosticEvent({
+                event: 'gallery-card-remove', stage: 'gallery', chatHash: hashDiagnosticId(chatId),
+                outcome: 'hidden', details: { deleteFile: true, reason: referenced ? 'used-by-reference' : 'shared-image-path' },
+            });
             log(referenced ? 'Delete file skipped: path is used by a reference; hidden instead' : 'Delete file skipped: path shared by another card; hidden instead', id);
             return true;
         }
@@ -148,10 +153,18 @@ export async function deleteGalleryCard(chatId, id, { deleteFile = false } = {})
         // The thumbnail lives in its own folder and is owned by this card only;
         // best-effort — a stale thumbnail costs a little disk, nothing else.
         if (card.thumbPath) await deleteNativeImageFile(card.thumbPath);
+        recordDiagnosticEvent({
+            event: 'gallery-card-remove', stage: 'gallery', chatHash: hashDiagnosticId(chatId),
+            outcome: 'deleted', details: { deleteFile: true, fileDeleted: deleted },
+        });
         log('Deleted gallery card and file', id);
         return true;
     }
     await updateCard(id, { hidden: true });
+    recordDiagnosticEvent({
+        event: 'gallery-card-remove', stage: 'gallery', chatHash: hashDiagnosticId(chatId),
+        outcome: 'hidden', details: { deleteFile: false },
+    });
     log('Hidden gallery card', id);
     return true;
 }
@@ -165,7 +178,16 @@ export async function updateGalleryEntry(chatId, id, patch) {
 
 /** Save a data URL to the shared native gallery folder. */
 export async function saveImageToFile(dataUrl) {
-    return uploadGeneratedImage(dataUrl, { filename: `uris_${new Date().toISOString().replace(/[:.]/g, '-')}` });
+    try {
+        const imagePath = await uploadGeneratedImage(dataUrl, { filename: `uris_${new Date().toISOString().replace(/[:.]/g, '-')}` });
+        // A user-driven act on a paid result: its absence from the timeline
+        // made "the file appeared without a card" reports undiagnosable.
+        recordDiagnosticEvent({ event: 'gallery-manual-save', stage: 'gallery', outcome: 'ok', details: {} });
+        return imagePath;
+    } catch (e) {
+        recordDiagnosticEvent({ event: 'gallery-manual-save', stage: 'gallery', level: 'error', outcome: 'error', details: { errorName: e?.name || 'Error', message: String(e?.message || e) } });
+        throw e;
+    }
 }
 
 /** Clear shared metadata cards belonging to one chat. Native source files remain untouched. */
@@ -182,6 +204,10 @@ export async function clearGallery(chatId, { deleteFiles = false } = {}) {
     } else {
         await Promise.all(mine.map(card => updateCard(card.id, { hidden: true })));
     }
+    recordDiagnosticEvent({
+        event: 'gallery-clear', stage: 'gallery', chatHash: hashDiagnosticId(chatId),
+        outcome: 'ok', details: { count: mine.length, deleteFiles },
+    });
     log('Gallery cleared for chat', chatId, deleteFiles ? '(files deleted)' : '(cards hidden)');
 }
 

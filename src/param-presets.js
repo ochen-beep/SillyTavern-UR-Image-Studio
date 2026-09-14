@@ -12,6 +12,7 @@ import {
     VALID_ASPECT_RATIOS, VALID_IMAGE_SIZES, uid, log, saveSettings,
 } from './core.js';
 import { createFileStore } from './file-store.js';
+import { recordDiagnosticEvent } from './diagnostic-events.js';
 
 export const PRESETS_FILE_NAME = 'uris_presets.json';
 export const PRESETS_STORE_VERSION = 1;
@@ -140,6 +141,7 @@ export async function listImageParams() {
 export async function createImageParam(data = {}) {
     const item = normalizeImageParam(data);
     const persisted = normalizeImageParam(await store().create(item));
+    recordDiagnosticEvent({ event: 'preset-crud', stage: 'presets', operation: 'create', details: { id: persisted.id } });
     log('Создан image param-пресет', persisted.id);
     return persisted;
 }
@@ -153,10 +155,12 @@ export async function saveImageParam(patch) {
     const current = await getImageParam(patch.id);
     if (!current) return null;
     const persisted = await store().update(patch.id, normalizeImageParam({ ...current, ...patch, id: patch.id }));
+    if (persisted) recordDiagnosticEvent({ event: 'preset-crud', stage: 'presets', operation: 'update', details: { id: patch.id } });
     return persisted ? normalizeImageParam(persisted) : null;
 }
 
 export async function deleteImageParam(id) {
     await store().delete(id);
+    recordDiagnosticEvent({ event: 'preset-crud', stage: 'presets', operation: 'delete', details: { id } });
     log('Удалён image param-пресет', id);
 }

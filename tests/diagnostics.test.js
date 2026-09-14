@@ -159,3 +159,15 @@ test('diagnostic journal clear removes persisted events without touching pending
     assert.deepEqual(debugStore.get('uris_pending_images'), [{ kind: 'browserRequest', id: 'pending-1' }]);
     assert.deepEqual(journal.listDiagnosticEvents(), []);
 });
+
+test('journal eviction prefers log-level entries; warn/error outlive FIFO', () => {
+    journal.resetDiagnosticEventsForTests();
+    for (let i = 0; i < 3; i++) journal.recordDiagnosticEvent({ event: `warn-keep-${i}`, level: 'warn' });
+    for (let i = 0; i < journal.MAX_DIAGNOSTIC_EVENTS; i++) journal.recordDiagnosticEvent({ event: `log-${i}` });
+    journal.recordDiagnosticEvent({ event: 'warn-last', level: 'warn' });
+    const events = journal.listDiagnosticEvents();
+    assert.equal(events.length, journal.MAX_DIAGNOSTIC_EVENTS, 'capacity is bounded');
+    assert.ok(events.some(e => e.event === 'warn-keep-0'), 'the oldest warn survives eviction');
+    assert.ok(events.some(e => e.event === 'warn-last'), 'a fresh warn is present');
+    assert.equal(events.some(e => e.event === 'log-0'), false, 'the oldest log is evicted first');
+});

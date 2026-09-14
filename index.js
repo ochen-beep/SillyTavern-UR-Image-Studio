@@ -33,10 +33,9 @@ import { render as renderGallery } from './src/ui/tab-gallery.js';
 import { render as renderTemplates } from './src/ui/tab-templates.js';
 import { render as renderBridge } from './src/ui/tab-bridge.js';
 import { render as renderSettings } from './src/ui/tab-settings.js';
-import { render as renderMedia } from './src/ui/tab-media.js';
+import { render as renderMedia, applyInlineRuntime } from './src/ui/tab-media.js';
 import { bindScanner, unbindScanner } from './src/inline/scanner.js';
-import { initRender, shutdownRender } from './src/inline/render.js';
-import { queueInlineJob } from './src/inline/runner.js';
+import { shutdownRender } from './src/inline/render.js';
 import { setCurrentMsgId, getLastPostIndex } from './src/post-navigator.js';
 import { refreshPoolCache } from './src/refs-library.js';
 import { runExport, runImportInteractive } from './src/data-port.js';
@@ -253,11 +252,12 @@ async function init() {
     };
     window.addEventListener('pagehide', _pageHideHandler);
 
-    // Inline engine: event scanner + DOM render only when the master toggle is on
-    // (toggled live from the Media / Settings tabs via tab-media.applyInlineRuntime).
+    // Inline engine runtime — via the shared Media-tab helper so the per-chat
+    // cfg.enabled is synced with the master toggle at startup. The previous
+    // direct bindScanner/initRender calls left every chat that never touched
+    // the Media toggle with a dead scanner while the checkbox showed enabled.
     if (state.settings.inlineEnabled) {
-        bindScanner();
-        initRender({ reroll: queueInlineJob });
+        applyInlineRuntime();
     }
 
     log('Initialized v2 · catalog-v3 · nanogpt-image-catalog · no-model-toggle.');

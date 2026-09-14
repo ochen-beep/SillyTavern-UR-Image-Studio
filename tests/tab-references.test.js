@@ -487,51 +487,38 @@ test('showPoolPicker: renders pool tiles and cancels', async () => {
     await promise;
 });
 
-test('render: mobile re-render resets screen to folders', async () => {
+test('render: mobile screen survives re-render (refresh no longer kicks back to folders)', async () => {
     const { document, root } = makeFakeDocument();
     globalThis.document = document;
     globalThis.document.body = root;
 
-    const { render } = await import('../src/ui/tab-references.js');
+    const { render, __resetMobileNavForTests } = await import('../src/ui/tab-references.js');
+    __resetMobileNavForTests();
     const el = makeTabEl(document, 380);
     root.appendChild(el);
 
     // First render — mobile folders screen
     await render(el);
     assert.ok(el.querySelector('.uris-mobile-screen'), 'mobile screen on first render');
-
-    // Verify toolbar has add-folder and add-ref buttons (no title span on folders screen)
     assert.ok(el.querySelector('.uris-mobile-add-folder'), 'add-folder button present');
     assert.ok(el.querySelector('.uris-mobile-add-ref'), 'add-ref button present');
     assert.ok(!el.querySelector('.uris-mobile-toolbar-title'), 'no toolbar title on folders screen');
 
-    // Simulate being on grid or card screen by directly setting innerHTML
-    // (this mimics what happens when user navigates to card screen)
-    const mobileScreen = el.querySelector('.uris-mobile-screen');
-    if (mobileScreen) {
-        mobileScreen.innerHTML = `
-            <div class="uris-mobile-toolbar">
-                <button class="uris-mobile-back">‹</button>
-                <span class="uris-mobile-toolbar-title">Some Card Name</span>
-            </div>
-            <div class="uris-mobile-card-scroll">card editor content</div>`;
-    }
-
-    await render(el);
+    // Navigate to the grid screen through the app's own handler (folder click)
     await [...el.querySelectorAll('.uris-mobile-folder-item')].find(item => item.dataset.folder === 'all').click();
     await new Promise(resolve => setTimeout(resolve, 0));
+    assert.ok(el.querySelector('.uris-mobile-toolbar-title'), 'grid screen shows the toolbar title');
     const search = el.querySelector('.uris-mobile-search');
     search.value = 'anything';
     await search.dispatchEvent({ type: 'input', target: search, currentTarget: search });
     await new Promise(resolve => setTimeout(resolve, 0));
 
-    // Re-render (simulates tab switch back to references)
+    // Re-render (simulates refreshActive after e.g. an image replace): the
+    // user's screen must survive — the old unconditional reset kicked mobile
+    // users back to the folder list on every background refresh.
     await render(el);
-    assert.ok(el.querySelector('.uris-mobile-add-folder'), 'add-folder button present after re-render');
-    assert.ok(!el.querySelector('.uris-mobile-toolbar-title'), 'no toolbar title on folders screen after re-render');
-    await [...el.querySelectorAll('.uris-mobile-folder-item')].find(item => item.dataset.folder === 'all').click();
-    await new Promise(resolve => setTimeout(resolve, 0));
-    assert.equal(el.querySelector('.uris-mobile-search').value, '', 'mobile search resets with the mobile screen');
+    assert.ok(el.querySelector('.uris-mobile-toolbar-title'), 'still on the grid screen after re-render');
+    assert.equal(el.querySelector('.uris-mobile-search').value, '', 'search query still resets on refresh');
 
     root.removeChild(el);
 });

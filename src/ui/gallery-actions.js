@@ -384,7 +384,10 @@ async function showRefPicker(title, refs) {
     }));
     const res = await ctx.callGenericPopup(
         title, ctx.POPUP_TYPE.TEXT, '',
-        { okButton: 'Отмена', cancelButton: 'Отмена', customButtons },
+        // Selection happens via the custom (reference) buttons; both built-in
+        // buttons only close. Two identical «Отмена» labels read as a bug —
+        // the OK button is honestly labeled as a plain close.
+        { okButton: 'Закрыть', cancelButton: 'Отмена', customButtons },
     );
     if (res == null || res === ctx.POPUP_RESULT.NEGATIVE || res === ctx.POPUP_RESULT.CANCELLED) return null;
     for (let i = 0; i < refs.length; i++) {

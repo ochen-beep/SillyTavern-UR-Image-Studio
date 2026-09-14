@@ -4,7 +4,7 @@
 import { state, DISPLAY_NAME, dumpProblemLog, dumpDebugLog, clearDiagnosticLogs } from './core.js';
 import { listUrisErrors, clearUrisErrors } from './error-pool.js';
 import { listPendingBrowserRequests, prunePendingBrowserRequests, clearPendingBrowserRequests } from './browser-image-recovery.js';
-import { listDiagnosticEvents, getDiagnosticSessionId, hashDiagnosticId, clearDiagnosticEvents } from './diagnostic-events.js';
+import { listDiagnosticEvents, getDiagnosticSessionId, hashDiagnosticId, clearDiagnosticEvents, recordDiagnosticEvent } from './diagnostic-events.js';
 import { getNetDumpsCount, clearNetDumps } from './netdump.js';
 
 function runtimeSnapshot() {
@@ -76,6 +76,12 @@ export async function exportDiagnosticDump() {
         diagnostic,
     };
     const json = JSON.stringify(payload);
+    // The export act belongs to the incident timeline: the next dump shows when
+    // the previous evidence left the browser and how big the journal was.
+    recordDiagnosticEvent({
+        event: 'diagnostic-export', stage: 'diagnostics', outcome: 'ok',
+        details: { bytes: json.length, events: diagnostic.eventLog.length },
+    });
     const blob = new Blob([json], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
     const anchor = document.createElement('a');

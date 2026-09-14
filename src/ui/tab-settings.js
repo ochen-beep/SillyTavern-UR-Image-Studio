@@ -7,7 +7,7 @@ import {
     state, saveSettings, applyUiScale, applyFontScale, showConfirmModal, error, DISPLAY_NAME, escapeHtml, MODULE_NAME,
     UI_SCALE_MIN, UI_SCALE_MAX, UI_SCALE_STEP, UI_SCALE_DEFAULT, normalizeUiScale,
     FONT_SCALE_MIN, FONT_SCALE_MAX, FONT_SCALE_STEP, FONT_SCALE_DEFAULT, normalizeFontScale,
-    NOTIFY_SOUNDS, normalizeNotifyVolume,
+    NOTIFY_SOUNDS, normalizeNotifyVolume, debounce,
 } from '../core.js';
 import { playStageSound } from '../notify.js';
 import { runExport, runImportInteractive } from '../data-port.js';
@@ -226,11 +226,14 @@ function bindNotifyControls(root) {
     }
     const volume = root.querySelector('#urisNotifyVolume');
     const volumeLabel = root.querySelector('#urisNotifyVolumeValue');
+    // Sliders fire `input` on every drag step; the visual state applies live,
+    // but the ST settings write is debounced (each save POSTs settings.json whole).
+    const debouncedVolumeSave = debounce(saveSettings, 400);
     volume?.addEventListener('input', () => {
         const next = normalizeNotifyVolume(Number(volume.value));
         state.settings.notifyVolume = next;
         if (volumeLabel) volumeLabel.textContent = `${next}%`;
-        saveSettings();
+        debouncedVolumeSave();
     });
     root.querySelector('#uris_notify_unfocused')?.addEventListener('change', e => {
         state.settings.notifyOnlyUnfocused = e.target.checked === true;
@@ -254,12 +257,15 @@ function bindScaleControls(root) {
         const slider = root.querySelector(`#${cfg.slider}`);
         const valueLabel = root.querySelector(`#${cfg.value}`);
         if (!slider || !valueLabel) continue;
+        // Zoom/label apply live; the settings write is debounced — `input`
+        // fires on every drag step and each save POSTs settings.json whole.
+        const debouncedSave = debounce(saveSettings, 400);
         const applyFromSlider = () => {
             const next = cfg.normalize(Number(slider.value) / 100);
             state.settings[cfg.key] = next;
             valueLabel.textContent = `${percent(next)}%`;
             cfg.apply();
-            saveSettings();
+            debouncedSave();
         };
         slider.addEventListener('input', applyFromSlider);
         root.querySelector(`#${cfg.reset}`)?.addEventListener('click', () => {

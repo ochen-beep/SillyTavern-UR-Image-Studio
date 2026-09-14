@@ -92,10 +92,13 @@ beforeEach(() => {
     globalThis.SillyTavern.libs = { localforage: lfMock };
     state.settings = {
         enabled: true,
-        automationMode: 'build-prompt',
-        generationFlow: POST_FILTER.AI_ONLY,
         followLastPost: true,
     };
+    // Chat-scoped automation config projection (schema-v5) — the authoritative
+    // runtime fields events.js reads. Never in state.settings: that object is
+    // persisted globally and must not leak a per-chat mode across sessions.
+    state.chatAutomationMode = 'build-prompt';
+    state.chatGenerationFlow = POST_FILTER.AI_ONLY;
     state.currentMsgId = null;
     state.currentChatId = null;
     state.generationFlow = POST_FILTER.AI_ONLY;
@@ -121,7 +124,7 @@ test('ai-only flow: GENERATION_ENDED triggers, MESSAGE_SENT does not', () => {
 });
 
 test('user-only flow: MESSAGE_SENT triggers, GENERATION_ENDED does not', () => {
-    state.settings.generationFlow = POST_FILTER.USER_ONLY;
+    state.chatGenerationFlow = POST_FILTER.USER_ONLY;
     state.generationFlow = POST_FILTER.USER_ONLY;
     let called = null;
     bindEvents({ onAutomation: ({ msgId }) => { called = msgId; } });
@@ -133,7 +136,7 @@ test('user-only flow: MESSAGE_SENT triggers, GENERATION_ENDED does not', () => {
 });
 
 test('all flow: both events trigger', () => {
-    state.settings.generationFlow = POST_FILTER.ALL;
+    state.chatGenerationFlow = POST_FILTER.ALL;
     state.generationFlow = POST_FILTER.ALL;
     testCtx.chat = [
         { mes: 'a1', is_user: false },
@@ -150,7 +153,7 @@ test('all flow: both events trigger', () => {
 });
 
 test('MESSAGE_SENT uses provided msgId when available', () => {
-    state.settings.generationFlow = POST_FILTER.ALL;
+    state.chatGenerationFlow = POST_FILTER.ALL;
     state.generationFlow = POST_FILTER.ALL;
     let called = null;
     bindEvents({ onAutomation: ({ msgId }) => { called = msgId; } });
@@ -160,7 +163,7 @@ test('MESSAGE_SENT uses provided msgId when available', () => {
 });
 
 test('manual flow: neither auto event triggers', () => {
-    state.settings.generationFlow = POST_FILTER.MANUAL;
+    state.chatGenerationFlow = POST_FILTER.MANUAL;
     state.generationFlow = POST_FILTER.MANUAL;
     let called = false;
     bindEvents({ onAutomation: () => { called = true; } });
@@ -179,7 +182,7 @@ test('GENERATION_ENDED triggers onAutomation for last AI post in ai-only flow', 
 });
 
 test('GENERATION_ENDED triggers onAutomation for last AI post in all flow', () => {
-    state.settings.generationFlow = POST_FILTER.ALL;
+    state.chatGenerationFlow = POST_FILTER.ALL;
     state.generationFlow = POST_FILTER.ALL;
     let called = null;
     bindEvents({ onAutomation: ({ msgId }) => { called = msgId; } });
@@ -189,7 +192,7 @@ test('GENERATION_ENDED triggers onAutomation for last AI post in all flow', () =
 });
 
 test('MESSAGE_SENT triggers onAutomation for last user post in user-only flow', () => {
-    state.settings.generationFlow = POST_FILTER.USER_ONLY;
+    state.chatGenerationFlow = POST_FILTER.USER_ONLY;
     state.generationFlow = POST_FILTER.USER_ONLY;
     let called = null;
     bindEvents({ onAutomation: ({ msgId }) => { called = msgId; } });
@@ -209,7 +212,7 @@ test('auto triggers do nothing when extension disabled', () => {
 });
 
 test('auto triggers do nothing when automationMode is manual', () => {
-    state.settings.automationMode = 'manual';
+    state.chatAutomationMode = 'manual';
     let called = false;
     bindEvents({ onAutomation: () => { called = true; } });
     makeLastListeners.GENERATION_ENDED();
@@ -219,7 +222,7 @@ test('auto triggers do nothing when automationMode is manual', () => {
 });
 
 test('onAutomation receives captured chatId, msgId, messageText, and requestedAction', () => {
-    state.settings.automationMode = 'full-pipeline';
+    state.chatAutomationMode = 'full-pipeline';
     let captured = null;
     bindEvents({ onAutomation: (payload) => { captured = payload; } });
     makeLastListeners.GENERATION_ENDED();
@@ -233,7 +236,7 @@ test('onAutomation receives captured chatId, msgId, messageText, and requestedAc
 });
 
 test('unbindEvents removes all listeners', () => {
-    state.settings.generationFlow = POST_FILTER.ALL;
+    state.chatGenerationFlow = POST_FILTER.ALL;
     state.generationFlow = POST_FILTER.ALL;
     bindEvents({ onAutomation: () => {} });
     unbindEvents();
@@ -253,7 +256,7 @@ test('CHAT_CHANGED awaits chat config load before dispatching uris:chat-changed'
         },
         refs: { referenceIds: [] },
     };
-    state.settings.automationMode = 'manual';
+    state.chatAutomationMode = 'manual';
     let dispatched = false;
     const originalDispatch = window.dispatchEvent;
     window.dispatchEvent = (evt) => {
@@ -265,7 +268,7 @@ test('CHAT_CHANGED awaits chat config load before dispatching uris:chat-changed'
     assert.equal(dispatched, false, 'chat-changed must not fire synchronously before config load');
     await new Promise(r => setTimeout(r, 0));
     assert.equal(dispatched, true, 'chat-changed must fire after async config load');
-    assert.equal(state.settings.automationMode, 'full-pipeline');
+    assert.equal(state.chatAutomationMode, 'full-pipeline');
     window.dispatchEvent = originalDispatch;
     unbindEvents();
 });
@@ -281,7 +284,7 @@ test('automation is suppressed until the current schema-v5 chat config is applie
         },
         refs: { referenceIds: [] },
     };
-    state.settings.automationMode = 'manual';
+    state.chatAutomationMode = 'manual';
     let called = false;
     bindEvents({ onAutomation: () => { called = true; } });
     listeners.CHAT_CHANGED();
@@ -339,7 +342,7 @@ test('rapid schema-v5 chat switches leave the later current chat configuration a
         testCtx.chatId = 'chat-b';
         listeners.CHAT_CHANGED();
         await new Promise(r => setTimeout(r, 0));
-        assert.equal(state.settings.automationMode, 'full-pipeline');
+        assert.equal(state.chatAutomationMode, 'full-pipeline');
         assert.equal(state.activeImageProfileId, 'conn-b');
         assert.equal(eventCount, 1, 'chat-changed must dispatch only for the current chat');
     } finally {
@@ -459,7 +462,7 @@ test('CHAT_CHANGED recovers from loadChatConfig error and unblocks automation', 
 
 test('follow=ON: GENERATION_ENDED snaps currentMsgId to last post and dispatches uris:post-follow', () => {
     state.settings.followLastPost = true;
-    state.settings.automationMode = 'manual'; // automation off — pure UI snap
+    state.chatAutomationMode = 'manual'; // automation off — pure UI snap
     state.currentMsgId = 1;                    // пользователь ушёл на старый пост
     const dispatched = [];
     const originalDispatch = window.dispatchEvent;
@@ -492,7 +495,7 @@ test('follow=ON: MESSAGE_SWIPED dispatches uris:post-follow even when currentMsg
 
 test('follow=OFF: GENERATION_ENDED does not touch currentMsgId or dispatch uris:post-follow', () => {
     state.settings.followLastPost = false;
-    state.settings.automationMode = 'manual';
+    state.chatAutomationMode = 'manual';
     state.currentMsgId = 1;
     const dispatched = [];
     const originalDispatch = window.dispatchEvent;
@@ -597,7 +600,7 @@ test('system and hidden posts do not trigger automation', () => {
 });
 
 test('user-only flow: empty user post does not trigger automation', () => {
-    state.settings.generationFlow = POST_FILTER.USER_ONLY;
+    state.chatGenerationFlow = POST_FILTER.USER_ONLY;
     state.generationFlow = POST_FILTER.USER_ONLY;
     testCtx.chat = [{ mes: '   ', is_user: true }];
     let called = null;

@@ -461,3 +461,43 @@ test('makeThumbnailForPath rejects a broken thumbnail source without uploading',
     await assert.rejects(() => makeThumbnailForPath('user/images/UR%20Image%20Studio/gone.png', {}));
     assert.equal(calls.length, 1, 'после неудачного fetch загрузки быть не должно');
 });
+
+test('gallery actions land in the diagnostic journal', async () => {
+    const { resetDiagnosticEventsForTests, listDiagnosticEvents } = await import('../src/diagnostic-events.js');
+    resetDiagnosticEventsForTests();
+    const context = {
+        extensionSettings: {},
+        getRequestHeaders: () => ({ Authorization: 'Bearer st-token' }),
+        saveSettingsDebounced: () => {},
+    };
+    globalThis.SillyTavern = {
+        getContext: () => context,
+        libs: { localforage: { getItem: async () => null, setItem: async () => {}, removeItem: async () => {} } },
+    };
+    globalThis.fetch = async (url) => {
+        const u = String(url);
+        if (u === '/api/files/verify') return { ok: true, status: 200, json: async () => ({}), text: async () => '' };
+        if (u === '/api/files/upload') return { ok: true, status: 200, json: async () => ({}) };
+        if (u === '/api/images/upload') return { ok: true, status: 200, json: async () => ({ path: 'user/images/UR%20Image%20Studio/uris_manual.png' }) };
+        if (u.startsWith('/user/files/')) return { ok: false, status: 404, text: async () => '' };
+        return { ok: true, status: 200, json: async () => [], text: async () => '' };
+    };
+    const { addToGallery, deleteGalleryCard, clearGallery, saveImageToFile } = await import('../src/storage.js');
+
+    await addToGallery('chat-a', { id: 'a', imagePath: 'user/images/UR%20Image%20Studio/one.png', prompt: 'one' });
+    await saveImageToFile('data:image/png;base64,AAAA');
+    await deleteGalleryCard('chat-a', 'a');
+    await clearGallery('chat-b');
+
+    const events = listDiagnosticEvents();
+    const save = events.find(e => e.event === 'gallery-manual-save');
+    assert.ok(save, 'manual save writes a journal event');
+    assert.equal(save.outcome, 'ok');
+    const remove = events.find(e => e.event === 'gallery-card-remove');
+    assert.ok(remove, 'card removal writes a journal event');
+    assert.equal(remove.outcome, 'hidden');
+    assert.equal(remove.details.deleteFile, false);
+    const clear = events.find(e => e.event === 'gallery-clear');
+    assert.ok(clear, 'gallery clear writes a journal event');
+    assert.equal(clear.details.count, 0);
+});

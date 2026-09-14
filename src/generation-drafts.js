@@ -57,8 +57,16 @@ function withDraftLock(chatId, msgId, fn) {
 
 /**
  * Compute a stable, lower-case hex digest from UTF-8 text.
- * Uses a synchronous FNV-1a-like 64-bit hash so it works in both Node and browser.
  *
+ * Формат зафиксирован: messageHash сохранённых черновиков сравнивается при
+ * каждом чтении (loadDraftForStage2/getGenerationDraft), и любое изменение
+ * алгоритма или ширины разойдётся со всеми черновиками — пользователь потеряет
+ * построенные промпты Stage 1. Поэтому хэш НЕ перенесён на общее ядро
+ * core.fnv1a32: та же схема FNV, но другое расширение (64-битная пара, где
+ * старшая половина — детерминированная функция младшей, т.е. 32 бита
+ * энтропии) и float-умножение вместо Math.imul в цикле. Честное описание
+ * вместо прежнего «lower collision chance»: энтропия здесь 32 бита, форма —
+ * исторический контракт хранения.
  * @param {string} messageText
  * @returns {string}
  */
@@ -70,7 +78,7 @@ export function hashMessage(messageText) {
         h ^= bytes[i];
         h = (h * 0x01000193) >>> 0;
     }
-    // Expand 32-bit to 64-bit hex for lower collision chance.
+    // Расширение до 16 hex-разрядов детерминировано из 32-битного состояния.
     const lo = h >>> 0;
     const hi = Math.imul(h, 0x9e3779b9) >>> 0;
     return hi.toString(16).padStart(8, '0') + lo.toString(16).padStart(8, '0');
@@ -264,37 +272,43 @@ export async function startStage1Run(draft, messageText) {
  * @returns {Promise<{applied:boolean, reason:null|'superseded'|'prompt-edited', draft:GenerationDraft}>}
  */
 export async function applyStage1Result(draft, token, promptRevision, result, messageText, contextSnapshot = null) {
-    const current = await getGenerationDraft(draft.chatId, draft.msgId, messageText);
-    if ((current.stage1?.runToken || 0) !== token) {
-        return { applied: false, reason: 'superseded', draft: current };
-    }
-    if ((current.promptRevision || 0) !== promptRevision) {
-        return { applied: false, reason: 'prompt-edited', draft: current };
-    }
-    // Preserve the draft's template selection mode: only override drafts keep
-    // an explicit templateId; default drafts stay defaulted to the active template.
-    const selection = current.templateSelection === 'override' ? 'override' : 'default';
-    const updated = {
-        ...current,
-        templateSelection: selection,
-        templateId: selection === 'override'
-            ? (result.templateId ?? current.templateId)
-            : current.templateId,
-        prompt: result.prompt ?? current.prompt,
-        promptOrigin: result.prompt ? 'stage1' : current.promptOrigin,
-        stage1: {
-            ...current.stage1,
-            status: 'ready',
-            structuredDraft: result.structuredDraft ?? null,
-            contextSnapshot,
-            builtAt: new Date().toISOString(),
-            error: null,
-            runToken: token,
-            runPromptRevision: promptRevision,
-        },
-    };
-    await saveGenerationDraft(updated);
-    return { applied: true, reason: null, draft: deepFreezeSnapshot(updated) };
+    // Same lock as updateGenerationDraft/startStage1Run: this is a
+    // read-check-write against the live draft, and an unlocked concurrent user
+    // edit (prompt/reference correction) could be clobbered by the result
+    // application landing after it.
+    return withDraftLock(draft.chatId, draft.msgId, async () => {
+        const current = await getGenerationDraft(draft.chatId, draft.msgId, messageText);
+        if ((current.stage1?.runToken || 0) !== token) {
+            return { applied: false, reason: 'superseded', draft: current };
+        }
+        if ((current.promptRevision || 0) !== promptRevision) {
+            return { applied: false, reason: 'prompt-edited', draft: current };
+        }
+        // Preserve the draft's template selection mode: only override drafts keep
+        // an explicit templateId; default drafts stay defaulted to the active template.
+        const selection = current.templateSelection === 'override' ? 'override' : 'default';
+        const updated = {
+            ...current,
+            templateSelection: selection,
+            templateId: selection === 'override'
+                ? (result.templateId ?? current.templateId)
+                : current.templateId,
+            prompt: result.prompt ?? current.prompt,
+            promptOrigin: result.prompt ? 'stage1' : current.promptOrigin,
+            stage1: {
+                ...current.stage1,
+                status: 'ready',
+                structuredDraft: result.structuredDraft ?? null,
+                contextSnapshot,
+                builtAt: new Date().toISOString(),
+                error: null,
+                runToken: token,
+                runPromptRevision: promptRevision,
+            },
+        };
+        await saveGenerationDraft(updated);
+        return { applied: true, reason: null, draft: deepFreezeSnapshot(updated) };
+    });
 }
 
 /**
