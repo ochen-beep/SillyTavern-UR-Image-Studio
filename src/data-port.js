@@ -22,7 +22,9 @@ import {
 import { ALLOWED_CONTRACTS, isSecretKey, normalizeRouteContract } from './image-connection-schema.js';
 import { invalidateTemplateCache, replaceTemplateStoreRecords, getTemplateRecordsForExport } from './prompt-templates.js';
 import { recordUrisError } from './error-pool.js';
-import { invalidatePoolCache } from './refs-library.js';
+import { invalidatePoolCache, getRefsForExport, replaceRefsRecords } from './refs-library.js';
+import { getParamPresetsForExport, replaceParamPresetRecords } from './param-presets.js';
+import { recordDiagnosticEvent } from './diagnostic-events.js';
 
 const BACKUP_VERSION = 8;
 const BACKUP_MODULE = MODULE_NAME;
@@ -392,6 +394,7 @@ export function sanitizeBackupValue(value) {
  * @returns {Promise<Object>}
  */
 export async function exportUrisData(options = {}) {
+    const startedAt = Date.now();
     const includeSettings = options.includeSettings !== false;
     const keys = await collectUrisKeys();
     const data = {
@@ -416,12 +419,21 @@ export async function exportUrisData(options = {}) {
 
     if (includeSettings) {
         const settings = getCtx().extensionSettings[MODULE_NAME] || null;
-        // In file-store mode the settings copy can be stale — overlay fresh
-        // template records so exports always carry the live set.
+        // In file-store mode the settings copy can be stale or already stripped,
+        // so overlay the LIVE contents of every file store before projecting.
+        // Each accessor returns null in legacy mode (the settings copy is
+        // authoritative there) — the exporter then behaves exactly as before.
         const sharedSource = settings?.imageConnections ? cloneExact(settings.imageConnections) : null;
         if (sharedSource) {
             const freshTemplates = await getTemplateRecordsForExport();
             if (freshTemplates) sharedSource.templates = freshTemplates;
+            const freshPool = await getRefsForExport();
+            if (freshPool) {
+                sharedSource.refs = freshPool.refs;
+                sharedSource.folders = freshPool.folders;
+            }
+            const freshPresets = await getParamPresetsForExport();
+            if (freshPresets) sharedSource.presets = freshPresets;
         }
         data.shared = normalizeShared(sharedSource);
         data.data.extensionSettings = settings
@@ -438,6 +450,19 @@ export async function exportUrisData(options = {}) {
     }
 
     log('Exported keys:', keys.length);
+    // An export is the recovery instrument for everything else — the journal
+    // must show when it ran and what it carried.
+    recordDiagnosticEvent({
+        event: 'export-run', stage: 'data', outcome: 'ok',
+        durationMs: Date.now() - startedAt,
+        details: {
+            keys: keys.length,
+            includeSettings,
+            refs: Array.isArray(data.shared?.refs) ? data.shared.refs.length : 0,
+            presets: Array.isArray(data.shared?.presets) ? data.shared.presets.length : 0,
+            templates: Array.isArray(data.shared?.templates) ? data.shared.templates.length : 0,
+        },
+    });
     return data;
 }
 
@@ -528,12 +553,18 @@ async function snapshotSafeData() {
     const chatMetadata = ctx.chatMetadata;
     const hasChatBinding = Boolean(ctx.chatId && chatMetadata && Object.hasOwn(chatMetadata, META_KEY));
     // In file-store mode templates live outside extensionSettings — capture them
-    // separately so a failed import can roll the file store back too.
+    // separately so a failed import can roll the file store back too. Same for
+    // the refs pool and presets: a rollback that restores settings but leaves
+    // imported file-store content behind would end in a half-rolled-back state.
     const templateRecords = await getTemplateRecordsForExport();
+    const refsRecords = await getRefsForExport();
+    const presetRecords = await getParamPresetsForExport();
     return {
         keys: snapshot,
         extensionSettings,
         templateRecords,
+        refsRecords,
+        presetRecords,
         chatMetadata,
         hasChatBinding,
         chatBinding: hasChatBinding ? cloneExact(chatMetadata[META_KEY]) : undefined,
@@ -603,6 +634,20 @@ async function restoreSafeSnapshot(snapshot) {
             recordError('templateFileStore', cause, { operation: 'restore' });
         }
     }
+    if (snapshot.refsRecords) {
+        try {
+            await replaceRefsRecords(snapshot.refsRecords);
+        } catch (cause) {
+            recordError('refsFileStore', cause, { operation: 'restore' });
+        }
+    }
+    if (Array.isArray(snapshot.presetRecords)) {
+        try {
+            await replaceParamPresetRecords(snapshot.presetRecords);
+        } catch (cause) {
+            recordError('presetFileStore', cause, { operation: 'restore' });
+        }
+    }
     log('Rollback: snapshot restored');
     return rollbackErrors;
 }
@@ -612,9 +657,10 @@ async function restoreSafeSnapshot(snapshot) {
  * @param {Object} data — object from exportUrisData
  * @param {Object} [options]
  * @param {'merge'|'replace'} [options.mode='merge'] — merge with current or full replace
- * @returns {Promise<{importedKeys: number, importedChatBindings: number, connectionsSynced: number, summary: Object}>}
+ * @returns {Promise<{importedKeys: number, importedChatBindings: number, summary: Object}>}
  */
 export async function importUrisData(data, options = {}) {
+    const startedAt = Date.now();
     const normalized = normalizeBackup(data);
     const mode = options.mode === 'replace' ? 'replace' : 'merge';
     const incomingLf = normalized.data.localforage || {};
@@ -683,17 +729,34 @@ export async function importUrisData(data, options = {}) {
             log('Replace mode: removed current chat binding', chatId);
         }
 
-        // Mirror the restored templates into the server file store so it stays in
+        // Mirror the restored records into the server file stores so they stay in
         // lockstep with what the import produced (no-op in legacy mode, where the
         // settings restore above already carries them). Awaited: a fresh import
         // must not depend on a debounced/unload write to survive.
+        //
+        // The records are cloned BEFORE any store call: `ready()` migrates and
+        // then strips the settings copy, so reading `restoredShared.refs` lazily
+        // would hand the store `undefined` and overwrite the file with an empty
+        // set — losing exactly what the import just restored.
         try {
+            const sharedCarries = section => Object.hasOwn(incomingShared, section);
             const restoredShared = ctx.extensionSettings[MODULE_NAME]?.[IMAGE_CONNECTION_SETTINGS_KEY];
-            if (restoredShared && Array.isArray(restoredShared.templates)) {
-                await replaceTemplateStoreRecords(cloneExact(restoredShared.templates));
-            }
+            const restoredTemplates = cloneExact(restoredShared?.templates);
+            const restoredPool = {
+                refs: cloneExact(restoredShared?.refs),
+                folders: cloneExact(restoredShared?.folders),
+            };
+            const restoredPresets = cloneExact(restoredShared?.presets);
+
+            if (Array.isArray(restoredTemplates)) await replaceTemplateStoreRecords(restoredTemplates);
+            // Only a backup that CARRIES a section may overwrite that file
+            // store. Reading the (stripped, post-migration) settings copy for a
+            // section the backup never had would replace live data with empty
+            // arrays — "absent" must not mean "wipe".
+            if (sharedCarries('refs') || sharedCarries('folders')) await replaceRefsRecords(restoredPool);
+            if (sharedCarries('presets')) await replaceParamPresetRecords(restoredPresets);
         } catch (cause) {
-            warn('importUrisData: template file store sync failed', cause?.message);
+            warn('importUrisData: file store sync failed', cause?.message);
         }
 
         // External mutation bypassed per-module caches; drop them so the next
@@ -703,15 +766,25 @@ export async function importUrisData(data, options = {}) {
         try { invalidatePoolCache(); } catch (e) { warn('importUrisData: refs pool cache invalidation failed', e?.message); }
 
         log('Imported keys:', Object.keys(incomingLf).length, 'chat bindings:', importedChatBindings);
+        recordDiagnosticEvent({
+            event: 'import-run', stage: 'data', outcome: 'ok',
+            durationMs: Date.now() - startedAt,
+            details: { mode, importedKeys: Object.keys(incomingLf).length, importedChatBindings },
+        });
         return {
             importedKeys: Object.keys(incomingLf).length,
             importedChatBindings,
-            connectionsSynced: 0,
             summary: summarizeBackup(normalized),
         };
     } catch (e) {
         error('importUrisData: write error, performing rollback:', e.message);
         const rollbackErrors = await restoreSafeSnapshot(snapshot);
+        recordDiagnosticEvent({
+            event: 'import-run', stage: 'data', level: 'error',
+            outcome: rollbackErrors.length > 0 ? 'rollback-failed' : 'rolled-back',
+            durationMs: Date.now() - startedAt,
+            details: { mode, error: String(e?.message || e), rollbackErrors: rollbackErrors.length },
+        });
         if (rollbackErrors.length > 0) {
             throw new ImportRollbackError(e, rollbackErrors);
         }

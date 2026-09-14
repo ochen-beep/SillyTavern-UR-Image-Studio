@@ -482,3 +482,19 @@ test('fetchWithTimeout: ошибка рекордера не валит гене
         restore();
     }
 });
+test('recordNetEntry: ротация вытесняет успешные записи раньше ошибочных', async () => {
+    for (let i = 0; i < 3; i++) {
+        await recordNetEntry({ id: `err${i}`, kind: 'image', host: 'h', url: 'u', error: 'boom' });
+    }
+    for (let i = 0; i < MAX_NET_ENTRIES; i++) {
+        await recordNetEntry({ id: `ok${i}`, kind: 'image', host: 'h', url: 'u', error: null });
+    }
+    const entries = await globalThis.SillyTavern.libs.localforage.getItem(LF_NETDUMP);
+    assert.equal(entries.length, MAX_NET_ENTRIES);
+    assert.ok(entries.every(e => !['ok0', 'ok1', 'ok2'].includes(e.id)), 'oldest successes are evicted first');
+    assert.deepEqual(
+        entries.filter(e => String(e.id).startsWith('err')).map(e => e.id),
+        ['err0', 'err1', 'err2'],
+        'error entries outlive the rotation',
+    );
+});

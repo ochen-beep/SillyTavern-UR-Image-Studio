@@ -105,3 +105,12 @@ describe('shared prompt templates', () => {
     assert.equal(fresh[0].id, 't2');
   });
 });
+
+it('template CRUD пишет события в журнал диагностики', async () => {
+  const journal = await import('../src/diagnostic-events.js');
+  journal.resetDiagnosticEventsForTests();
+  const created = await templates.createInstructionTemplate({ name: 'Ж', instruction: 'B' });
+  await templates.deleteTemplate(created.id);
+  const crud = journal.listDiagnosticEvents().filter(e => e.event === 'template-crud');
+  assert.deepEqual(crud.map(e => e.operation), ['create', 'delete']);
+});

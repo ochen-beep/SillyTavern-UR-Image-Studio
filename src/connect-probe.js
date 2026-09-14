@@ -20,6 +20,7 @@ import { proxiedFetch as defaultProxiedFetch } from './proxy.js';
 import { validatePollinationsToken } from './providers/image-pollinations.js';
 import { validateNaisteraToken } from './providers/image-naistera.js';
 import { normalizeModelCatalog } from './model-catalog.js';
+import { recordDiagnosticEvent } from './diagnostic-events.js';
 
 const MAX_MODEL_IDS = 500;
 
@@ -90,7 +91,7 @@ function extractModels(payload, allowPollinations = false) {
  *          fetch?:Function, proxiedFetch?:Function, corsMode?:'auto'|'direct'|'proxy'}} input
  * @returns {Promise<ProbeOutcome>}
  */
-export async function probeConnection(input = {}) {
+async function runProbeConnection(input = {}) {
     const {
         endpoint, apiKey = '', timeoutMs = 120000, signal,
         fetch: fetcher = globalThis.fetch,
@@ -283,4 +284,37 @@ export async function probeConnection(input = {}) {
         }
     }
     throw new Error(`Не удалось проверить подключение — ${failures.join(' | ')}`);
+}
+
+/**
+ * Journal wrapper around the probe: «Проверить» is the first thing a user does
+ * when a connection misbehaves, so both outcomes land in the diagnostic
+ * journal. The probe's own HTTP traffic stays invisible to the netdump by
+ * design (model catalogs are skipped), which makes this event the only trace
+ * the check leaves.
+ */
+export async function probeConnection(input = {}) {
+    const startedAt = Date.now();
+    const connId = input?.connectionId ?? null;
+    const endpointHost = endpointHostname(input?.endpoint);
+    try {
+        const result = await runProbeConnection(input);
+        recordDiagnosticEvent({
+            event: 'connection-probe', stage: 'probe', connId,
+            outcome: 'ok', durationMs: Date.now() - startedAt,
+            details: {
+                endpointHost,
+                apiShape: result?.apiShape || null,
+                models: Array.isArray(result?.modelIds) ? result.modelIds.length : null,
+            },
+        });
+        return result;
+    } catch (e) {
+        recordDiagnosticEvent({
+            event: 'connection-probe', stage: 'probe', connId, level: 'error',
+            outcome: 'error', durationMs: Date.now() - startedAt,
+            details: { endpointHost, errorName: e?.name || 'Error', message: String(e?.message || e) },
+        });
+        throw e;
+    }
 }

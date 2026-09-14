@@ -102,6 +102,11 @@ export async function runStage2ForDraft(input, onStatus = () => {}, signal, opts
     let effectiveRoute = null;
     let effectiveConnection = null;
     let request = null;
+    // The catch classifies the failure; the finally close-out needs it too, so
+    // stage2-end can state how the run ended instead of leaving the outcome to
+    // be inferred from the absence of stage2-result.
+    let failure = null;
+    let startedAt = 0;
 
     try {
         const ownController = new AbortController();
@@ -128,6 +133,7 @@ export async function runStage2ForDraft(input, onStatus = () => {}, signal, opts
         }
         if (useSignal.aborted) throw new DOMException('Aborted', 'AbortError');
         started = true;
+        startedAt = Date.now();
 
         recordDiagnosticEvent({
             event: 'stage2-start', stage: 'stage2', requestId: activeRequestId,
@@ -331,6 +337,7 @@ export async function runStage2ForDraft(input, onStatus = () => {}, signal, opts
         if (result?.warnings?.length && entry && typeof entry === 'object') entry.warnings = result.warnings;
         return entry;
     } catch (e) {
+        failure = e;
         // Log the failure BEFORE the draft wrapper flattens it to e.message.
         // A materialize failure (after the provider POST succeeded) classifies
         // to the `materialize` outcome (no .code/.httpStatus, not a network
@@ -376,7 +383,13 @@ export async function runStage2ForDraft(input, onStatus = () => {}, signal, opts
         if (activeRequestId) {
             state.activeGenerations.delete(activeRequestId);
             if (started) {
-                recordDiagnosticEvent({ event: 'stage2-end', stage: 'stage2', requestId: activeRequestId, msgId });
+                const cancelled = useSignal?.aborted || failure?.name === 'AbortError';
+                recordDiagnosticEvent({
+                    event: 'stage2-end', stage: 'stage2', requestId: activeRequestId,
+                    chatHash: hashDiagnosticId(chatId), msgId,
+                    outcome: cancelled ? 'cancelled' : (failure ? 'error' : 'ready'),
+                    durationMs: startedAt ? Date.now() - startedAt : null,
+                });
                 emitStage2Event('uris:stage2-end', { requestId: activeRequestId, msgId });
             }
         }

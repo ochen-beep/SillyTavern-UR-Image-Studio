@@ -1,19 +1,24 @@
 import { test, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
 
-// Мок SillyTavern/chatMetadata до импорта модуля (паттерн settings-tab.test.js)
+// Мок SillyTavern/chatMetadata до импорта модуля (паттерн settings-tab.test.js).
+// chat[].mes обязателен: store читает его для sourceText, а главный регресс,
+// который здесь ловится (стирание оплаченных item'ов при правке текста),
+// виден только когда mock отдаёт живой чат.
 let metadata = {};
+let chatArr = [{ mes: 'первый текст' }];
 let saved = 0;
 globalThis.SillyTavern = {
     getContext: () => ({
         chatMetadata: metadata,
+        chat: chatArr,
         saveMetadataDebounced: () => { saved++; },
     }),
 };
 
 const { getSlot, upsertItem, getConfig, setConfig, dropMessage } = await import('../src/inline/store.js');
 
-beforeEach(() => { metadata = {}; saved = 0; });
+beforeEach(() => { metadata = {}; chatArr = [{ mes: 'первый текст' }]; saved = 0; });
 
 test('store: empty metadata → empty slot', () => {
     assert.deepEqual(getSlot(5), { messageHash: null, items: [] });
@@ -70,4 +75,38 @@ test('store: junk fields are not persisted', () => {
 test('store: string and numeric msgId hit the same slot', () => {
     upsertItem('5', { idx: 0, type: 'img', descHash: 'dd', status: 'ready', imagePath: 'x.png' });
     assert.equal(getSlot(5).items.length, 1);
+});
+
+// — Регрессия «store-гейта по sourceText»: правка сообщения не должна ни
+// прятать готовые item'ы (getSlot), ни стирать их при следующем upsert
+// (сброс слота). Платный результат дороже устаревшего текста.
+
+test('store: правка текста сообщения НЕ прячет готовые item\'ы', () => {
+    upsertItem(0, { idx: 0, type: 'img', descHash: 'aa', status: 'ready', imagePath: 'p.png' });
+    chatArr[0].mes = 'текст после правки';
+    const slot = getSlot(0);
+    assert.equal(slot.items.length, 1, 'готовый item остался в слоте');
+    assert.equal(slot.items[0].status, 'ready');
+    assert.equal(slot.items[0].imagePath, 'p.png');
+});
+
+test('store: upsert после правки не стирает слот — мерж по ключу, готовый + новый pending', () => {
+    upsertItem(0, { idx: 0, type: 'img', descHash: 'aa', status: 'ready', imagePath: 'p.png', requestId: 'r1', createdAt: 1 });
+    chatArr[0].mes = 'текст после правки';
+    upsertItem(0, { idx: 0, type: 'img', descHash: 'bb', status: 'pending', requestId: 'r2', createdAt: 2 });
+    const slot = getSlot(0);
+    assert.equal(slot.items.length, 2, 'готовый остался + новый pending добавлен');
+    assert.equal(slot.items.find(i => i.descHash === 'aa')?.status, 'ready');
+    assert.equal(slot.items.find(i => i.descHash === 'bb')?.status, 'pending');
+});
+
+// — Гонка «клик ✕ в тик после готовности»: error-патч не должен гасить ready.
+
+test('store: готовый ready не откатывается в error (картинка не теряется)', () => {
+    upsertItem(0, { idx: 0, type: 'img', descHash: 'aa', status: 'ready', imagePath: 'p.png', requestId: 'r1', createdAt: 1 });
+    upsertItem(0, { idx: 0, type: 'img', descHash: 'aa', status: 'error', requestId: null, error: 'cancelled' });
+    const slot = getSlot(0);
+    assert.equal(slot.items.length, 1);
+    assert.equal(slot.items[0].status, 'ready');
+    assert.equal(slot.items[0].imagePath, 'p.png', 'imagePath не обнулён');
 });

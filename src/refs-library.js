@@ -3,6 +3,15 @@
  * Reference library: global pool + folders + chat binding.
  * Replaces references-profiles.js (v3-redesign).
  * Spec: docs/archive/plans/2026-07-14-references-chat-scoped-pool.md §2.
+ *
+ * The pool and its folders persist in ONE server file per user,
+ * `data/<user>/user/files/uris_refs.json`, not in `extensionSettings` — they are
+ * user-authored data (with an unbounded `description`), and the settings blob is
+ * re-POSTed wholesale on every unrelated settings change. See `src/file-store.js`
+ * and `docs/plans/2026-09-12-storage-externalization.md`.
+ *
+ * Folder preferences (pinned / sort / hideEmpty) deliberately STAY in settings:
+ * they are device-local UI state and must not travel with an import.
  */
 import {
     META_KEY,
@@ -13,6 +22,11 @@ import { imageToDataUrl } from './references.js';
 import { normalizeAliases } from './scene-context.js';
 import { canonicalizeNativeImagePath } from './native-image-path.js';
 import { normalizeReferenceCap } from './reference-limits.js';
+import { createFileStore } from './file-store.js';
+import { recordDiagnosticEvent } from './diagnostic-events.js';
+
+export const REFS_FILE_NAME = 'uris_refs.json';
+export const REFS_STORE_VERSION = 1;
 
 /** Shared image-connections settings object, creating the nesting on demand. */
 function imageSettings() {
@@ -28,42 +42,120 @@ function imageSettings() {
     return settings[IMAGE_CONNECTION_SETTINGS_KEY];
 }
 
-function sharedCollection(name) {
-    const settings = imageSettings();
-    if (!Array.isArray(settings[name])) {
-        settings[name] = [];
-    }
-    return settings[name];
+// ── Pool + folders store (server file) ──
+
+/** Callers use the folder-collection name; the document key is shorter. */
+function documentKey(collection) {
+    return collection === 'ref-folders' ? 'folders' : collection;
+}
+
+const refsStore = createFileStore({
+    label: 'references',
+    name: REFS_FILE_NAME,
+    version: REFS_STORE_VERSION,
+    key: 'data',
+    empty: () => ({ refs: [], folders: [] }),
+    legacyRead: () => {
+        const settings = imageSettings();
+        const refs = Array.isArray(settings.refs) ? settings.refs : [];
+        const folders = Array.isArray(settings.folders) ? settings.folders : [];
+        return refs.length || folders.length ? { refs, folders } : null;
+    },
+    legacyWrite: value => {
+        const settings = imageSettings();
+        settings.refs = Array.isArray(value?.refs) ? value.refs : [];
+        settings.folders = Array.isArray(value?.folders) ? value.folders : [];
+        saveSettings();
+    },
+    legacyStrip: () => {
+        const settings = imageSettings();
+        const freedBytes = (Array.isArray(settings.refs) ? JSON.stringify(settings.refs).length : 0)
+            + (Array.isArray(settings.folders) ? JSON.stringify(settings.folders).length : 0);
+        delete settings.refs;
+        delete settings.folders;
+        saveSettings();
+        return freedBytes;
+    },
+    stripLegacyOnLoad: true,
+    countEntries: value => (Array.isArray(value?.refs) ? value.refs.length : null),
+});
+
+/** Resolve the pool store (probe / load / migrate) exactly once per session. */
+export function ensureRefsStoreReady() {
+    return refsStore.ready();
+}
+
+export function refsStoreMode() { return refsStore.mode(); }
+
+/** Await durability of queued pool writes. */
+export function flushRefsWrites() {
+    return refsStore.flush();
+}
+
+/** Drop the settings copy only once the file is authoritative (migration path). */
+export function flushRefsWritesOnUnload() {
+    refsStore.flushOnUnload();
+}
+
+/**
+ * Live pool + folders for the backup exporter. Null in legacy mode, where the
+ * settings copy already carries them and the exporter reads it directly.
+ */
+export async function getRefsForExport() {
+    if (await refsStore.ready() !== 'file') return null;
+    return refsStore.snapshot();
+}
+
+/**
+ * Backup import / rollback: replace the whole pool with the restored records and
+ * await durability. No-op in legacy mode (the settings restore carries them
+ * there). Returns whether the file store accepted the records.
+ */
+export async function replaceRefsRecords(records) {
+    if (await refsStore.ready() !== 'file') return false;
+    await refsStore.replace({
+        refs: Array.isArray(records?.refs) ? records.refs : [],
+        folders: Array.isArray(records?.folders) ? records.folders : [],
+    });
+    _poolCache = null;
+    return true;
+}
+
+/** The collection array inside a (live or cloned) document body. */
+function bucket(value, collection) {
+    const key = documentKey(collection);
+    if (!value[key] || !Array.isArray(value[key])) value[key] = [];
+    return value[key];
 }
 
 let testStore = null;
 
 function collectionStore() {
-    if (testStore) return testStore;
     return {
         available: async () => true,
-        list: async collection => sharedCollection(collection === 'ref-folders' ? 'folders' : collection),
-        create: async (collection, payload) => {
-            sharedCollection(collection === 'ref-folders' ? 'folders' : collection).push(payload);
-            saveSettings();
-            return payload;
+        list: async collection => {
+            await refsStore.ready();
+            const data = refsStore.snapshot();
+            if (!data) return [];
+            const records = data[documentKey(collection)];
+            return Array.isArray(records) ? records : [];
         },
-        update: async (collection, id, payload) => {
-            const records = sharedCollection(collection === 'ref-folders' ? 'folders' : collection);
+        create: async (collection, payload) => refsStore.mutate(data => {
+            bucket(data, collection).push(payload);
+            return payload;
+        }),
+        update: async (collection, id, payload) => refsStore.mutate(data => {
+            const records = bucket(data, collection);
             const index = records.findIndex(record => record.id === id);
             if (index === -1) return null;
             records[index] = payload;
-            saveSettings();
             return payload;
-        },
-        delete: async (collection, id) => {
-            const records = sharedCollection(collection === 'ref-folders' ? 'folders' : collection);
+        }),
+        delete: async (collection, id) => refsStore.mutate(data => {
+            const records = bucket(data, collection);
             const index = records.findIndex(record => record.id === id);
-            if (index !== -1) {
-                records.splice(index, 1);
-                saveSettings();
-            }
-        },
+            if (index !== -1) records.splice(index, 1);
+        }),
     };
 }
 
@@ -76,6 +168,7 @@ export function setRefStoreForTests(store) {
 export function resetRefStoreForTests() {
     testStore = null;
     _poolCache = null;
+    refsStore.reset();
 }
 
 function sharedStore() {
@@ -155,6 +248,7 @@ export async function createRef(data = {}) {
     const response = await store.create('refs', item);
     const persisted = normalizePoolReference({ ...item, ...(response || {}) });
     await refreshPoolCache();
+    recordDiagnosticEvent({ event: 'refs-crud', stage: 'refs', operation: 'create', details: { id: persisted.id } });
     log('Reference created', persisted.id, persisted.name);
     return persisted;
 }
@@ -192,6 +286,7 @@ export async function updateRef(id, patch) {
     const response = await store.update('refs', id, payload);
     const persisted = normalizePoolReference({ ...payload, ...(response || {}) });
     await refreshPoolCache();
+    recordDiagnosticEvent({ event: 'refs-crud', stage: 'refs', operation: 'update', details: { id } });
     return persisted;
 }
 
@@ -199,6 +294,7 @@ export async function deleteRef(id) {
     const store = await requireSharedStore();
     await store.delete('refs', id);
     await refreshPoolCache();
+    recordDiagnosticEvent({ event: 'refs-crud', stage: 'refs', operation: 'delete', details: { id } });
     log('Reference deleted', id);
 }
 
@@ -270,7 +366,9 @@ export async function createFolder(name, opts = {}) {
         order: folders.length,
     }, folders.length);
     const store = await requireSharedStore();
-    return normalizeFolder(await store.create('ref-folders', item), folders.length);
+    const created = normalizeFolder(await store.create('ref-folders', item), folders.length);
+    recordDiagnosticEvent({ event: 'refs-crud', stage: 'refs', operation: 'folder-create', details: { id: created.id } });
+    return created;
 }
 
 export async function updateFolder(id, patch = {}) {
@@ -308,6 +406,7 @@ export async function deleteFolder(id) {
     const prefs = getFolderPrefs();
     if (prefs.pinned.includes(id)) saveFolderPrefs({ pinned: prefs.pinned.filter(pinnedId => pinnedId !== id) });
     await refreshPoolCache();
+    recordDiagnosticEvent({ event: 'refs-crud', stage: 'refs', operation: 'folder-delete', details: { id } });
     log('Folder deleted', id);
 }
 
@@ -334,6 +433,7 @@ export async function mergeFolders(sourceId, targetId) {
         saveFolderPrefs({ pinned: prefs.pinned.filter(pinnedId => pinnedId !== sourceId) });
     }
     await refreshPoolCache();
+    recordDiagnosticEvent({ event: 'refs-crud', stage: 'refs', operation: 'folder-merge', details: { id: sourceId, targetId, refs: affected } });
     log('Folder merged', sourceId, '→', targetId, `(${affected} refs)`);
     return affected;
 }

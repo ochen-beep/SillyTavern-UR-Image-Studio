@@ -24,3 +24,6 @@ Desktop.ini
 # local secrets (should never exist here; guard anyway)
 .env
 .env.*
+
+# cloud-sync conflict leftovers (Nextcloud/Dropbox style)
+*.sync-conflict-*

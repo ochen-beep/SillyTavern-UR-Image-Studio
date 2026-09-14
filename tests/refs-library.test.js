@@ -669,3 +669,13 @@ test('getRefSync resolves from cache after refreshPoolCache', async () => {
     assert.equal(getRefSync('r1')?.name, 'One');
     assert.equal(getRefSync('missing'), null);
 });
+
+test('refs CRUD пишет события в журнал диагностики', async () => {
+    const journal = await import('../src/diagnostic-events.js');
+    journal.resetDiagnosticEventsForTests();
+    const created = await createRef({ name: 'Журнальная' });
+    await deleteRef(created.id);
+    const crud = journal.listDiagnosticEvents().filter(e => e.event === 'refs-crud');
+    assert.deepEqual(crud.map(e => e.operation), ['create', 'delete']);
+    assert.equal(crud[0].details.id, created.id);
+});

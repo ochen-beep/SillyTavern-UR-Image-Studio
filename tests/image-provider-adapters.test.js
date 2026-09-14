@@ -105,6 +105,23 @@ test('openai-images sends edits as multipart with repeated image fields by defau
   assert.equal(transport.calls[0].timeoutMs, 4200);
 });
 
+test('openai-images multipart edit: reference filenames carry a proper extension', async () => {
+  // Relay upstreams derive the expected file type from the multipart filename:
+  // a bare "image" name fails with "Image edit file content does not match its
+  // declared MIME type" even for perfectly valid bytes (novaproxy.space,
+  // incident 2026-09-09: same jpeg bytes → 400 as "image", 200 as "ref.jpg").
+  const transport = makeTransport(jsonResponse({ data: [{ b64_json: 'cmVzdWx0' }] }));
+  await invokeImageProvider({
+    endpoint: 'https://api.example', apiKey: 'secret',
+    connection: { timeoutMs: 4200 },
+    route: route('openai-images', 'dall-e-2'),
+    request: { prompt: 'Edit this', references: [{ dataUrl: PNG }, { dataUrl: JPEG }] }, transport,
+  });
+  const files = transport.calls[0].options.body.getAll('image');
+  assert.deepEqual(files.map(file => file.name), ['image_1.png', 'image_2.jpg']);
+  assert.deepEqual(files.map(file => file.type), ['image/png', 'image/jpeg']);
+});
+
 test('openai-images sends input_fidelity for gpt-image-1 edits only', async () => {
   // gpt-image-1 (incl. namespaced) keeps the documented fidelity parameter...
   for (const modelId of ['gpt-image-1', 'openai/gpt-image-1']) {
@@ -415,6 +432,9 @@ test('chat-completions conditionally sends OpenRouter-compatible image_config', 
     model: 'gemini-3.1-flash-image-preview',
     messages: [{ role: 'user', content: [{ type: 'text', text: 'Wide scene' }] }],
     stream: false,
+    // OpenRouter returns image output on chat/completions only with an
+    // explicit modalities opt-in (gated to the openrouter capability).
+    modalities: ['image', 'text'],
     image_config: { aspect_ratio: '16:9', image_size: '1K' },
   });
 });
@@ -430,6 +450,7 @@ test('generic chat-completions keeps image controls off the wire', async () => {
   const body = JSON.parse(transport.calls[0].options.body);
   assert.equal(body.image_config, undefined);
   assert.equal(body.quality, undefined);
+  assert.equal(body.modalities, undefined, 'modalities is an openrouter-capability-only field');
 });
 
 test('chat-completions image_config supports partial values without quality', async () => {
@@ -597,14 +618,58 @@ test('openai-images warns about dropped size/quality instead of dropping them si
   assert.match(result.warnings[1].details, /hd/);
 });
 
-test('openai-images passes the dall-e quality scale (standard/hd) through', async () => {
-  const transport = makeTransport(jsonResponse({ data: [{ b64_json: 'cG5n' }] }));
-  const result = await invokeImageProvider({
-    endpoint: 'https://api.example/v1', apiKey: 'secret',
-    connection: { timeoutMs: 4100 },
-    route: route('openai-images', 'dall-e-3'),
-    request: { prompt: 'A lighthouse', aspectRatio: '1:1', quality: 'hd', references: [] }, transport,
-  });
-  assert.equal(JSON.parse(transport.calls[0].options.body).quality, 'hd');
-  assert.deepEqual(result.warnings, [], 'hd is valid for dall-e — no warning');
+test('openai-images maps the gpt-image quality scale onto dall-e-3 (low/medium→standard, high→hd)', async () => {
+  // dall-e-3 rejects low/medium/high on the wire; the user-facing scale is
+  // translated instead of dropped, so intent survives the family switch.
+  for (const [requested, wire] of [['low', 'standard'], ['medium', 'standard'], ['high', 'hd']]) {
+    const transport = makeTransport(jsonResponse({ data: [{ b64_json: 'cG5n' }] }));
+    const result = await invokeImageProvider({
+      endpoint: 'https://api.example/v1', apiKey: 'secret',
+      connection: { timeoutMs: 4100 },
+      route: route('openai-images', 'dall-e-3'),
+      request: { prompt: 'A lighthouse', aspectRatio: '1:1', quality: requested, references: [] }, transport,
+    });
+    assert.equal(JSON.parse(transport.calls[0].options.body).quality, wire);
+    assert.deepEqual(result.warnings, [], `${requested} maps cleanly — no warning`);
+  }
+});
+
+test('openai-images omits dall-e-incompatible quality values with a warning', async () => {
+  for (const requested of ['auto', 'standard', 'hd']) {
+    const transport = makeTransport(jsonResponse({ data: [{ b64_json: 'cG5n' }] }));
+    const result = await invokeImageProvider({
+      endpoint: 'https://api.example/v1', apiKey: 'secret',
+      connection: { timeoutMs: 4100 },
+      route: route('openai-images', 'dall-e-3'),
+      request: { prompt: 'A lighthouse', aspectRatio: '1:1', quality: requested, references: [] }, transport,
+    });
+    assert.equal(JSON.parse(transport.calls[0].options.body).quality, undefined, `${requested} is not a dall-e-3 wire value`);
+    assert.match(result.warnings.map(w => w.feature).join(','), /Quality/);
+  }
+});
+
+test('openai-images uses the dall-e-3 size table (16:9 → 1792x1024, gpt-image → 1536x1024)', async () => {
+  // 1536x1024 does not exist for dall-e-3 (HTTP 400), 1792x1024 does not
+  // exist for gpt-image — same aspect, different wire size per family.
+  for (const [model, expectedSize] of [['dall-e-3', '1792x1024'], ['gpt-image-1', '1536x1024']]) {
+    const transport = makeTransport(jsonResponse({ data: [{ b64_json: 'cG5n' }] }));
+    await invokeImageProvider({
+      endpoint: 'https://api.example/v1', apiKey: 'secret',
+      connection: { timeoutMs: 4100 },
+      route: route('openai-images', model),
+      request: { prompt: 'A lighthouse', aspectRatio: '16:9', references: [] }, transport,
+    });
+    assert.equal(JSON.parse(transport.calls[0].options.body).size, expectedSize);
+  }
+  // Portrait: 9:16 → 1024x1792 on dall-e-3, 1024x1536 on gpt-image.
+  for (const [model, expectedSize] of [['dall-e-3', '1024x1792'], ['gpt-image-1', '1024x1536']]) {
+    const transport = makeTransport(jsonResponse({ data: [{ b64_json: 'cG5n' }] }));
+    await invokeImageProvider({
+      endpoint: 'https://api.example/v1', apiKey: 'secret',
+      connection: { timeoutMs: 4100 },
+      route: route('openai-images', model),
+      request: { prompt: 'A lighthouse', aspectRatio: '9:16', references: [] }, transport,
+    });
+    assert.equal(JSON.parse(transport.calls[0].options.body).size, expectedSize);
+  }
 });

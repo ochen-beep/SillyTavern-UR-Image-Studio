@@ -44,9 +44,13 @@
  */
 
 import { DISPLAY_NAME, extractTextFromResponse, readResponseBody } from './core.js';
+import { recordDiagnosticEvent } from './diagnostic-events.js';
 
 export const LF_NETDUMP = 'uris_netdump';
-export const MAX_NET_ENTRIES = 200;
+// 2–3 entries per generation (paid POST, occasional image download, Stage1);
+// 500 holds a working day of evidence. Eviction prefers successes: entries with
+// an error are the whole point of the dump and outlive the routine 200s.
+export const MAX_NET_ENTRIES = 500;
 const DUMP_VERSION = 1;
 const MAX_JSON_BYTES = 65536;   // 64 KB — limit on full response JSON
 const MAX_TEXT_BYTES = 8192;     // 8 KB — on non-JSON/text response
@@ -115,12 +119,18 @@ async function waitForRecorders() {
 
 // ─── Public API ───
 
-/** Record a ready entry (rotation by MAX_NET_ENTRIES). */
+/** Record a ready entry (rotation prefers evicting successes over errors). */
 export function recordNetEntry(entry) {
     return enqueueWrite(async () => {
         const entries = await _readEntries();
         entries.push(entry);
-        while (entries.length > MAX_NET_ENTRIES) entries.shift();
+        while (entries.length > MAX_NET_ENTRIES) {
+            // An entry with an error is the evidence this dump exists for —
+            // evict the oldest successful one first; FIFO only when the tail
+            // is all errors.
+            const evict = entries.findIndex(item => item?.error == null);
+            entries.splice(evict === -1 ? 0 : evict, 1);
+        }
         await _writeEntries(entries);
     });
 }
@@ -594,6 +604,12 @@ export async function exportNetDump() {
     const exportedAt = new Date().toISOString();
     const payload = await buildNetDumpPayload();
     const json = JSON.stringify(payload);
+    // The export act itself belongs to the incident timeline: the journal says
+    // when (and with how many entries) the evidence left the browser.
+    recordDiagnosticEvent({
+        event: 'netdump-export', stage: 'diagnostics', outcome: 'ok',
+        details: { count: payload.meta.count, bytes: json.length },
+    });
     const blob = new Blob([json], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
     const anchor = document.createElement('a');

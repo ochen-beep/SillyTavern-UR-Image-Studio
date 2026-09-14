@@ -4,14 +4,35 @@ import { afterEach, beforeEach, test } from 'node:test';
 
 let context;
 let originalSt;
+let originalFetch;
 
-beforeEach(() => {
+/**
+ * These cases cover card sanitization and the LEGACY settings-backed store.
+ * The user-files probe is forced to fail so the store stays deterministic in
+ * legacy mode; the server-file path has its own suite
+ * (tests/gallery-file-store.test.js).
+ */
+function installLegacyFetch() {
+    globalThis.fetch = async url => {
+        if (String(url).startsWith('/api/files/')) throw new Error('user-files unavailable in this suite');
+        return { ok: true, status: 200, json: async () => [], text: async () => '' };
+    };
+}
+
+beforeEach(async () => {
     originalSt = globalThis.SillyTavern;
+    originalFetch = globalThis.fetch;
     context = { extensionSettings: {}, saveSettingsDebounced: () => {} };
     globalThis.SillyTavern = { getContext: () => context };
+    installLegacyFetch();
+    const { resetGalleryStoreForTests } = await import('../src/gallery-index.js');
+    resetGalleryStoreForTests();
 });
 
-afterEach(() => { globalThis.SillyTavern = originalSt; });
+afterEach(() => {
+    globalThis.SillyTavern = originalSt;
+    globalThis.fetch = originalFetch;
+});
 
 test('persists sanitized card metadata without bytes or secrets', async () => {
     const { addCard, listCards } = await import('../src/gallery-index.js');
@@ -172,6 +193,7 @@ test('reconcileCards scans every distinct folder referenced by cards plus the le
         libs: { localforage: { getItem: async () => '' } },
     };
     globalThis.fetch = async (url, options) => {
+        if (String(url).startsWith('/api/files/')) throw new Error('user-files unavailable in this suite');
         const body = JSON.parse(options.body);
         listedFolders.push(body.folder);
         if (body.folder === 'UR Image Studio') return { ok: true, json: async () => ['legacy.png'] };

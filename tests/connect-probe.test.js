@@ -289,3 +289,34 @@ test('probe: a stream timeout never yields a partial catalog', async () => {
         /Таймаут/,
     );
 });
+
+test('probe: результат «Проверить» пишется в журнал диагностики', async () => {
+    const journal = await import('../src/diagnostic-events.js');
+    journal.resetDiagnosticEventsForTests();
+    const outcome = await probeConnection({
+        endpoint: 'https://linkapi.ai/v1',
+        apiKey: 'sk-test',
+        fetch: async () => jsonResponse({ data: [{ id: 'gpt-image-1' }, { id: 'gemini-3.1-flash-lite-image' }] }),
+        proxiedFetch: async () => { throw new Error('proxy must not be called'); },
+    });
+    assert.equal(outcome.modelIds.length, 2);
+    const event = journal.listDiagnosticEvents().find(e => e.event === 'connection-probe');
+    assert.ok(event, 'probe must write a journal event');
+    assert.equal(event.outcome, 'ok');
+    assert.ok(Number.isFinite(event.durationMs));
+    assert.equal(event.details.models, 2);
+});
+
+test('probe: ошибка «Проверить» пишется в журнал с outcome error', async () => {
+    const journal = await import('../src/diagnostic-events.js');
+    journal.resetDiagnosticEventsForTests();
+    await assert.rejects(probeConnection({
+        endpoint: 'https://linkapi.ai/v1',
+        fetch: async () => { throw new Error('connection refused'); },
+        proxiedFetch: async () => { throw new Error('no proxy'); },
+    }));
+    const event = journal.listDiagnosticEvents().find(e => e.event === 'connection-probe');
+    assert.ok(event, 'a failed probe must also leave a trace');
+    assert.equal(event.outcome, 'error');
+    assert.equal(event.level, 'error');
+});

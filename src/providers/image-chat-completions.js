@@ -122,13 +122,19 @@ export async function generateChatCompletionImage(input) {
       ['image_size', request?.imageSize],
     ].filter(([, value]) => typeof value === 'string' && value.trim()))
     : null;
+  // OpenRouter returns image output on chat/completions only when the request
+  // explicitly opts in via `modalities` — without it the model answers
+  // text-only and the parser finds no image. Other gateways either ignore the
+  // field or reject unknown params, so it is gated to the openrouter capability.
+  const wantsOpenRouterImages = route?.capabilities?.chatCompletionsImageConfig === 'openrouter';
   const body = {
     model: route.modelId,
     messages: [{ role: 'user', content }],
     stream: false,
+    ...(wantsOpenRouterImages ? { modalities: ['image', 'text'] } : {}),
     ...(imageConfig && Object.keys(imageConfig).length ? { image_config: imageConfig } : {}),
   };
-  const wireFields = ['model', 'messages', 'stream', ...(imageConfig && Object.keys(imageConfig).length ? ['image_config'] : [])];
+  const wireFields = ['model', 'messages', 'stream', ...(wantsOpenRouterImages ? ['modalities'] : []), ...(imageConfig && Object.keys(imageConfig).length ? ['image_config'] : [])];
   const omittedFields = [
     ...(imageConfig ? [] : ['aspectRatio', 'imageSize']),
     'quality',

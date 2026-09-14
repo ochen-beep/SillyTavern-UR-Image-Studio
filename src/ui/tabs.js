@@ -80,13 +80,36 @@ export function renderTabs() {
     const host = document.getElementById('urisTabs');
     if (!host) return;
     host.innerHTML = '';
+    let activeBtn = null;
     for (const t of registry.filter(tabVisible)) {
         const btn = document.createElement('button');
         btn.className = 'uris-tab' + (t.id === _active ? ' uris-tab-active' : '');
         btn.textContent = t.label;
         btn.addEventListener('click', () => setActiveTab(t.id));
         host.appendChild(btn);
+        if (t.id === _active) activeBtn = btn;
     }
+    scrollActiveTabIntoView(host, activeBtn);
+}
+
+// Узкий экран: tab-бар горизонтально скроллится, и активная вкладка после
+// renderTabs может остаться за краем (сохранённый activeTab из настроек,
+// переключение из JS: вкладка «Медиа» включается из «Настроек»/«Медиа»).
+// Доскролливаем к активной кнопке, только если она не видна целиком — иначе
+// каждый ререндер дёргал бы бар даже там, где всё помещается.
+function scrollActiveTabIntoView(host, btn) {
+    if (!btn || typeof btn.scrollIntoView !== 'function') return;
+    const raf = typeof requestAnimationFrame === 'function'
+        ? requestAnimationFrame
+        : fn => setTimeout(fn, 0);
+    // rAF: layout после innerHTML (зум --uris-scale, шрифты ST-темы) ещё не устоялся.
+    raf(() => {
+        if (!btn.isConnected) return;
+        const left = btn.offsetLeft, right = left + btn.offsetWidth;
+        const viewL = host.scrollLeft, viewR = viewL + host.clientWidth;
+        if (left >= viewL && right <= viewR) return;
+        btn.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'nearest' });
+    });
 }
 
 // Re-render the active tab (after data changes).

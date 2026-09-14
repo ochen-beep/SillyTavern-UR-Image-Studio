@@ -89,15 +89,39 @@ export function resolveProfile(aliasIndex, type) {
     return aliasIndex.get(String(type || '').toLowerCase().replaceAll('ё', 'е')) || null;
 }
 
-/** Первый алиас, встреченный в тексте (для key-word триггера юзера). */
-export function triggerAliases(aliasIndex, text) {
+/** Экранирование строки для встраивания в RegExp. */
+export function escapeRegExp(str) {
+    return String(str || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+/**
+ * Регекс алиаса с границами слов. Границы — \p{L}\p{N} (буквы И цифры):
+ * «img2» не должен матчить алиас «img», иначе номерованные обращения
+ * («селфи2») ловят чужой профиль.
+ */
+function aliasBoundaryRegex(alias) {
+    return new RegExp(`(?<![\\p{L}\\p{N}])${escapeRegExp(alias)}(?![\\p{L}\\p{N}])`, 'iu');
+}
+
+/**
+ * Самое раннее вхождение любого алиаса с границами слов (не первый по порядку
+ * реестра). Возвращает {alias, profile, index, length} или null.
+ * index/length позволяют вырезать ИМЕННО совпавшее вхождение: замена первой
+ * подстроки задевала «фотограф» вместо слова «фото» («фотограф сказал фото»
+ * → промпт «граф сказал фото» уходил платному API).
+ */
+export function findAliasMatch(aliasIndex, text) {
     const t = String(text || '');
+    let best = null;
     for (const [alias, profile] of aliasIndex) {
         if (!alias) continue;
-        const re = new RegExp(`(^|[^\\p{L}])${alias.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}([^\\p{L}]|$)`, 'iu');
-        if (re.test(t)) return { alias, profile };
+        let m = null;
+        try { m = aliasBoundaryRegex(alias).exec(t); } catch { /* невалидный алиас — пропустить */ }
+        if (m && (best === null || m.index < best.index)) {
+            best = { alias, profile, index: m.index, length: m[0].length };
+        }
     }
-    return null;
+    return best;
 }
 
 /**

@@ -5,7 +5,10 @@
  */
 
 export const LF_DIAGNOSTIC_EVENTS = 'uris_event_log';
-export const MAX_DIAGNOSTIC_EVENTS = 180;
+// Sized for a heavy session (~13 events per successful generation): the ring
+// must hold a working day of actions, not just the last dozen generations.
+// ~1000 entries ≈ 0.5 MB in localforage — negligible for the evidence it keeps.
+export const MAX_DIAGNOSTIC_EVENTS = 1000;
 const MAX_EVENT_CHARS = 1200;
 const PERSIST_DELAY_MS = 500;
 
@@ -59,12 +62,6 @@ function safeValue(value, depth = 0) {
         }
     }
     return out;
-}
-
-function emitChanged() {
-    // The journal is intentionally storage-first. It does not dispatch a
-    // synchronous window event because callers may be inside SillyTavern event
-    // handlers whose tests and lifecycle depend on exact event ordering.
 }
 
 async function readPersisted() {
@@ -123,8 +120,13 @@ export function recordDiagnosticEvent(event, details = {}) {
         details: safeValue(eventDetails),
     };
     events.push(entry);
-    while (events.length > MAX_DIAGNOSTIC_EVENTS) events.shift();
-    emitChanged();
+    while (events.length > MAX_DIAGNOSTIC_EVENTS) {
+        // Priority eviction: a warn/error is the harder evidence, so a flood of
+        // routine log events evicts the oldest log-level entry first; the oldest
+        // of anything is only touched when the tail is all warn/error.
+        const evict = events.findIndex(item => (item.level || 'log') === 'log');
+        events.splice(evict === -1 ? 0 : evict, 1);
+    }
     schedulePersist();
     return entry;
 }
@@ -138,7 +140,6 @@ export async function loadDiagnosticEvents() {
     }
     loaded = true;
     schedulePersist();
-    emitChanged();
     return listDiagnosticEvents();
 }
 
@@ -173,7 +174,6 @@ export async function clearDiagnosticEvents() {
     loaded = true;
     suppressWrites = false;
     schedulePersist();
-    emitChanged();
     return cleared;
 }
 

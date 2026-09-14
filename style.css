@@ -758,9 +758,20 @@
     .uris-gallery-grid { grid-template-columns: repeat(2, 1fr); }
     .uris-card-actions { flex-wrap: wrap; }
     .uris-card-btn { padding: 10px; font-size: calc(16px * var(--uris-font-scale, 1)); min-width: 44px; min-height: 44px; }
-    /* Скроллтаб для 5 вкладок на узком экране */
-    .uris-tabs { overflow-x: auto; -webkit-overflow-scrolling: touch; }
-    .uris-tab { flex: 0 0 auto; padding: 8px 12px; white-space: nowrap; min-width: 60px; }
+    /* Скроллтаб для 6+ вкладок на узком экране. Скроллбар скрыт, жест-подсказка
+       не нужна: активная вкладка всегда автоматически доскролливается (tabs.js).
+       scrollbar-width: none + ::-webkit-scrollbar — как у .uris-scroll-x. */
+    .uris-tabs { overflow-x: auto; overflow-y: hidden; -webkit-overflow-scrolling: touch; scrollbar-width: none; }
+    .uris-tabs::-webkit-scrollbar { display: none; }
+    /* Глобальный guard `.uris-window button { touch-action: pan-y }` разрешает
+       ТОЛЬКО вертикальный пан и на тач-устройстве глушит горизонтальный свайп,
+       начатый на кнопке вкладки (пересечение жестов идёт от элемента под
+       пальцем) — бар почти целиком покрыт кнопками, и скролл tab-бара умирал.
+       pan-x инвертирует запрет: тапы остаются кликами, вертикальный свайп
+       отдаётся .uris-body, горизонтальный листает сам бар. Скоуп
+       `.uris-tabs .uris-tab` обязателен: у guard специфичность (0,1,1) — ВЫШЕ,
+       чем у голого .uris-tab (0,1,0), порядок в файле бы не спас. */
+    .uris-tabs .uris-tab { flex: 0 0 auto; padding: 8px 12px; white-space: nowrap; min-width: 60px; touch-action: pan-x; }
 }
 @supports not (height: 100dvh) {
     @media (max-width: 768px) {
@@ -1848,6 +1859,33 @@
 }
 .uris-settings-actions { display: flex; flex-wrap: wrap; gap: 6px; }
 .uris-settings-actions .uris-btn { flex: 1 1 auto; }
+
+/* ── Панель «Хранилище» ──
+   Read-only отчёт: где какие данные лежат и сколько осталось в settings.json.
+   Позволяет проверить результат переезда без консоли. */
+.uris-store-list { display: flex; flex-direction: column; gap: 5px; margin-bottom: 8px; }
+.uris-store-row {
+    display: flex; align-items: baseline; gap: 8px;
+    font-size: var(--uris-font-sm); color: var(--uris-text-strong);
+}
+.uris-store-name {
+    flex: 1 1 auto; min-width: 0;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.uris-store-mode {
+    flex: 0 0 auto; padding: 0 6px; border-radius: 999px;
+    border: 1px solid var(--uris-border-soft);
+    font-size: var(--uris-font-xs); text-transform: uppercase; letter-spacing: .04em;
+}
+.uris-store-mode-file { color: var(--uris-accent); border-color: var(--uris-accent); }
+.uris-store-mode-legacy { color: var(--uris-text-dim); }
+.uris-store-mode-readonly { color: var(--uris-warning, #c9a030); border-color: var(--uris-warning, #c9a030); }
+.uris-store-mode-unknown { color: var(--uris-text-dim); opacity: .7; }
+.uris-store-mode-info { color: var(--uris-text-dim); border-style: dashed; }
+.uris-store-detail {
+    flex: 0 0 auto; font-size: var(--uris-font-xs); color: var(--uris-text-dim);
+    font-variant-numeric: tabular-nums;
+}
 
 /* ── Разворачиваемый редактор текста (кнопка у компактных полей) ──
    Паттерн ST: компактное поле + иконка fa-maximize -> большой popup-редактор

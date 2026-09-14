@@ -597,3 +597,42 @@ test('stage2 chain is keyed per chat: the same msgId in another chat does not wa
         await assert.rejects(second, e => e?.name === 'AbortError');
     } finally { restore(); }
 });
+
+test('stage2-end закрывает генерацию с outcome, chatHash и длительностью', async () => {
+    const journal = await import('../src/diagnostic-events.js');
+    journal.resetDiagnosticEventsForTests();
+    const connId = 'browser-end-fields';
+    const route = {
+        source: 'openai-models',
+        modelId: 'gpt-image-1',
+        generationContract: 'openai-images',
+        contractVersion: 1,
+        capabilities: { generate: 'supported', references: 'supported', edit: 'unknown', maxReferences: 5 },
+        transport: { bodyKind: 'json', proxyEligible: true, directCors: 'preferred' },
+    };
+    const { createConnection } = await import('../src/connection-store.js');
+    await createConnection({
+        id: connId, kind: 'image', name: `Test ${connId}`,
+        endpoint: 'https://api.openai.test/v1', selectedRoute: route,
+    });
+    await lfMock.setItem(`uris_api_key:${connId}`, 'test-key');
+    const restore = mockFetch((url) => {
+        if (String(url).endsWith('/images/generations')) {
+            return { ok: true, status: 200, json: async () => ({ data: [{ b64_json: 'b3JkZXI=' }] }) };
+        }
+        if (String(url) === '/api/images/upload') return { ok: true, status: 200, json: async () => ({ path: 'user/images/UR%20Image%20Studio/end-fields.png' }) };
+        throw new Error(`unexpected ${url}`);
+    });
+    try {
+        const { runStage2ForDraft } = await import('../src/pipeline-stage2.js');
+        await runStage2ForDraft(
+            { chatId: 'test-chat', msgId: 30, messageText: 'A cat.', templateId: null, chatConfig: { imageProfileId: connId, templateId: null, imageRoute: route } },
+            undefined, undefined, { instruction: instr },
+        );
+        const end = journal.listDiagnosticEvents().find(e => e.event === 'stage2-end');
+        assert.ok(end, 'stage2-end must be recorded');
+        assert.equal(end.outcome, 'ready');
+        assert.ok(end.chatHash && end.chatHash.startsWith('h'), 'chatHash correlates the close-out with the chat');
+        assert.ok(Number.isFinite(end.durationMs) && end.durationMs >= 0);
+    } finally { restore(); }
+});

@@ -7,7 +7,7 @@ import { state, getCtx } from '../core.js';
 import { hashMessage } from '../generation-drafts.js';
 import { recordDiagnosticEvent } from '../diagnostic-events.js';
 import { parseInline } from './grammar.js';
-import { buildAliasIndex, sanitizeTriggerList, triggerAliases } from './triggers.js';
+import { buildAliasIndex, sanitizeTriggerList, findAliasMatch } from './triggers.js';
 import { getSlot, upsertItem, getConfig, reconcileMessageSlots } from './store.js';
 import { planScan, queueInlineJob, cancelInlineJobs } from './runner.js';
 
@@ -32,10 +32,11 @@ export async function scanMessage(msgId, { auto = true } = {}) {
         const knownTypes = new Set(buildAliasIndex(registry).keys());
         const messageHash = hashMessage(mes);
         const stored = getSlot(msgId);
+        // planScan решает только постановку платных генераций; статусы
+        // оболочек (pending/ready/changed/error) выводит render.js.
         const actions = planScan({
             msgId, messageHash, markers, stored, auto,
             knownTypes,
-            inFlight: new Set(state.activeGenerations.keys()),
         });
         let dirty = false;
         for (const a of actions) {
@@ -75,17 +76,23 @@ export function bindScanner() {
     const et = ctx.event_types;
     _handlers = {
         ended: () => { const chat = getCtx().chat; const i = chat?.length ? chat.length - 1 : null; if (i != null) scanMessage(i).catch(() => {}); },
-        swiped: (i) => { cancelInlineJobs(); return scanMessage(typeof i === 'number' ? i : getCtx().chat?.length - 1, { auto: false }); },
-        edited: (i) => { cancelInlineJobs(); return scanMessage(typeof i === 'number' ? i : null, { auto: false }); },
+        // Свайп/правка одного сообщения убивает только ЕГО задачи: чужие
+        // (уже оплаченные) генерации других постов продолжаются. Глобальный
+        // cancel остаётся на CHAT_CHANGED и выгрузку расширения.
+        swiped: (i) => { cancelInlineJobs(typeof i === 'number' ? i : null); return scanMessage(typeof i === 'number' ? i : getCtx().chat?.length - 1, { auto: false }); },
+        edited: (i) => { cancelInlineJobs(typeof i === 'number' ? i : null); return scanMessage(typeof i === 'number' ? i : null, { auto: false }); },
         deleted: () => reconcileMessageSlots(),
         chatChanged: () => { cancelInlineJobs(); try { window.dispatchEvent(new CustomEvent('uris:inline-update', {})); } catch { /* node */ } },
         userSent: (i) => {
             if (!inlineActive() || !getConfig().listenUser) return;
             const text = String(getCtx().chat?.[i]?.mes || '');
             const idx = buildAliasIndex(sanitizeTriggerList(state.settings?.inlineTriggers || []));
-            const hit = triggerAliases(idx, text);
+            const hit = findAliasMatch(idx, text);
             if (!hit) return;
-            const desc = text.replace(new RegExp(hit.alias.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'iu'), '').replace(/\s+/g, ' ').trim() || '{{char}} photo';
+            // Вырезаем именно совпавшее (граничное) вхождение — срезом по
+            // index/length, а не replace первой подстроки без границ.
+            const desc = (text.slice(0, hit.index) + ' ' + text.slice(hit.index + hit.length))
+                .replace(/\s+/g, ' ').trim() || '{{char}} photo';
             queueInlineJob({ msgId: Number(i), idx: 0, type: hit.profile.id, desc }).catch(() => {});
         },
     };

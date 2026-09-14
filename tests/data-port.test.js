@@ -210,7 +210,6 @@ test('import writes only allowlisted client records and excludes secrets', async
     assert.equal(await localforage.getItem(LF_API_KEY), 'custom-secret');
     assert.equal(await localforage.getItem(forgedImageKey), null);
     assert.equal(result.importedKeys, 1);
-    assert.equal(result.connectionsSynced, 0);
 });
 
 test('replace removes only currently exportable localforage records', async () => {

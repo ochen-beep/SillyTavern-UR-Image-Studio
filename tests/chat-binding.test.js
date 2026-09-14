@@ -271,8 +271,12 @@ test('applyChatConfigToState projects schema-v5 config onto runtime state', asyn
     assert.equal(core.state.activeImageProfileId, 'img-1');
     assert.equal(core.state.activeTemplateId, 'tpl-1');
     assert.equal(Object.hasOwn(core.state, 'activeCharacterIds'), false);
-    assert.equal(core.state.settings.automationMode, 'full-pipeline');
-    assert.equal(core.state.settings.generationFlow, 'user-only');
+    // Runtime projection lives on dedicated chat-scoped fields: state.settings
+    // is persisted globally and must not absorb the last visited chat's mode.
+    assert.equal(core.state.chatAutomationMode, 'full-pipeline');
+    assert.equal(core.state.chatGenerationFlow, 'user-only');
+    assert.equal(Object.hasOwn(core.state.settings, 'automationMode'), false);
+    assert.equal(Object.hasOwn(core.state.settings, 'generationFlow'), false);
 });
 
 test('applyChatConfigToState ignores pre-v4 input', () => {
@@ -282,13 +286,13 @@ test('applyChatConfigToState ignores pre-v4 input', () => {
 });
 
 test('schema-v5 migration drops copyToStGallery and galleryMode from loaded configs', async () => {
-    const { normalizeChatConfig } = await import('../src/chat-binding.js');
+    const { normalizeChatBinding } = await import('../src/chat-binding.js');
     const legacy = {
         schemaVersion: 4,
         config: { imageProfileId: 'p1', templateId: 't1', automationMode: 'manual', generationFlow: 'ai-only', galleryMode: 'st-only', copyToStGallery: true },
         refs: { referenceIds: [] },
     };
-    const normalized = normalizeChatConfig(legacy);
+    const normalized = normalizeChatBinding(legacy);
     assert.equal(normalized.schemaVersion, 5);
     assert.equal(Object.hasOwn(normalized.config, 'copyToStGallery'), false);
     assert.equal(Object.hasOwn(normalized.config, 'galleryMode'), false);

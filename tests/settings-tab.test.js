@@ -122,7 +122,7 @@ test('render reflects stored scale and toggles', () => {
     assert.equal(root.querySelector('#uris_use_all_params').checked, false);
 });
 
-test('slider input applies the scale live: state, CSS var and debounced save', async () => {
+test('slider input applies the scale live and DEBOUNCES the settings save', async () => {
     const root = makeRoot();
     render(root);
     const slider = root.querySelector('#urisUiScale');
@@ -131,10 +131,13 @@ test('slider input applies the scale live: state, CSS var and debounced save', a
     assert.equal(state.settings.uiScale, 1.25);
     assert.equal(globalThis.document.documentElement.style._props['--uris-scale'], '1.25');
     assert.equal(root.querySelector('#urisUiScaleValue').textContent, '125%');
-    assert.ok(saveCalls > 0);
+    // The save is debounced: nothing synchronously, one write after the window.
+    assert.equal(saveCalls, 0, 'slider input must not POST settings.json per drag step');
+    await new Promise(resolve => setTimeout(resolve, 500));
+    assert.ok(saveCalls > 0, 'debounced save lands after the window');
 });
 
-test('font slider input applies the font scale live', async () => {
+test('font slider input applies the font scale live and debounces the save', async () => {
     const root = makeRoot();
     render(root);
     const slider = root.querySelector('#urisFontScale');
@@ -143,7 +146,9 @@ test('font slider input applies the font scale live', async () => {
     assert.equal(state.settings.fontScale, 1.1);
     assert.equal(globalThis.document.documentElement.style._props['--uris-font-scale'], '1.1');
     assert.equal(root.querySelector('#urisFontScaleValue').textContent, '110%');
-    assert.ok(saveCalls > 0);
+    assert.equal(saveCalls, 0, 'slider input must not POST settings.json per drag step');
+    await new Promise(resolve => setTimeout(resolve, 500));
+    assert.ok(saveCalls > 0, 'debounced save lands after the window');
 });
 
 test('reset buttons restore both scales to 100%', async () => {

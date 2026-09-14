@@ -1,6 +1,7 @@
 // @ts-check
 /** Prompt-template persistence. Only base mode and instruction records are supported. */
 import { getCtx, getImageConnectionSettings, IMAGE_CONNECTION_SETTINGS_KEY, uid, log, state, saveSettings } from './core.js';
+import { recordDiagnosticEvent } from './diagnostic-events.js';
 import {
     applyTemplateMutation,
     ensureTemplateStoreReady,
@@ -152,6 +153,7 @@ export async function createInstructionTemplate(data = {}) {
     if (cachedTemplates === null) await listTemplates();
     const persisted = await (await store()).create(item);
     if (!cachedTemplates.some(template => template.id === persisted.id)) cachedTemplates.push(persisted);
+    recordDiagnosticEvent({ event: 'template-crud', stage: 'templates', operation: 'create', details: { id: persisted.id } });
     log('Создан instruction-шаблон', persisted.id);
     return persisted;
 }
@@ -171,6 +173,7 @@ export async function saveTemplate(patch) {
     const persisted = await (await store()).update(patch.id, next);
     if (!persisted) return null;
     cachedTemplates[index] = persisted;
+    recordDiagnosticEvent({ event: 'template-crud', stage: 'templates', operation: 'update', details: { id: patch.id } });
     return persisted;
 }
 
@@ -186,6 +189,7 @@ export async function deleteTemplate(id) {
         }
     }
     log('Удалён шаблон промпта', id);
+    recordDiagnosticEvent({ event: 'template-crud', stage: 'templates', operation: 'delete', details: { id } });
 }
 
 /**

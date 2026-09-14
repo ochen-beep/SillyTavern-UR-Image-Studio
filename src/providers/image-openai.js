@@ -6,9 +6,16 @@ import { endpointBase, imageResultFromValue, providerError, readJsonResponse, re
 // Map all VALID_ASPECT_RATIOS (core.js) to OpenAI/CloseAI image sizes. The
 // previous table only covered 5 ratios; selecting 3:4, 4:3, 4:5, 5:4 or 21:9
 // used to omit `size` entirely, so the provider picked an aspect freely
-// (often 9:16) and the user's choice was silently ignored. The size strings
-// here follow the OpenAI Images taxonomy (1K/2K/4K) which CloseAI and most
-// OpenAI-compatible gateways also accept.
+// (often 9:16) and the user's choice was silently ignored.
+//
+// Two size taxonomies exist and are NOT interchangeable:
+//   - gpt-image-*: 1024x1024 | 1536x1024 | 1024x1536 (+ auto). 1792x1024 is
+//     rejected by strict gateways.
+//   - dall-e-3:    1024x1024 | 1792x1024 | 1024x1792. 1536x1024 does not
+//     exist → HTTP 400 "invalid size".
+// The family is derived from the model id; unknown families use the
+// gpt-image table (the current gateway mainstream). Unmapped ratios still
+// omit `size` and surface a paramWarning.
 const ASPECT_SIZES = new Map([
   ['1:1', '1024x1024'],
   // Portrait
@@ -18,24 +25,43 @@ const ASPECT_SIZES = new Map([
   // Ultrawide landscape - closest 2K landscape slot.
   ['21:9', '1536x1024'],
 ]);
+const ASPECT_SIZES_DALLE = new Map([
+  ['1:1', '1024x1024'],
+  // Landscape (dall-e-3's only wide slot)
+  ['3:2', '1792x1024'], ['4:3', '1792x1024'], ['5:4', '1792x1024'], ['16:9', '1792x1024'], ['21:9', '1792x1024'],
+  // Portrait
+  ['2:3', '1024x1792'], ['3:4', '1024x1792'], ['4:5', '1024x1792'], ['9:16', '1024x1792'],
+]);
 const QUALITY_VALUES = new Set(['auto', 'low', 'medium', 'high']);
-// dall-e models speak the legacy quality scale (standard/hd), gpt-image the
-// new one (low/medium/high). Both accept 'auto' (provider default).
-const DALLE_QUALITY_VALUES = new Set(['auto', 'standard', 'hd']);
+// dall-e-3 speaks the legacy quality scale (standard/hd) and REJECTS
+// 'auto'/gpt-image values with HTTP 400. low/medium map to the faster
+// 'standard', high to the qualitative 'hd' — user intent survives; 'auto'
+// is dropped (warning) because dall-e has no "provider default" knob.
+const DALLE_QUALITY_MAP = new Map([['low', 'standard'], ['medium', 'standard'], ['high', 'hd']]);
+
+/** dall-e-3 family: its own size table and legacy quality vocabulary. */
+function isDalleModel(route) {
+  return /dall[-_. ]?e/i.test(String(route?.modelId || ''));
+}
 
 /** Quality values this route's model family actually accepts on the wire. */
 function acceptedQualityValues(route) {
-  return /dall[-_.]?e/i.test(String(route?.modelId || '')) ? DALLE_QUALITY_VALUES : QUALITY_VALUES;
+  return isDalleModel(route) ? new Set(DALLE_QUALITY_MAP.keys()) : QUALITY_VALUES;
 }
 function acceptedQuality(route, quality) {
-  return typeof quality === 'string' && acceptedQualityValues(route).has(quality) ? quality : undefined;
+  if (typeof quality !== 'string' || !acceptedQualityValues(route).has(quality)) return undefined;
+  return isDalleModel(route) ? DALLE_QUALITY_MAP.get(quality) : quality;
 }
 
 function generationUrl(endpoint) { return `${endpointBase(endpoint)}/images/generations`; }
 function editUrl(endpoint) { return `${endpointBase(endpoint)}/images/edits`; }
 
+function sizesForRoute(route) {
+  return isDalleModel(route) ? ASPECT_SIZES_DALLE : ASPECT_SIZES;
+}
+
 function generationBody(route, request) {
-  const size = ASPECT_SIZES.get(request?.aspectRatio);
+  const size = sizesForRoute(route).get(request?.aspectRatio);
   const quality = acceptedQuality(route, request?.quality);
   // output_format is intentionally omitted: gpt-image-1 defaults to PNG on
   // OpenAI, and other providers (Imagen proxies, etc.) may reject or ignore
@@ -85,18 +111,25 @@ function editProtocol(connection) {
   return connection?.editProtocol === 'json' ? 'json' : 'multipart';
 }
 
+// Multipart filenames must carry an extension consistent with the declared
+// MIME: relay upstreams derive the expected file type from the filename, and a
+// bare "image" name fails validation with "Image edit file content does not
+// match its declared MIME type" even for perfectly valid bytes (novaproxy.space
+// incident 2026-09-09: same jpeg bytes → 400 as "image", 200 as "ref.jpg").
+const FILE_EXT_BY_MIME = { 'image/png': 'png', 'image/jpeg': 'jpg', 'image/webp': 'webp' };
+
 function formData(route, request, references) {
   const form = new FormData();
   form.append('model', route.modelId);
   form.append('prompt', String(request?.prompt || ''));
   form.append('n', '1');
   // No response_format: GPT Image rejects it (see generationBody).
-  const size = ASPECT_SIZES.get(request?.aspectRatio);
+  const size = sizesForRoute(route).get(request?.aspectRatio);
   if (size) form.append('size', size);
   const quality = acceptedQuality(route, request?.quality);
   if (quality) form.append('quality', quality);
   if (GPT_IMAGE_MODEL.test(String(route.modelId || ''))) form.append('input_fidelity', 'high');
-  for (const reference of references) form.append('image', new Blob([Uint8Array.from(atob(reference.data), c => c.charCodeAt(0))], { type: reference.mimeType }), 'image');
+  references.forEach((reference, index) => form.append('image', new Blob([Uint8Array.from(atob(reference.data), c => c.charCodeAt(0))], { type: reference.mimeType }), `image_${index + 1}.${FILE_EXT_BY_MIME[reference.mimeType] || 'bin'}`));
   return form;
 }
 
@@ -106,7 +139,7 @@ function formData(route, request, references) {
 // proxy, so it is the dialect to pick for providers that send no CORS headers
 // (CloseAI, etc.). Selected per connection via `editProtocol: 'json'`.
 function editJsonBody(route, request, references) {
-  const size = ASPECT_SIZES.get(request?.aspectRatio);
+  const size = sizesForRoute(route).get(request?.aspectRatio);
   const quality = acceptedQuality(route, request?.quality);
   const body = {
     model: route.modelId,
@@ -190,7 +223,7 @@ function shouldFallbackToProxyJson(error, connection) {
  */
 function paramWarnings(route, request) {
   const warnings = [];
-  if (request?.aspectRatio && !ASPECT_SIZES.get(request.aspectRatio)) {
+  if (request?.aspectRatio && !sizesForRoute(route).get(request.aspectRatio)) {
     warnings.push({ feature: 'Стороны', details: `соотношение ${request.aspectRatio} не поддерживается OpenAI Images API — параметр size опущен` });
   }
   if (request?.quality && acceptedQuality(route, request.quality) === undefined) {
