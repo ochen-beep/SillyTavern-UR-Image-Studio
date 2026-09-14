@@ -1,22 +1,29 @@
 # dev ↔ deploy workflow
 
-Два дерева одного и того же расширения. Оба — клоны
+Два дерева одного расширения и **одна общая git-история**. Оба — клоны
 `https://github.com/ochen-beep/SillyTavern-UR-Image-Studio.git`, ветка
-`feat/inline-engine`, но с разными рабочими состояниями. Эта заметка фиксирует,
-что где лежит и как синхронизировать, чтобы больше не получать
-`*.sync-conflict-*` мусор и расхождения в пол-релиза.
+`feat/inline-engine`.
 
-| | dev | deploy |
+| | dev | deploy (стенд) |
 |---|---|---|
 | путь | `D:\VC CODE\UR Image Studio` | `D:\SillyTavern QA\data\default-user\extensions\UR Image Studio` |
-| роль | источник правды, полный suite | то, что реально грузит SillyTavern |
+| роль | источник правды | то, что грузит SillyTavern |
+| содержимое | ядро расширения | ядро + серверный WIP (ниже) |
 | тесты | `npm test` | `npm test` + `npm run test:server` |
 | стенд | — | http://127.0.0.1:8001/ |
 
+Инвариант: **deploy = dev + серверный остров**. Проверка:
+
+```bash
+cd "D:/SillyTavern QA/data/default-user/extensions/UR Image Studio"
+git diff --stat devrepo/feat/inline-engine HEAD
+# ожидаемо: только src/image-recovery.js, src/server-*.js, src/store-*.js,
+# src/reference-check.js и их тесты. Любой другой файл в выводе — расхождение.
+```
+
 ## Что есть только в deploy
 
-Серверная линия разработки — изолированный, **ещё не подключённый** к
-расширению остров:
+Серверная линия — изолированный, **ещё не подключённый** к расширению остров:
 
 ```
 src/image-recovery.js           восстановление серверных запросов
@@ -26,65 +33,62 @@ src/server-connection-state.js  проба статуса серверного �
 src/store-state.js              проба /store/status
 src/store-migration.js          миграция коллекций в серверный store
 src/reference-check.js          проверка референсов
-tests/server-*.test.js          тесты этого острова (~23 файла)
-tests/server-plugin/            фикстуры (fake-router, temp-store, ...)
+tests/server-*.test.js          тесты острова, tests/server-plugin/ — фикстуры
 ```
 
 Ни `index.js`, ни один общий модуль остров не импортирует: его потребители —
-только он сам и его тесты. Поэтому синхронизация общих файлов его не ломает.
+только он сам и его тесты. Поэтому слияния его не ломают.
 
-Часть островных тестов (`tests/server-*.test.js`) импортирует
-`../server-plugin/src/...` — **каталог `server-plugin/` отсутствует в обоих
-деревьях** (в dev-истории его тоже нет). Эти тесты запускаются отдельным
-скриптом и падают на `ERR_MODULE_NOT_FOUND`, пока плагин не появится:
+**Известное красное**: часть `tests/server-*.test.js` импортирует
+`../server-plugin/src/...`, а каталога `server-plugin/` нет ни в одном дереве
+(в истории dev его тоже нет). Эти тесты выведены в отдельный вход:
 
 ```bash
-npm run test:server          # ожидаемо красный без server-plugin/
+npm run test:server          # ожидаемо красный, пока плагина нет
 ```
 
-`tests/server-stage2-recovery.test.js` и `tests/server-store-api.test.js` от
-плагина не зависят; первый содержит 2 pre-existing падения (`2 !== 1`,
-похоже на протечку состояния между тестами), второй зелёный.
+Не зависят от плагина: `server-store-api.test.js` (зелёный) и
+`server-stage2-recovery.test.js` (2 pre-existing падения `2 !== 1`, похоже на
+протечку состояния между тестами).
 
 ## Синхронизация
 
-Направление всегда **dev → deploy**, потому что git-история линейна и deploy
-стоит на коммите-предке. Обратно переносят только файлы острова.
+Остров живёт только в стенде, ядро правится в dev. `devrepo` — локальный
+remote, указывающий на рабочий каталог dev (настраивается один раз):
 
 ```bash
-DEV="/d/VC CODE/UR Image Studio"
-DEP="/d/SillyTavern QA/data/default-user/extensions/UR Image Studio"
-
-# 1. что разошлось (без node_modules/.git/tmp/логов)
-cd "$DEV" && find . -type f -not -path './.git/*' -not -path './node_modules/*' \
-  -not -path './tmp_stfixture/*' -not -name '*.log' -not -name '.nano-*' \
-  | sed 's|^\./||' | sort > /tmp/dev_files.txt
-cd "$DEP" && find . -type f -not -path './.git/*' -not -path './node_modules/*' \
-  -not -path './tmp_stfixture/*' -not -name '*.log' -not -name '.nano-*' \
-  | sed 's|^\./||' | sort > /tmp/dep_files.txt
-comm -12 /tmp/dev_files.txt /tmp/dep_files.txt > /tmp/common.txt
-
-# 2. побайтовое сравнение общих файлов
-while IFS= read -r f; do
-  cmp -s "$DEV/$f" "$DEP/$f" || echo "DIFF  $f"
-done < /tmp/common.txt
-
-# 3. перенести подтверждённые расхождения (dev — автор)
-cp "$DEV/<file>" "$DEP/<file>"
+cd "D:/SillyTavern QA/data/default-user/extensions/UR Image Studio"
+git remote add devrepo "D:/VC CODE/UR Image Studio"   # один раз
+git fetch devrepo feat/inline-engine
+git merge devrepo/feat/inline-engine                   # обычно чисто
 ```
 
-Правила, чтобы не потерять работу:
+Обратно (забрать остров в dev) — тем же merge из стенда.
 
-1. **Не копировать каталоги целиком** — `cp -r src deploy/src` затрёт остров.
-2. Перед переносом файла убедиться, что в deploy-версии нет уникальных строк:
-   `diff "$DEV/$f" "$DEP/$f"` — все `>`-строки должны быть старым кодом.
-3. `*.sync-conflict-*` в `.gitignore`; при появлении — сначала `diff` с текущим
-   файлом, только потом удалять. Все 28 копий от 2026-09-14 оказались старыми
-   снимками; ни одна не содержала уникального кода.
+Правила:
+
+1. Правь ядро в dev. В стенде — только серверный остров, иначе merge начнёт
+   конфликтовать на каждом шаге.
+2. **Не копировать каталоги целиком** (`cp -r src deploy/src` затрёт остров).
+   Если очень нужно копировать файл — сначала `diff` и убедиться, что в целевой
+   версии нет уникальных строк.
+3. `*.sync-conflict-*` в `.gitignore`. При появлении — сначала `diff` с текущим
+   файлом и проверка blob'а в истории, только потом удаление.
 4. Тесты гонять в обоих деревьях одинаковым скриптом.
+5. `git fetch devrepo` после каждого коммита в dev, иначе `git diff` против
+   устаревшего remote соврёт про расхождения.
+
+## История вопроса
+
+До 2026-09-14 деревья разъезжались: стенд отставал на 2 коммита плюс весь
+незакоммиченный батч наблюдаемости, а облачная синхронизация создавала
+`*.sync-conflict-*` копии. Версии при этом совпадали (0.8.6), что читалось как
+«код тот же» — хотя стенд работал на старом коде (журнал 180 записей вместо
+1000, отсутствие фиксов store/init/lightbox). Убрано коммитом `beecb46`,
+истории объединены merge-коммитом `c4e270c`.
 
 ## Проверка на стенде
 
 1. `http://127.0.0.1:8001/` — расширение грузится из deploy-дерева.
-2. Хард-реload страницы после правок (модули кэшируются).
-3. Консоль: `[URIS]` логи; панель расширения → Настройки → Диагностика.
+2. Хард-reload страницы после правок (ES-модули кэшируются браузером).
+3. Консоль: логи `[URIS]`; панель расширения → Настройки → Диагностика.
