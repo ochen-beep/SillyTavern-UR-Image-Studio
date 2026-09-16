@@ -6,6 +6,7 @@ import { state, saveSettings, escapeHtml, error, showConfirmModal } from '../cor
 import { exportDiagnosticDump } from '../diagnostic-dump.js';
 import { listUrisErrors, clearUrisErrors, formatUrisError, recordUrisError } from '../error-pool.js';
 import { listPendingBrowserRequests, discardPendingBrowserRequest, clearPendingBrowserRequests } from '../browser-image-recovery.js';
+import { bindTabBarScroll } from './tab-bar-scroll.js';
 
 const WIN_ID = 'urisWindow';
 export function isMobileViewport() { return window.innerWidth <= 768; }
@@ -67,8 +68,10 @@ export function mountPanel() {
 export function removePanel() {
     _dragCleanup?.();
     _resizeCleanup?.();
+    _tabBarScrollCleanup?.();
     _dragCleanup = null;
     _resizeCleanup = null;
+    _tabBarScrollCleanup = null;
     if (_errorPoolHandler && typeof window !== 'undefined' && typeof window.removeEventListener === 'function') {
         window.removeEventListener('uris:errors', _errorPoolHandler);
         _errorPoolHandler = null;
@@ -179,6 +182,7 @@ let _errorOutsideHandler = null;
 let _errorKeyHandler = null;
 let _dragCleanup = null;
 let _resizeCleanup = null;
+let _tabBarScrollCleanup = null;
 export function initViewportSync() {
     if (_viewportHandler) window.removeEventListener('resize', _viewportHandler);
     if (_viewportTimer) { clearTimeout(_viewportTimer); _viewportTimer = null; }
@@ -235,6 +239,10 @@ function bindWindowEvents(el) {
     header.addEventListener('touchstart', (e) => startDrag(e, el), { passive: true });
     const resizer = el.querySelector('#urisResizer');
     resizer.addEventListener('mousedown', (e) => startResize(e, el));
+    // Колесо мыши + drag-to-scroll на таб-баре: при узком окне вкладки
+    // переполняют бар, и без этого хвостовые вкладки недостижимы на десктопе.
+    _tabBarScrollCleanup?.();
+    _tabBarScrollCleanup = bindTabBarScroll(el.querySelector('#urisTabs'), el.ownerDocument);
 }
 
 // ── Error pool badge + panel ──

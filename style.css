@@ -173,11 +173,27 @@
 .uris-icon-btn { background: none; border: none; color: inherit; cursor: pointer; font-size: calc(16px * var(--uris-font-scale, 1)); padding: 2px 6px; }
 
 /* ── Вкладки ── */
-.uris-tabs { display: flex; flex-shrink: 0; border-bottom: 1px solid var(--uris-border-soft); background: var(--uris-surface-tabs); }
+/* Бар — горизонтальный скролл-контейнер и на десктопе, не только в мобильном
+   media query: вкладки (flex:1) не сжимаются ниже min-content, и при узком
+   плавающем окне переполняют бар. С overflow-x: visible они обрезались
+   .uris-window { overflow: hidden } — хвостовые вкладки были недостижимы,
+   колесо и drag бар не двигали. Скроллбар скрыт (как у .uris-scroll-x и в
+   мобильном блоке ниже): на десктопе бар крутится колесом и drag-to-scroll
+   (src/ui/tab-bar-scroll.js), на таче — нативным свайпом. Когда всё
+   помещается, auto не показывает скроллбар и раскладка не меняется. */
+.uris-tabs {
+    display: flex; flex-shrink: 0; border-bottom: 1px solid var(--uris-border-soft); background: var(--uris-surface-tabs);
+    overflow-x: auto; overflow-y: hidden; scrollbar-width: none;
+}
+.uris-tabs::-webkit-scrollbar { display: none; }
 
 .uris-tab {
     flex: 1; padding: 8px 4px; background: none; border: none; color: var(--uris-text-mut);
     cursor: pointer; border-bottom: 2px solid transparent; font-size: var(--uris-font);
+    /* nowrap: без него min-content вкладки = самое длинное СЛОВО, и в узком
+       окне подписи переносились в две строки, раздувая бар по высоте. С nowrap
+       вкладка держит ширину по целой подписи, а излишек уходит в скролл бара. */
+    white-space: nowrap;
     transition: color .12s, border-color .12s;
     /* ST-темы с глобальным ресетом `button { pointer-events: none }` (whitelist
        только под .menu_button/.view_button и т.п.) гасят клик по нашим вкладкам —
@@ -1465,10 +1481,16 @@
 
 /* ── Sidebar: поиск, инструменты, избранное ── */
 .uris-folder-search { padding: 8px 8px 6px; }
+/* Цвета — как у .uris-refs-search input: без явных background/color инпут
+   остаётся браузерно-белым и на тёмной теме светится белым пятном. */
 .uris-folder-search-input {
-    box-sizing: border-box; width: 100%;
+    box-sizing: border-box; width: 100%; padding: 4px 8px;
     font-size: calc(12px * var(--uris-font-scale, 1));
+    background: var(--uris-surface-btn); border: 1px solid var(--uris-border);
+    border-radius: var(--uris-radius); color: var(--uris-text-strong);
+    outline: none;
 }
+.uris-folder-search-input:focus { border-color: var(--uris-accent); }
 .uris-folder-tools { display: inline-flex; align-items: center; gap: 2px; }
 .uris-folder-tool {
     display: inline-flex; align-items: center; justify-content: center;
@@ -1606,12 +1628,16 @@
 .uris-mobile-folder-arrow { color: var(--uris-text-dim); }
 .uris-mobile-grid { flex: 1; }
 .uris-mobile-search-wrap { padding: 8px 10px 0; }
-.uris-mobile-search {
+/* .uris-mobile-folder-search — тот же инпут поиска на экране папок; без этого
+   правила он оставался браузерно-белым на тёмной теме. */
+.uris-mobile-search,
+.uris-mobile-folder-search {
     width: 100%; padding: 6px 8px; font-size: var(--uris-font-sm);
     background: var(--uris-surface-btn); border: 1px solid var(--uris-border);
     border-radius: var(--uris-radius); color: var(--uris-text-strong); outline: none;
 }
-.uris-mobile-search:focus { border-color: var(--uris-accent); }
+.uris-mobile-search:focus,
+.uris-mobile-folder-search:focus { border-color: var(--uris-accent); }
 .uris-mobile-card-scroll { flex: 1; overflow-y: auto; padding: 10px; display: flex; flex-direction: column; gap: 4px; touch-action: pan-y; }
 
 /* Picker overlay */
