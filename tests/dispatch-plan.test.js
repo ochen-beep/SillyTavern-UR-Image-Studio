@@ -157,6 +157,22 @@ test('resolveDispatchPlan: explicit chat image config override is route-scoped',
     assert.equal(native.route.capabilities.chatCompletionsImageConfig, undefined);
 });
 
+test('resolveDispatchPlan: new-api override passes through only on chat-completions', () => {
+    const plan = resolveDispatchPlan({
+        endpoint: 'https://ddtnew.com/v1',
+        model: { id: 'gemini-3.1-flash-image-preview' },
+        overrides: { chatCompletionsImageConfig: 'new-api' },
+    });
+    assert.equal(plan.route.capabilities.chatCompletionsImageConfig, 'new-api');
+
+    const native = resolveDispatchPlan({
+        endpoint: 'https://ddtnew.com/v1',
+        model: { id: 'gemini-3.1-flash-image-preview' },
+        overrides: { dialect: 'gemini-native', chatCompletionsImageConfig: 'new-api' },
+    });
+    assert.equal(native.route.capabilities.chatCompletionsImageConfig, undefined);
+});
+
 test('resolveDispatchPlan: NanoGPT image catalog always prefers openai-images compatibility', () => {
     const plan = resolveDispatchPlan({
         endpoint: 'https://nano-gpt.com',

@@ -2,6 +2,7 @@
 import { trace } from '../core.js';
 import { summarizeReference } from '../references.js';
 import { endpointBase, imageResultFromValue, providerError, readJsonResponse, referencesFor, requireInvocation, assertEncodedReferenceCount, diagnosticRequestOptions } from './image-base.js';
+import { promptAspectConflicts } from '../aspect-ratio.js';
 
 function chatUrl(endpoint) { return `${endpointBase(endpoint)}/chat/completions`; }
 
@@ -101,14 +102,103 @@ function parse(payload) {
   throw providerError('UPSTREAM_RESPONSE_INVALID', 'Chat Completions returned a successful response without an image.');
 }
 
+// ── Aspect/size channels and parameter warnings ──
+//
+// Chat Completions has no standard image-geometry members, so the aspect ratio
+// either rides a gateway-specific dialect or it does not travel at all. Prompt
+// text is deliberately NOT used as a fallback channel: it was tested live
+// against a new-api gateway (ddtnew, 2026-09-16) and the model ignored the
+// ratio sentence in every placement, returning its default canvas. Relying on
+// it would recreate the silent failure this warnings channel exists to expose.
+// When no dialect is selected the user gets a warning pointing at the
+// connection setting instead.
+//
+//   'openrouter' → { modalities, image_config: { aspect_ratio, image_size } }
+//   'new-api'    → { extra_body: { google: { image_config: { aspect_ratio, image_size } } } }
+//     (snake_case keys are enforced by the new-api converter; camelCase
+//     hard-fails with convert_request_failed before any billing)
+//
+// `quality` has no member on either dialect and always warns when set.
+
+// Keys the adapter owns; a connection's static extraBody must never clobber
+// them (a wrong `model`/`messages` corrupts the request structurally).
+const RESERVED_BODY_KEYS = new Set(['model', 'messages', 'stream']);
+
+function isPlainObject(value) {
+  return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
+/**
+ * Deep-merge the connection's static "Доп. параметры body" into the built
+ * request body (extra wins), so the connection field does something on the
+ * dialect where bespoke gateway quirks actually live. Reserved keys are
+ * skipped. Returns the body and the applied top-level keys for the trace.
+ * @param {Record<string, unknown>} body
+ * @param {unknown} extraBody
+ * @returns {{ body: Record<string, unknown>, applied: string[] }}
+ */
+function mergeExtraBody(body, extraBody) {
+  const extra = isPlainObject(extraBody) ? extraBody : {};
+  const applied = [];
+  const walk = (target, source) => {
+    for (const [key, value] of Object.entries(source)) {
+      if (RESERVED_BODY_KEYS.has(key)) continue;
+      applied.push(key);
+      if (isPlainObject(value) && isPlainObject(target[key])) walk(target[key], value);
+      else target[key] = value;
+    }
+  };
+  walk(body, extra);
+  return { body, applied };
+}
+
+/**
+ * Human-readable warnings for parameters this dialect cannot carry. 'auto'
+ * never warns: omitting IS the auto behavior. Prompt-vs-settings aspect
+ * conflicts are surfaced only when a parameter channel is active — without
+ * one, the "dropped" warning below already covers the outcome.
+ * @returns {Array<{feature: string, details: string}>}
+ */
+function paramWarnings({ mode, aspectRatio, imageSize, quality, prompt }) {
+  const warnings = [];
+  if (!mode) {
+    if (aspectRatio) {
+      warnings.push({
+        feature: 'Стороны',
+        details: `соотношение ${aspectRatio} не передаётся: для Chat Completions не выбран тип шлюза. Укажите «Параметры изображений Chat Completions» в настройках подключения (new-api или OpenRouter) — текст в промпте модель может не соблюдать.`,
+      });
+    }
+    if (imageSize) {
+      warnings.push({
+        feature: 'Размер',
+        details: `размер ${imageSize} не передаётся: у Chat Completions без типа шлюза нет параметра размера.`,
+      });
+    }
+  }
+  if (quality && quality !== 'auto') {
+    warnings.push({ feature: 'Quality', details: `значение «${quality}» не передаётся: у контракта Chat Completions нет параметра quality.` });
+  }
+  if (mode && aspectRatio) {
+    const conflicts = promptAspectConflicts(prompt, aspectRatio);
+    if (conflicts.length) {
+      warnings.push({
+        feature: 'Стороны',
+        details: `в промпте указано ${conflicts.join(', ')}, а в настройках ${aspectRatio}: параметром уходит значение из настроек, проверьте, что они совпадают по замыслу.`,
+      });
+    }
+  }
+  return warnings;
+}
+
 export async function generateChatCompletionImage(input) {
   const { endpoint, apiKey, route, request, transport, signal, connection = {}, diagnostic = null } = requireInvocation(input);
   const references = referencesFor(request);
   const bindingText = (request?.referenceBindings || []).map(binding =>
     `Reference image ${binding.index} corresponds to "${binding.label}". Use it as the visual reference for that subject.`
   );
+  const prompt = String(request?.prompt || '');
   const content = [
-    { type: 'text', text: String(request?.prompt || '') },
+    { type: 'text', text: prompt },
     ...references.flatMap((reference, index) => [
       ...(bindingText[index] ? [{ type: 'text', text: bindingText[index] }] : []),
       { type: 'image_url', image_url: { url: reference.dataUrl } },
@@ -116,47 +206,76 @@ export async function generateChatCompletionImage(input) {
   ];
   const encodedReferences = content.filter(part => part?.type === 'image_url').length;
   assertEncodedReferenceCount(references.length, encodedReferences, 'chat-image_url');
-  const imageConfig = route?.capabilities?.chatCompletionsImageConfig === 'openrouter'
-    ? Object.fromEntries([
-      ['aspect_ratio', request?.aspectRatio],
-      ['image_size', request?.imageSize],
-    ].filter(([, value]) => typeof value === 'string' && value.trim()))
+  const mode = route?.capabilities?.chatCompletionsImageConfig === 'openrouter' || route?.capabilities?.chatCompletionsImageConfig === 'new-api'
+    ? route.capabilities.chatCompletionsImageConfig
     : null;
+  const geometry = Object.fromEntries([
+    ['aspect_ratio', typeof request?.aspectRatio === 'string' && request.aspectRatio.trim() ? request.aspectRatio.trim() : null],
+    ['image_size', typeof request?.imageSize === 'string' && request.imageSize.trim() ? request.imageSize.trim() : null],
+  ].filter(([, value]) => value));
   // OpenRouter returns image output on chat/completions only when the request
   // explicitly opts in via `modalities` — without it the model answers
-  // text-only and the parser finds no image. Other gateways either ignore the
-  // field or reject unknown params, so it is gated to the openrouter capability.
-  const wantsOpenRouterImages = route?.capabilities?.chatCompletionsImageConfig === 'openrouter';
-  const body = {
+  // text-only and the parser finds no image. new-api needs no modalities (and
+  // top-level members from the OpenRouter shape are silently ignored there —
+  // the parameter must travel inside extra_body instead).
+  const wantsOpenRouterImages = mode === 'openrouter';
+  let body = {
     model: route.modelId,
     messages: [{ role: 'user', content }],
     stream: false,
-    ...(wantsOpenRouterImages ? { modalities: ['image', 'text'] } : {}),
-    ...(imageConfig && Object.keys(imageConfig).length ? { image_config: imageConfig } : {}),
+    ...(mode === 'openrouter'
+      ? {
+          modalities: ['image', 'text'],
+          ...(Object.keys(geometry).length ? { image_config: geometry } : {}),
+        }
+      : {}),
+    ...(mode === 'new-api' && Object.keys(geometry).length
+      ? { extra_body: { google: { image_config: geometry } } }
+      : {}),
   };
-  const wireFields = ['model', 'messages', 'stream', ...(wantsOpenRouterImages ? ['modalities'] : []), ...(imageConfig && Object.keys(imageConfig).length ? ['image_config'] : [])];
+  const merged = mergeExtraBody(body, connection?.extraBody);
+  body = merged.body;
+  const wireFields = ['model', 'messages', 'stream',
+    ...(wantsOpenRouterImages ? ['modalities'] : []),
+    ...(mode === 'openrouter' && body.image_config ? ['image_config'] : []),
+    ...(mode === 'new-api' && body.extra_body ? ['extra_body'] : []),
+    ...merged.applied,
+  ];
   const omittedFields = [
-    ...(imageConfig ? [] : ['aspectRatio', 'imageSize']),
+    ...(mode ? [] : ['aspectRatio', 'imageSize']),
     'quality',
   ];
-  const parameterSource = imageConfig ? 'chat-completions-image-config' : null;
+  const aspectChannel = mode === 'openrouter' ? 'image_config(openrouter)'
+    : mode === 'new-api' ? 'extra_body.google.image_config(new-api)'
+      : 'none';
+  const parameterSource = mode ? `chat-completions-${mode}` : null;
+  const warnings = paramWarnings({
+    mode,
+    aspectRatio: typeof request?.aspectRatio === 'string' && request.aspectRatio.trim() ? request.aspectRatio.trim() : null,
+    imageSize: typeof request?.imageSize === 'string' && request.imageSize.trim() ? request.imageSize.trim() : null,
+    quality: typeof request?.quality === 'string' && request.quality.trim() ? request.quality.trim() : null,
+    prompt,
+  });
   // Same shape as the openai-images payload log: per-ref metadata only
   // (name/MIME/KB), never the dataUrl itself.
   trace('chat-completions: outgoing payload', {
     rid: String(request?.requestId || '').slice(0, 8),
     model: route.modelId,
     op: references.length ? 'edit-json' : 'generate',
+    aspectChannel,
     expectedRefs: references.length,
     encodedRefs: encodedReferences,
     refs: references.map(summarizeReference),
+    extraBodyKeys: merged.applied,
+    warnings: warnings.length,
   });
   const response = await transport.requestJson(chatUrl(endpoint), diagnosticRequestOptions({
     method: 'POST',
     headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
     body: JSON.stringify(body), signal,
   }, diagnostic, {
-    bodyKind: 'json', wireFields, omittedFields,
+    bodyKind: 'json', wireFields, omittedFields, aspectChannel,
     ...(parameterSource ? { parameterSource } : {}),
   }), route, connection.timeoutMs);
-  return parse(await readJsonResponse(response, 'Chat Completions'));
+  return { ...parse(await readJsonResponse(response, 'Chat Completions')), warnings };
 }

@@ -22,10 +22,18 @@ const DIRECT_CORS = new Set(['required', 'preferred']);
 // Images API has always accepted, and what was observed returning HTTP 200);
 // 'json' is the proxy-traversable variant for providers without CORS headers.
 export const EDIT_PROTOCOLS = new Set(['multipart', 'json']);
-// Optional extension for image-capable Chat Completions gateways. This is
+// Optional extensions for image-capable Chat Completions gateways. This is
 // intentionally explicit: a model name or generic OpenAI URL does not prove
-// that the gateway accepts this non-standard request member.
-export const CHAT_COMPLETIONS_IMAGE_CONFIGS = new Set(['openrouter']);
+// that the gateway accepts a non-standard request member, and the two
+// documented dialects differ in both shape and key casing:
+//   - 'openrouter': top-level `image_config: { aspect_ratio, image_size }`
+//     plus `modalities: ['image','text']` (docs.openrouter.ai, image generation).
+//   - 'new-api': `extra_body: { google: { image_config: { aspect_ratio,
+//     image_size } } }` — the QuantumNous/new-api converter (DDTokens and most
+//     relay gateways) forwards it to generationConfig.imageConfig and silently
+//     IGNORES the top-level OpenRouter shape; keys must be snake_case (camelCase
+//     hard-fails the request conversion, verified live 2026-09-16).
+export const CHAT_COMPLETIONS_IMAGE_CONFIGS = new Set(['openrouter', 'new-api']);
 const SECRET_KEYS = new Set([
   'apikey', 'apitoken', 'xapikey', 'xapitoken', 'xgoogapikey', 'token', 'password', 'secret', 'secretid', 'credential', 'credentialid', 'authorization',
   'accesstoken', 'refreshtoken', 'bearertoken', 'clientsecret', 'privatekey',

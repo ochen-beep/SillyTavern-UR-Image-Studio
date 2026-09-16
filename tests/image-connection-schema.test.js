@@ -39,6 +39,7 @@ test('normalizes bounded Chat Completions image config override', () => {
     overrides: { chatCompletionsImageConfig: ' openrouter ' },
   });
   assert.equal(record.overrides.chatCompletionsImageConfig, 'openrouter');
+  assert.equal(normalizeConnectionRecord({ overrides: { chatCompletionsImageConfig: 'new-api' } }).overrides.chatCompletionsImageConfig, 'new-api');
   assert.equal(normalizeConnectionRecord({ overrides: { chatCompletionsImageConfig: 'unknown' } }).overrides.chatCompletionsImageConfig, undefined);
 });
 

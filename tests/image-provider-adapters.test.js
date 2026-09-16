@@ -474,6 +474,130 @@ test('chat-completions image_config supports partial values without quality', as
   }
 });
 
+test('chat-completions new-api: geometry travels in extra_body.google.image_config (snake_case), no modalities', async () => {
+  const transport = makeTransport(jsonResponse({ choices: [{ message: { images: [{ image_url: { url: PNG } }] } }] }));
+  const result = await invokeImageProvider({
+    endpoint: 'https://ddt.example/v1', apiKey: 'key',
+    route: route('chat-completions', 'gemini-3.1-flash-image-preview', {
+      capabilities: { chatCompletionsImageConfig: 'new-api' },
+    }),
+    request: { prompt: 'Apple', aspectRatio: '9:16', imageSize: '2K', quality: 'high', references: [] }, transport,
+  });
+
+  // Geometry rode the parameter dialect, but quality has no member on either
+  // chat-completions dialect — it warns even here.
+  assert.deepEqual(result.warnings, [
+    { feature: 'Quality', details: 'значение «high» не передаётся: у контракта Chat Completions нет параметра quality.' },
+  ]);
+  // Live-verified shape (ddtnew 2026-09-16): the new-api converter forwards
+  // extra_body.google.image_config to generationConfig.imageConfig and
+  // silently ignores the OpenRouter-style top-level image_config.
+  assert.deepEqual(JSON.parse(transport.calls[0].options.body), {
+    model: 'gemini-3.1-flash-image-preview',
+    messages: [{ role: 'user', content: [{ type: 'text', text: 'Apple' }] }],
+    stream: false,
+    extra_body: { google: { image_config: { aspect_ratio: '9:16', image_size: '2K' } } },
+  });
+});
+
+test('chat-completions new-api with no geometry sends no extra_body at all', async () => {
+  const transport = makeTransport(jsonResponse({ choices: [{ message: { images: [{ image_url: { url: PNG } }] } }] }));
+  await invokeImageProvider({
+    endpoint: 'https://ddt.example/v1', apiKey: 'key',
+    route: route('chat-completions', 'gemini-3.1-flash-image-preview', {
+      capabilities: { chatCompletionsImageConfig: 'new-api' },
+    }),
+    request: { prompt: 'Scene', references: [] }, transport,
+  });
+  const body = JSON.parse(transport.calls[0].options.body);
+  assert.equal(body.extra_body, undefined);
+  assert.equal(body.modalities, undefined);
+  assert.equal(body.image_config, undefined);
+});
+
+test('chat-completions without a gateway dialect warns about dropped aspect/size instead of silence', async () => {
+  const transport = makeTransport(jsonResponse({ choices: [{ message: { images: [{ image_url: { url: PNG } }] } }] }));
+  const result = await invokeImageProvider({
+    endpoint: 'https://compat.example/v1', apiKey: 'key',
+    route: route('chat-completions', 'gemini-3.1-flash-image-preview'),
+    request: { prompt: 'Scene', aspectRatio: '9:16', imageSize: '2K', quality: 'high', references: [] }, transport,
+  });
+
+  const body = JSON.parse(transport.calls[0].options.body);
+  assert.equal(body.image_config, undefined);
+  assert.equal(body.extra_body, undefined);
+  assert.equal(result.warnings.length, 3);
+  assert.ok(result.warnings.some(w => w.feature === 'Стороны' && /9:16 не передаётся/.test(w.details)));
+  assert.ok(result.warnings.some(w => w.feature === 'Размер' && /2K не передаётся/.test(w.details)));
+  assert.ok(result.warnings.some(w => w.feature === 'Quality'));
+});
+
+test('chat-completions: auto quality never warns, geometry via dialect never warns', async () => {
+  const transport = makeTransport(jsonResponse({ choices: [{ message: { images: [{ image_url: { url: PNG } }] } }] }));
+  const result = await invokeImageProvider({
+    endpoint: 'https://ddt.example/v1', apiKey: 'key',
+    route: route('chat-completions', 'gemini-3.1-flash-image-preview', {
+      capabilities: { chatCompletionsImageConfig: 'new-api' },
+    }),
+    request: { prompt: 'Scene', aspectRatio: '9:16', quality: 'auto', references: [] }, transport,
+  });
+  assert.deepEqual(result.warnings, []);
+});
+
+test('chat-completions: prompt aspect conflicting with settings warns, prompt is never rewritten', async () => {
+  const transport = makeTransport(jsonResponse({ choices: [{ message: { images: [{ image_url: { url: PNG } }] } }] }));
+  const result = await invokeImageProvider({
+    endpoint: 'https://ddt.example/v1', apiKey: 'key',
+    route: route('chat-completions', 'gemini-3.1-flash-image-preview', {
+      capabilities: { chatCompletionsImageConfig: 'new-api' },
+    }),
+    request: { prompt: 'Wide 16:9 establishing shot', aspectRatio: '9:16', references: [] }, transport,
+  });
+
+  assert.equal(result.warnings.length, 1);
+  assert.equal(result.warnings[0].feature, 'Стороны');
+  assert.match(result.warnings[0].details, /в промпте указано 16:9, а в настройках 9:16/);
+  // The wire prompt stays byte-identical: detection only warns.
+  const content = JSON.parse(transport.calls[0].options.body).messages[0].content;
+  assert.equal(content[0].text, 'Wide 16:9 establishing shot');
+  // conflicting prompt without a dialect does not double-warn
+  const plain = await invokeImageProvider({
+    endpoint: 'https://compat.example/v1', apiKey: 'key',
+    route: route('chat-completions', 'gemini-3.1-flash-image-preview'),
+    request: { prompt: 'Wide 16:9 establishing shot', aspectRatio: '9:16', references: [] }, transport,
+  });
+  assert.equal(plain.warnings.filter(w => w.feature === 'Стороны').length, 1);
+});
+
+test('chat-completions: connection extraBody merges deep, reserved keys stay untouchable', async () => {
+  const transport = makeTransport(jsonResponse({ choices: [{ message: { images: [{ image_url: { url: PNG } }] } }] }));
+  await invokeImageProvider({
+    endpoint: 'https://ddt.example/v1', apiKey: 'key',
+    connection: {
+      timeoutMs: 4600,
+      extraBody: {
+        model: 'evil-override',
+        stream: true,
+        messages: [{ role: 'user', content: 'evil' }],
+        temperature: 0.7,
+        extra_body: { google: { image_config: { image_size: '4K' }, safety: 'off' } },
+      },
+    },
+    route: route('chat-completions', 'gemini-3.1-flash-image-preview', {
+      capabilities: { chatCompletionsImageConfig: 'new-api' },
+    }),
+    request: { prompt: 'Scene', aspectRatio: '9:16', references: [] }, transport,
+  });
+
+  const body = JSON.parse(transport.calls[0].options.body);
+  assert.equal(body.model, 'gemini-3.1-flash-image-preview', 'model is adapter-owned');
+  assert.equal(body.stream, false, 'stream is adapter-owned');
+  assert.deepEqual(body.messages, [{ role: 'user', content: [{ type: 'text', text: 'Scene' }] }], 'messages are adapter-owned');
+  assert.equal(body.temperature, 0.7);
+  assert.deepEqual(body.extra_body.google.image_config, { aspect_ratio: '9:16', image_size: '4K' }, 'deep merge keeps both sources');
+  assert.equal(body.extra_body.google.safety, 'off');
+});
+
 
 
 test('openrouter-images uses its explicit route and input references', async () => {

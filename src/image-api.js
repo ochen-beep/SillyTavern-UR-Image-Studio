@@ -8,6 +8,7 @@ import { materializeImageResult, getCharacterImageFolder, makeThumbnailForPath }
 import { addCard, updateCard } from './gallery-index.js';
 import { providerError } from './providers/image-base.js';
 import { summarizeReference } from './references.js';
+import { aspectDeviates } from './aspect-ratio.js';
 import { getDiagnosticSessionId, hashDiagnosticId, recordDiagnosticEvent } from './diagnostic-events.js';
 import { savePendingBrowserRequest, updatePendingBrowserRequest } from './browser-image-recovery.js';
 
@@ -246,6 +247,24 @@ export async function generateImageRequest(imageConnId, request, onStatus, signa
                 return `${outWidth / divisor}:${outHeight / divisor}`;
             })()
             : null;
+        // Post-hoc truth check: the wire may have carried the requested ratio
+        // (param dialect) or not (warning upstream already fired), but either
+        // way the gateway/model could return a different canvas. Surface the
+        // mismatch the same way as dropped parameters — this also catches
+        // "parameter sent but ignored", which no pre-flight check can see.
+        const aspectDeviation = aspectDeviates(outWidth, outHeight, snapshot.aspectRatio);
+        if (aspectDeviation !== null) {
+            const mismatchWarning = {
+                feature: 'Стороны',
+                details: `модель вернула ${outWidth}×${outHeight} (${outputAspect}) вместо запрошенного ${snapshot.aspectRatio} — шлюз или модель не соблюли пропорцию.`,
+            };
+            result.warnings = [...(Array.isArray(result?.warnings) ? result.warnings : []), mismatchWarning];
+            recordDiagnosticEvent({
+                event: 'aspect-mismatch', stage: 'stage2', requestId: request.requestId,
+                connId: imageConnId, routeId: route.id, modelId: route.modelId,
+                details: { requested: snapshot.aspectRatio, width: outWidth, height: outHeight, outputAspect, deviation: aspectDeviation },
+            });
+        }
         recordDiagnosticEvent({ event: 'materialize-result', stage: 'stage2', requestId: request.requestId, outcome: 'uploaded', details: { imagePathClass: typeof imagePath === 'string' ? imagePath.split('/').slice(0, 2).join('/') : null, bytes: outputMeta.bytes ?? null, mimeType: outputMeta.mimeType ?? null, width: outWidth, height: outHeight, aspectRatio: outputAspect, requestedAspectRatio: snapshot.aspectRatio } });
         const galleryEntry = await addCard({
             imagePath,

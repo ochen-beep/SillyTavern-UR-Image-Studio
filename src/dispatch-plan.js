@@ -16,7 +16,7 @@
  * See docs: the card UI never asks for a dialect; it may only display the
  * resolved one and offer an override when auto-resolution misfires.
  */
-import { CONTRACTS } from './image-connection-schema.js';
+import { CONTRACTS, CHAT_COMPLETIONS_IMAGE_CONFIGS } from './image-connection-schema.js';
 import { effectiveReferenceCap } from './reference-limits.js';
 
 // ── Model families ──
@@ -239,9 +239,13 @@ export function resolveDispatchPlan(connection, options = {}) {
         : (detectedModel?.references === 'supported' || detectedModel?.references === 'unsupported'
             ? detectedModel.references
             : (evidence?.refs === 'confirmed' || naisteraRoute ? 'supported' : 'unknown'));
+    // Gateway parameter dialect for image params on chat-completions: which
+    // non-standard member the adapter may send ('openrouter' → top-level
+    // image_config + modalities, 'new-api' → extra_body.google.image_config).
+    // Absent = send nothing and warn about dropped aspect/size instead.
     const chatCompletionsImageConfig = dialect === CONTRACTS.CHAT_COMPLETIONS
-        && overrides.chatCompletionsImageConfig === 'openrouter'
-        ? 'openrouter'
+        && CHAT_COMPLETIONS_IMAGE_CONFIGS.has(overrides.chatCompletionsImageConfig)
+        ? overrides.chatCompletionsImageConfig
         : null;
 
     return {
