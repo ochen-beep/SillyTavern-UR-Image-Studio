@@ -11,7 +11,7 @@ import { addToGallery, deleteGalleryCard } from '../storage.js';
 import { updateCard } from '../gallery-index.js';
 import { makeThumbnailForPath, uploadGeneratedImage, getCharacterImageFolder } from '../native-image-storage.js';
 import { runStage2 } from '../pipeline.js';
-import { createRef, createReferenceFromGalleryCard, listRefs, updateRef } from '../refs-library.js';
+import { createRef, createReferenceFromGalleryCard, listRefs, updateRef, persistPoolOrThrow, releaseRefImage } from '../refs-library.js';
 import { imageToDataUrl, ingestReferenceImage, blobToDataUrl } from '../references.js';
 import { openCropDialog } from './crop-dialog.js';
 import { recordUrisError } from '../error-pool.js';
@@ -127,8 +127,11 @@ export async function saveAsReference(item) {
             if (!refs.length) { toastr?.info('Пул пуст. Создайте через «OK».'); return; }
             const chosen = await showRefPicker('Выберите референс для замены изображения:', refs);
             if (!chosen) return;
+            const oldImage = refs.find(r => r.id === chosen)?.imagePath || null;
             const uploaded = await uploadEntryAsRef(item);
             await updateRef(chosen, { imagePath: uploaded.imagePath, ...uploaded.metadata });
+            await persistPoolOrThrow('заменить');
+            void releaseRefImage(oldImage);
             toastr?.success('Изображение обновлено');
         }
         refreshActive();
@@ -357,15 +360,24 @@ export async function cropReference(item, deps = {}) {
     const doCrop = deps.crop || openCropDialog;
     const doIngest = deps.ingest || ingestReferenceImage;
     const doUpdate = deps.update || updateRef;
+    const doPersist = deps.persist || persistPoolOrThrow;
+    const doRelease = deps.release || releaseRefImage;
+    // До кропа: item.src — старый путь референса (showSingleImage передаёт
+    // ref.imagePath); data-URL освобождать не от чего.
+    const oldImage = item.src && !item.src.startsWith('data:') ? item.src : null;
     try {
         const crop = await doCrop({ source: item.src });
         if (!crop) return false;
-        const optimized = await doIngest(crop.blob, `ref_${refId}`);
+        // Уникальное имя: тот же URL после перезаписи браузер отдаёт из кэша,
+        // и плитка показывает старую картинку («замена не применилась»).
+        const optimized = await doIngest(crop.blob, `ref_${refId}_${Date.now()}`);
         try {
             await doUpdate(refId, { imagePath: optimized.imagePath, ...optimized.metadata });
+            await doPersist('обрезать');
         } catch (mutationError) {
             throw new Error(`${mutationError.message}; orphaned upload: ${optimized.imagePath}`);
         }
+        doRelease(oldImage);
         toastr?.success('Референс обрезан');
         // Обновить активную вкладку (Референсы/Генерация) под просмотрщиком.
         import('./tabs.js').then(m => m.refreshActive()).catch(() => {});

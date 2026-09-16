@@ -54,6 +54,10 @@ const refsStore = createFileStore({
     name: REFS_FILE_NAME,
     version: REFS_STORE_VERSION,
     key: 'data',
+    // The pool file is edited by every device this user's data syncs to
+    // (Syncthing mirror, second browser): writes must merge with the server
+    // document instead of clobbering it with a possibly stale mirror.
+    mergeWithServer: true,
     empty: () => ({ refs: [], folders: [] }),
     legacyRead: () => {
         const settings = imageSettings();
@@ -90,6 +94,43 @@ export function refsStoreMode() { return refsStore.mode(); }
 /** Await durability of queued pool writes. */
 export function flushRefsWrites() {
     return refsStore.flush();
+}
+
+/**
+ * Throw unless every queued pool write has actually reached the server.
+ * `mutate()` schedules persistence without awaiting it, so a caller that shows
+ * «Сохранено» right after its update would lie when the upload fails or the
+ * session's writes are refused. Image-replacing flows must confirm durability
+ * before telling the user the reference changed.
+ */
+export async function persistPoolOrThrow(action = 'сохранить') {
+    const ok = await refsStore.flush();
+    if (!ok) throw new Error(`не удалось ${action}: запись не подтверждена сервером`);
+}
+
+/**
+ * Best-effort delete of a reference image file the pool no longer points at
+ * after a replace/crop. The store's pre-write server merge makes resurrection of
+ * an old record (and its path) theoretically possible, so the path is re-read
+ * from the live pool before the unlink, and any failure is ignored: a leaked
+ * file is harmless, deleting a referenced one is not.
+ */
+export async function releaseRefImage(oldPath) {
+    if (!oldPath) return;
+    try {
+        const pool = await listRefs();
+        // Any live record still pointing at the file (this or another reference)
+        // forbids the unlink; the merge machinery can bring an old record back.
+        const stillUsed = pool.some(r => canonicalizeNativeImagePath(r.imagePath)
+            === canonicalizeNativeImagePath(oldPath));
+        if (stillUsed) return;
+        const ctx = getCtx();
+        await fetch('/api/images/delete', {
+            method: 'POST',
+            headers: { ...(ctx?.getRequestHeaders?.() ?? {}), 'Content-Type': 'application/json' },
+            body: JSON.stringify({ path: oldPath }),
+        });
+    } catch { /* orphaned file, not user data */ }
 }
 
 /** Drop the settings copy only once the file is authoritative (migration path). */
@@ -204,6 +245,9 @@ export function normalizePoolReference(data = {}) {
         imagePath: data.imagePath || '',
         folders: uniqueStrings(Array.isArray(data.folders) ? data.folders : []),
         createdAt: Number.isFinite(data.createdAt) ? data.createdAt : Date.now(),
+        // Edit time drives cross-device merge resolution in file-store; absent
+        // on records written before this build, which then never win a conflict.
+        ...(Number.isFinite(data.updatedAt) ? { updatedAt: data.updatedAt } : {}),
     };
     const mime = typeof data.mime === 'string' && /^image\/(png|jpeg|webp)$/i.test(data.mime)
         ? data.mime.toLowerCase() : null;
@@ -269,7 +313,7 @@ export async function createReferenceFromGalleryCard(card = {}, options = {}) {
 export async function updateRef(id, patch) {
     const current = await getRef(id);
     if (!current) return null;
-    const next = { ...current };
+    const next = { ...current, updatedAt: Date.now() };
     if (patch.name != null) next.name = String(patch.name).trim() || 'Без названия';
     if (patch.aliases !== undefined) next.aliases = normalizeAliases(patch.aliases);
     if (patch.description != null) next.description = String(patch.description);
@@ -284,6 +328,7 @@ export async function updateRef(id, patch) {
     const store = await requireSharedStore();
     const payload = normalizePoolReference(next);
     const response = await store.update('refs', id, payload);
+    if (response === null) throw new Error(`reference ${id} vanished before the update could be saved`);
     const persisted = normalizePoolReference({ ...payload, ...(response || {}) });
     await refreshPoolCache();
     recordDiagnosticEvent({ event: 'refs-crud', stage: 'refs', operation: 'update', details: { id } });

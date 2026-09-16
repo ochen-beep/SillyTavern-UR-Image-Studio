@@ -9,7 +9,7 @@ import {
     listRefs, getRef, updateRef, deleteRef,
     listFolders, createFolder, updateFolder, deleteFolder, FOLDER_COLOR_PALETTE,
     filterRefsByFolder, refreshPoolCache, getRefSync,
-    getFolderPrefs, saveFolderPrefs,
+    getFolderPrefs, saveFolderPrefs, persistPoolOrThrow, releaseRefImage,
 } from '../refs-library.js';
 
 import { ingestReferenceImage } from '../references.js';
@@ -733,17 +733,23 @@ function _bindEditorBody(root, host, ref, folders, opts = {}) {
     // (обрезанные байты ≠ сохранённые), карточка и превью обновляются.
     host.querySelector('.uris-ed-crop')?.addEventListener('click', async () => {
         if (!ref.imagePath) return;
+        const oldImage = ref.imagePath;
         try {
             const crop = await openCropDialog({ source: ref.imagePath });
             if (!crop) return;
-            const optimized = await ingestReferenceImage(crop.blob, `ref_${ref.id}`);
+            // Уникальное имя: перезапись того же URL давала кэшированному
+            // тайлу_show_ старую картинку, а переименование ломает только
+            // ссылки на файл — владеет им одна запись пула.
+            const optimized = await ingestReferenceImage(crop.blob, `ref_${ref.id}_${Date.now()}`);
             try {
                 await updateRef(ref.id, { imagePath: optimized.imagePath, ...optimized.metadata });
+                await persistPoolOrThrow('обрезать');
             } catch (mutationError) {
                 throw new Error(`${mutationError.message}; orphaned upload: ${optimized.imagePath}`);
             }
+            releaseRefImage(oldImage);
             const img = host.querySelector('.uris-editor-preview');
-            if (img) img.src = optimized.imagePath + '?t=' + Date.now();
+            if (img) img.src = optimized.imagePath;
             flashSaved();
         } catch (err) {
             recordUrisError({ scope: 'Референсы', message: 'Не удалось обрезать: ' + (err?.message || err) });
@@ -753,19 +759,22 @@ function _bindEditorBody(root, host, ref, folders, opts = {}) {
     host.querySelector('.uris-ed-file')?.addEventListener('change', async (e) => {
         const file = e.target.files?.[0];
         if (!file) return;
+        const oldImage = ref.imagePath;
         try {
             // Кроп опционален: «Без обрезки» грузит файл как есть, «Отмена»
             // вообще ничего не меняет.
             const crop = await openCropDialog({ source: file, allowSkip: true });
             if (!crop) return;
-            const optimized = await ingestReferenceImage(crop.blob || file, `ref_${ref.id}`);
+            const optimized = await ingestReferenceImage(crop.blob || file, `ref_${ref.id}_${Date.now()}`);
             try {
                 await updateRef(ref.id, { imagePath: optimized.imagePath, ...optimized.metadata });
+                await persistPoolOrThrow('заменить');
             } catch (mutationError) {
                 throw new Error(`${mutationError.message}; orphaned upload: ${optimized.imagePath}`);
             }
+            releaseRefImage(oldImage);
             const img = host.querySelector('.uris-editor-preview');
-            if (img) img.src = optimized.imagePath + '?t=' + Date.now();
+            if (img) img.src = optimized.imagePath;
         } catch (err) {
             recordUrisError({ scope: 'Референсы', message: 'Не удалось заменить: ' + (err?.message || err) });
             toastr?.error?.('Не удалось заменить: ' + err.message);

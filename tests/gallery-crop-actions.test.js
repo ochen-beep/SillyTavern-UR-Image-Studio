@@ -78,17 +78,46 @@ test('cropReference: новый файл и обновление записи п
     globalThis.document.body = root;
     const { cropReference } = await import('../src/ui/gallery-actions.js');
     const updates = [];
+    const persisted = [];
+    const released = [];
     const deps = {
         crop: async () => cropOk(),
-        ingest: async (blob, name) => ({ imagePath: 'user/images/URIS_Refs/ref_crop.png', metadata: { width: 100, height: 100 } }),
+        ingest: async (blob, name) => {
+            assert.match(name, /^ref_ref-9_\d+$/, 'имя уникально: перезапись того же URL даёт кэшированную картинку');
+            return { imagePath: 'user/images/URIS_Refs/ref_crop.png', metadata: { width: 100, height: 100 } };
+        },
         update: async (id, patch) => { updates.push([id, patch]); return { id, ...patch }; },
+        persist: async (action) => { persisted.push(action); },
+        release: (path) => { released.push(path); },
     };
 
     const done = await cropReference({ __refId: 'ref-9', src: 'user/images/URIS_Refs/ref-9.png' }, deps);
 
     assert.equal(done, true);
     assert.deepEqual(updates, [['ref-9', { imagePath: 'user/images/URIS_Refs/ref_crop.png', width: 100, height: 100 }]]);
+    assert.deepEqual(persisted, ['обрезать'], 'кроп подтверждается сервером до сообщения об успехе');
+    assert.deepEqual(released, ['user/images/URIS_Refs/ref-9.png'], 'старый файл освобождается');
     assert.deepEqual(toastrCalls.filter(c => c[0] === 'success'), [['success', 'Референс обрезан']]);
+});
+
+test('cropReference: неподтверждённая запись — ошибка, старый файл не трогается', async () => {
+    const { document, root } = makeFakeDocument();
+    globalThis.document = document;
+    globalThis.document.body = root;
+    const { cropReference } = await import('../src/ui/gallery-actions.js');
+    const released = [];
+    const deps = {
+        crop: async () => cropOk(),
+        ingest: async () => ({ imagePath: 'user/images/URIS_Refs/ref_crop.png', metadata: {} }),
+        update: async () => ({}),
+        persist: async () => { throw new Error('не подтверждено'); },
+        release: (path) => { released.push(path); },
+    };
+
+    const done = await cropReference({ __refId: 'ref-9', src: 'user/images/URIS_Refs/ref-9.png' }, deps);
+    assert.equal(done, false);
+    assert.deepEqual(released, [], 'старый файл не трогается, пока запись не подтверждена');
+    assert.ok(toastrCalls.some(c => c[0] === 'error'));
 });
 
 test('cropReference: отмена кропа не трогает запись; без refId — отказ', async () => {

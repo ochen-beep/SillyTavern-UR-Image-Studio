@@ -40,6 +40,18 @@
  *     (404 → safe to write; present → mode stays, writes refused for the session);
  *   - the document was written by a NEWER extension build (doc.v > version) →
  *     mode 'readonly': loaded best-effort, never "repaired" away by an older one.
+ *
+ * Concurrent writers (`mergeWithServer: true`): the store writes the WHOLE
+ * document from its in-memory mirror, so any writer that is not this session —
+ * a second browser tab, a second SillyTavern instance, Syncthing syncing the
+ * data folder between machines — silently rolls back everything that session
+ * changed since the mirror loaded (observed 2026-09-14: a reference image
+ * replaced on one machine reappeared old after the other machine's next write).
+ * When the flag is set, the write loop re-reads the server file before every
+ * upload and merges it with the mirror per record id, newest `updatedAt` wins:
+ * additions on either side survive, genuine conflicts resolve by edit time, and
+ * deletions are honored only when the other side did not modify the record. The
+ * merged result becomes the mirror, so reads afterwards reflect the true state.
  */
 
 import { getCtx, log, warn } from './core.js';
@@ -135,6 +147,128 @@ function mergeLegacyRecovery(fileValue, priorValue) {
     return null;
 }
 
+/** Records with ids merge by id; arrays without ids and scalars are opaque. */
+function asRecordArray(value) {
+    return Array.isArray(value) && value.every(item => isPlainObject(item) && item.id != null) ? value : null;
+}
+
+function recordStamp(record) {
+    return Number.isFinite(record?.updatedAt) ? record.updatedAt : 0;
+}
+
+function sameRecord(a, b) {
+    if (a === b) return true;
+    try { return JSON.stringify(a) === JSON.stringify(b); } catch { return false; }
+}
+
+/**
+ * Three-way merge of one record array: `baseArr` (state this session last
+ * synced) against `serverArr` and the local mirror. Additions on either side
+ * survive; a record only one side changed keeps that change; same-id conflicts
+ * resolve by newest `updatedAt` (tie → local); a record absent on one side is a
+ * deletion by that side and wins — unless the other side edited it since the
+ * base, in which case the edit is preserved over the deletion.
+ *
+ * Stale whole-document copies (Syncthing conflict propagation roll the ENTIRE
+ * file back) are detected as content regressions on shared records: a remote
+ * record whose content differs from base and whose `updatedAt` predates the
+ * base copy. That is a rollback, not an edit — the remote version keeps local —
+ * and while rolling back, remote deletions are ignored too, so the rollback
+ * cannot mass-delete records the other writer still has.
+ * Returns null when nothing differs from local.
+ */
+function mergeRecordArray(baseArr, serverArr, localArr) {
+    const toMap = arr => new Map((arr || []).map(r => [String(r.id), r]));
+    const base = toMap(baseArr), server = toMap(serverArr), local = toMap(localArr);
+    const regressed = id => {
+        const was = base.get(id), remote = server.get(id);
+        if (!was || !remote || sameRecord(was, remote)) return false;
+        return recordStamp(remote) < recordStamp(was);
+    };
+    let rollback = false;
+    for (const id of server.keys()) {
+        if (base.has(id) && local.has(id) && regressed(id)) { rollback = true; break; }
+    }
+    const out = [];
+    let changed = false;
+    for (const record of localArr) {
+        const id = String(record.id);
+        const remote = server.get(id);
+        if (!remote) {
+            const known = base.has(id);
+            if (known) {
+                const was = base.get(id);
+                if (!sameRecord(was, record)) { out.push(record); changed = true; }
+                // untouched locally: deleted remotely — honored unless the whole
+                // remote document is a stale rollback
+                else if (rollback) { out.push(record); }
+                continue;
+            }
+            out.push(record);   // added locally
+            continue;
+        }
+        const was = base.get(id);
+        const localChanged = was ? !sameRecord(was, record) : true;
+        const remoteChanged = was ? !sameRecord(was, remote) : true;
+        if (!was) { out.push(record); if (remote !== record) changed = true; continue; }
+        if (localChanged && remoteChanged) {
+            const win = recordStamp(remote) > recordStamp(record) ? remote : record;
+            if (win !== record) changed = true;
+            out.push(win);
+        } else if (remoteChanged && !localChanged) {
+            // Rollback guard: a sync conflict can propagate an OLD version of the
+            // whole document. If the remote copy is stamped older than ours, it
+            // is a stale rollback, not an edit — keep local. (Untouched local
+            // records carry the stamp of the write that produced them, so a
+            // genuine concurrent edit always has a newer or equal stamp.)
+            const remoteStamp = recordStamp(remote), localStamp = recordStamp(record);
+            if (localStamp > 0 && remoteStamp < localStamp) {
+                out.push(record);
+            } else {
+                out.push(remote); changed = true;   // untouched here, updated there
+            }
+        } else {
+            out.push(record);
+        }
+    }
+    for (const [id, remote] of server) {
+        if (local.has(id)) continue;
+        if (base.has(id)) {
+            const was = base.get(id);
+            if (!sameRecord(was, remote)) { out.push(remote); changed = true; }  // edited remotely despite local deletion
+            else if (rollback) { /* stale copy never had it — resurrection beats mass loss */ }
+            // else: deleted locally → honored
+            continue;
+        }
+        out.push(remote); changed = true;       // added remotely
+    }
+    return changed ? out : null;
+}
+
+/** Merge a whole document value; see `mergeRecordArray`. Null = nothing to change. */
+function mergeServerValue(baseValue, serverValue, localValue) {
+    const rl = asRecordArray(localValue), rs = asRecordArray(serverValue);
+    if (rl && rs) return mergeRecordArray(asRecordArray(baseValue) || [], rs, rl);
+    if (isPlainObject(serverValue) && isPlainObject(localValue)) {
+        const out = {};
+        let changed = false;
+        for (const key of new Set([...Object.keys(localValue), ...Object.keys(serverValue)])) {
+            const local = localValue[key], server = serverValue[key];
+            const base = baseValue?.[key];
+            const la = asRecordArray(local), sa = asRecordArray(server);
+            if (la && (sa || server === undefined)) {
+                const merged = mergeRecordArray(asRecordArray(base) || [], sa || [], la);
+                out[key] = merged ?? local;
+                if (merged) changed = true;
+            } else if (local !== undefined) {
+                out[key] = local;   // scalars and mismatched shapes: local wins
+            } else { out[key] = server; changed = true; }
+        }
+        return changed ? out : null;
+    }
+    return null;
+}
+
 /**
  * @typedef {object} FileStoreConfig
  * @property {string} name                Server file name. ASCII only — ST validates
@@ -155,6 +289,10 @@ function mergeLegacyRecovery(fileValue, priorValue) {
  * @property {string} [label]             Human-readable name for logs / the diagnostics panel.
  * @property {() => void} [onWriteFailure] Extra failure notification (toast).
  * @property {(value: any) => number} [countEntries]
+ * @property {boolean} [mergeWithServer] Re-read and merge the server document
+ *                                        before every write (concurrent-writer
+ *                                        safety). Off by default for stores
+ *                                        whose documents are session-owned.
  */
 
 /**
@@ -177,11 +315,18 @@ export function createFileStore(config) {
         onWriteFailure = null,
         countEntries = defaultCountEntries,
         legacyRetryMs = LEGACY_RETRY_MS,
+        mergeWithServer = false,
     } = config;
 
     let mode = 'unknown';          // 'unknown' | 'file' | 'legacy' | 'readonly'
     let readyPromise = null;       // memoized probe + load/migrate
     let mirror = null;             // source of truth once ready
+    // Mirror state the last confirmed server document was built from — the
+    // three-way merge base for `mergeWithServer` writes. Null until loaded.
+    let syncBase = null;
+    // One-shot merge suppression for replace(): a backup restore must clobber
+    // the server document, not merge the user's newer edits back in.
+    let suppressMergeOnce = false;
     let pendingPayload = null;     // newest content not yet uploaded
     let writeJob = null;           // in-flight write loop (null when idle)
     let lastWriteOk = true;
@@ -431,6 +576,10 @@ export function createFileStore(config) {
         const legacyValue = readLegacy();
         const resolved = resolveLoad({ fileValue, legacyValue });
         mirror = resolved.value === undefined ? empty() : resolved.value;
+        // Merge base: the server document this session last synced to. A found
+        // file is exactly that; with no usable file the mirror is the best
+        // description of the server state (nothing/repair) for a first merge.
+        syncBase = readResult === 'found' ? clone(fileValue) : clone(mirror);
         diagnostics.loaded = true;
         diagnostics.readResult = readResult;
         diagnostics.entries = countEntries(mirror);
@@ -501,13 +650,33 @@ export function createFileStore(config) {
         return { name, data: textToBase64(json), bytes: json.length };
     }
 
+    /**
+     * `mergeWithServer` stores must never clobber a concurrent writer's work:
+     * re-read the server document and three-way merge it into the mirror before
+     * building the payload. A failed or unreadable re-read degrades safely to
+     * the plain mirror write (the pre-merge behavior).
+     * @returns {Promise<boolean>} whether the merged content differs from what
+     *          the caller wanted to send (i.e. the payload must be rebuilt)
+     */
+    async function mergeMirrorWithServer() {
+        if (!mergeWithServer || suppressMergeOnce) { suppressMergeOnce = false; return false; }
+        let text = null;
+        try { text = await readFile(); } catch { return false; }
+        if (text === null) return false;      // 404: the file is gone — writing the mirror is correct
+        const parsed = parseDoc(text);
+        if (parsed.reason !== 'found') return false;  // newer/corrupt: refuse to blend into it
+        const merged = mergeServerValue(syncBase, parsed.value, mirror);
+        if (merged === null) return false;
+        mirror = merged;
+        return true;
+    }
+
     async function runWriteLoop() {
         let ok = true;
         let failed = null;
         try {
             while (true) {
-                const payload = pendingPayload;
-                if (!payload) break;
+                if (!pendingPayload) break;
                 if (unreadableFile) {
                     // The initial read never settled whether this file exists.
                     // Re-read now: 404 → the empty mirror was a correct base and
@@ -536,6 +705,17 @@ export function createFileStore(config) {
                     unreadableFile = false;
                 }
                 const started = Date.now();
+                // Merge with the server document before sending (merge-enabled
+                // stores only): a concurrent writer's records must survive this
+                // session's full-document overwrite. The flag also marks whether
+                // the payload was built before the merge read and must be
+                // rebuilt from the merged mirror.
+                let payload = pendingPayload;
+                if (await mergeMirrorWithServer()) {
+                    payload = buildPayload();
+                    pendingPayload = payload;
+                }
+                const mirrorSent = clone(mirror);
                 try {
                     await uploadFile({ name: payload.name, data: payload.data });
                 } catch (cause) {
@@ -545,6 +725,9 @@ export function createFileStore(config) {
                     failed = { payload, cause, ms: Date.now() - started };
                     break;
                 }
+                // The upload made the server equal to mirrorSent: it is the base
+                // for the next merge, not the mirror as it mutated during the send.
+                syncBase = mirrorSent;
                 // Clear only if nothing newer arrived while this upload was in
                 // flight — otherwise the loop keeps going with the newer content.
                 if (pendingPayload === payload) pendingPayload = null;
@@ -665,10 +848,16 @@ export function createFileStore(config) {
         /** Synchronous read of the loaded mirror, cloned. Null before `ready()`. */
         snapshot() { return mirror === null ? null : clone(mirror); },
 
-        /** Replace the whole value and await durability. */
+        /**
+         * Replace the whole value and await durability. A restore must clobber
+         * the server document — merging it with a concurrent writer's records
+         * would resurrect exactly the state the backup rollback discards — so
+         * the next write skips the pre-write merge.
+         */
         async replace(value) {
             await ready();
             mirror = value === undefined ? empty() : value;
+            suppressMergeOnce = true;
             return schedulePersist();
         },
 
@@ -718,6 +907,8 @@ export function createFileStore(config) {
             mode = 'unknown';
             readyPromise = null;
             mirror = null;
+            syncBase = null;
+            suppressMergeOnce = false;
             pendingPayload = null;
             writeJob = null;
             lastWriteOk = true;
