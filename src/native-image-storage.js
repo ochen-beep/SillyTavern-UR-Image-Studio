@@ -9,6 +9,7 @@ import {
 } from './native-image-path.js';
 import { formatForMime, formatForMimeOrDefault, sanitizeUploadFilename } from './st-upload-format.js';
 import { optimizeReferenceImage } from './references.js';
+import { isStudioActive, STUDIO_IMAGE_FOLDER } from './studio-scope.js';
 
 export { NATIVE_GALLERY_FOLDER };
 
@@ -34,9 +35,12 @@ function headers() {
  * Resolve the image-storage folder for the current chat context.
  * Mirrors stable-diffusion/index.js: character name for solo chats,
  * group id for group chats, legacy folder as a safe fallback.
+ * On the welcome screen (no chat open) generation lands in the dedicated
+ * studio folder instead of the legacy one.
  * @returns {string}
  */
 export function getCharacterImageFolder() {
+    if (isStudioActive()) return STUDIO_IMAGE_FOLDER;
     const ctx = getCtx();
     if (ctx.groupId) return `group_${ctx.groupId}`;
     const name = ctx.characters?.[ctx.characterId]?.name;

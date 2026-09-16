@@ -24,6 +24,7 @@ import { canonicalizeNativeImagePath } from './native-image-path.js';
 import { normalizeReferenceCap } from './reference-limits.js';
 import { createFileStore } from './file-store.js';
 import { recordDiagnosticEvent } from './diagnostic-events.js';
+import { isStudioActive, getStudioBinding, saveStudioBinding } from './studio-scope.js';
 
 export const REFS_FILE_NAME = 'uris_refs.json';
 export const REFS_STORE_VERSION = 1;
@@ -521,6 +522,9 @@ export function defaultChatRefs() {
 }
 
 function _rawBinding() {
+    // Studio scope: the same uris_binding envelope lives in uris_studio.json,
+    // because chatMetadata does not exist without an open chat.
+    if (isStudioActive()) return getStudioBinding();
     const ctx = getCtx();
     const meta = ctx.chatMetadata?.[META_KEY];
     return meta && typeof meta === 'object' ? meta : null;
@@ -543,6 +547,7 @@ export function getChatRefs() {
 /** Merge-patch the current chat's refs into chatMetadata + saveMetadata.
  *  Ensures the surrounding schema-v5 binding/config exists and is preserved. */
 export function saveChatRefs(patch) {
+    if (isStudioActive()) return saveStudioChatRefs(patch);
     const ctx = getCtx();
     if (!ctx.chatMetadata) ctx.chatMetadata = {};
     const existing = ctx.chatMetadata[META_KEY];
@@ -570,6 +575,28 @@ export function saveChatRefs(patch) {
     };
     try { ctx.saveMetadata?.(); } catch { /* non-critical */ }
     log('Chat refs updated', binding.refs);
+    return binding.refs;
+}
+
+/** Studio twin of saveChatRefs: the same invariants, but the surrounding
+ *  schema-v5 envelope lives in uris_studio.json (see studio-scope.js). */
+function saveStudioChatRefs(patch) {
+    const existing = getStudioBinding();
+    if (existing && (!existing.schemaVersion || existing.schemaVersion < 4)) {
+        log('Chat refs skipped for non-schema binding (studio)');
+        return defaultChatRefs();
+    }
+    const binding = existing || deepClone(DEFAULT_CHAT_CONFIG_ENVELOPE);
+    if (!binding.refs || typeof binding.refs !== 'object') {
+        binding.refs = deepClone(DEFAULT_CHAT_CONFIG_ENVELOPE.refs);
+    }
+    const merged = { ...getChatRefs(), ...patch };
+    binding.refs = {
+        referenceIds: uniqueStrings(Array.isArray(merged.referenceIds) ? merged.referenceIds.map(String) : []),
+        folderIds: uniqueStrings(Array.isArray(merged.folderIds) ? merged.folderIds.map(String) : []),
+    };
+    saveStudioBinding(binding);
+    log('Chat refs updated (studio)', binding.refs);
     return binding.refs;
 }
 

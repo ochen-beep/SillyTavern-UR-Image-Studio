@@ -10,6 +10,9 @@ import {
     deepClone, VALID_ASPECT_RATIOS, VALID_IMAGE_SIZES,
 } from './core.js';
 import { POST_FILTER, setFilter } from './post-navigator.js';
+import {
+    isStudioActive, ensureStudioStoreReady, getStudioBinding, saveStudioBinding,
+} from './studio-scope.js';
 
 // ── schema-v5 defaults and normalization ──
 
@@ -21,12 +24,20 @@ export function createDefaultChatConfig() {
 }
 
 export function getBinding() {
+    // Without an open chat the studio scope answers instead: chatMetadata does
+    // not exist there, and a write to it would vanish with the transient object.
+    if (isStudioActive()) return getStudioBinding();
     const ctx = getCtx();
     const meta = ctx.chatMetadata?.[META_KEY];
     return meta && typeof meta === 'object' ? meta : null;
 }
 
 export function setBinding(binding) {
+    if (isStudioActive()) {
+        saveStudioBinding(binding);
+        log('Привязка обновлена (студия)', binding);
+        return;
+    }
     const ctx = getCtx();
     if (!ctx.chatMetadata) ctx.chatMetadata = {};
     ctx.chatMetadata[META_KEY] = binding;
@@ -110,6 +121,10 @@ export function normalizeChatBinding(binding) {
  * ignored without reading or mutating non-current metadata.
  */
 export async function loadChatConfig() {
+    // The studio store must finish probing before the first read: a null read
+    // would otherwise be answered with defaults and written back over the
+    // persisted studio config.
+    if (isStudioActive()) await ensureStudioStoreReady();
     const binding = getBinding();
     if (binding?.schemaVersion >= 4) {
         return normalizeChatBinding(binding);
@@ -139,6 +154,7 @@ export async function saveChatConfig(binding) {
  * caller data with no trace and no error).
  */
 export async function patchChatConfig(patch) {
+    if (isStudioActive()) await ensureStudioStoreReady();
     const existing = getBinding();
     const isLegacy = !!(existing && existing.schemaVersion < 4);
     const current = isLegacy ? createDefaultChatConfig() : await loadChatConfig();

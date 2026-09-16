@@ -319,6 +319,7 @@ test('lists native images in a specified folder', async () => {
 test('getCharacterImageFolder resolves character name for solo chats', async () => {
     globalThis.SillyTavern = {
         getContext: () => ({
+            chatId: 'test-chat',
             characterId: 0,
             characters: [{ name: 'Alice' }],
             groupId: null,
@@ -331,6 +332,7 @@ test('getCharacterImageFolder resolves character name for solo chats', async () 
 test('getCharacterImageFolder resolves group_ prefix for group chats', async () => {
     globalThis.SillyTavern = {
         getContext: () => ({
+            chatId: 'test-chat',
             characterId: null,
             characters: [],
             groupId: 'group123',
@@ -342,10 +344,19 @@ test('getCharacterImageFolder resolves group_ prefix for group chats', async () 
 
 test('getCharacterImageFolder falls back to the legacy folder when no character or group', async () => {
     globalThis.SillyTavern = {
-        getContext: () => ({ characterId: null, characters: [], groupId: null }),
+        getContext: () => ({ chatId: 'test-chat', characterId: null, characters: [], groupId: null }),
     };
     const { getCharacterImageFolder, NATIVE_GALLERY_FOLDER } = await import('../src/native-image-storage.js');
     assert.equal(getCharacterImageFolder(), NATIVE_GALLERY_FOLDER);
+});
+
+test('getCharacterImageFolder uses the studio folder when no chat is open', async () => {
+    globalThis.SillyTavern = {
+        getContext: () => ({ characterId: null, characters: [], groupId: null }),
+    };
+    const { getCharacterImageFolder } = await import('../src/native-image-storage.js');
+    const { STUDIO_IMAGE_FOLDER } = await import('../src/studio-scope.js');
+    assert.equal(getCharacterImageFolder(), STUDIO_IMAGE_FOLDER);
 });
 
 test('getGallery excludes hidden cards but keeps them in the shared index', async () => {

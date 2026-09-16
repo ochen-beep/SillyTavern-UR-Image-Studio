@@ -8,6 +8,7 @@
  */
 
 import { LF_GENERATION_DRAFT_PREFIX } from './core.js';
+import { STUDIO_CHAT_ID } from './studio-scope.js';
 
 /**
  * Per-draft-key promise chain used to serialize read-modify-write operations
@@ -51,8 +52,11 @@ function withDraftLock(chatId, msgId, fn) {
  * @property {string} imageSize
  * @property {string} quality
  * @property {{includedIds:string[],excludedIds:string[],revision:number}} references
- * @property {{status:'idle'|'running'|'ready'|'error'|'cancelled',structuredDraft:object|null,contextSnapshot:object|null,builtAt:string|null,error:string|null}} stage1
+ * @property {'idle'|'running'|'ready'|'error'|'cancelled',structuredDraft:object|null,contextSnapshot:object|null,builtAt:string|null,error:string|null}} stage1
  * @property {{status:'idle'|'running'|'ready'|'error'|'cancelled',lastSubmittedSnapshot:object|null,error:string|null}} stage2
+ * @property {string} [sceneText]
+ *   Studio-only: the editable scene text the draft was built from. Chat drafts
+ *   don't carry it — their source text lives in the chat and is hash-checked.
  */
 
 /**
@@ -188,7 +192,12 @@ export async function getGenerationDraft(chatId, msgId, messageText) {
     const existing = await lf.getItem(key);
     const hasCurrentTemplateSelection = existing?.templateSelection === 'default'
         || existing?.templateSelection === 'override';
-    if (existing && existing.messageHash === hashMessage(messageText) && hasCurrentTemplateSelection) {
+    // The studio's scene text is an editable input, not an immutable source
+    // message: a changed text must not discard the draft — the built prompt is
+    // the source of truth, and the current text itself lives in draft.sceneText.
+    const textStable = chatId === STUDIO_CHAT_ID
+        || (existing && existing.messageHash === hashMessage(messageText));
+    if (existing && textStable && hasCurrentTemplateSelection) {
         return deepFreezeSnapshot(existing);
     }
     const draft = createGenerationDraft(chatId, msgId, messageText);

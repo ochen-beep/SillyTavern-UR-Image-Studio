@@ -5,6 +5,7 @@
  */
 import { getCtx, escapeHtml, showConfirmModal } from '../core.js';
 import { getGallery, clearGallery } from '../storage.js';
+import { isStudioActive, resolveActiveChatId } from '../studio-scope.js';
 import { showLightbox } from './lightbox.js';
 
 // Test-only viewer seam: fake-dom tests cannot load PhotoSwipe, so the click
@@ -20,12 +21,16 @@ export function resetViewerForTests() { _viewer = { showLightbox }; }
 const CHUNK_SIZE = 60;
 
 export async function render(root) {
-    const chatId = getCtx().chatId;
+    // On the welcome screen the gallery shows the studio scope: images
+    // generated outside a chat (provenance.chatId === '__uris_studio__').
+    const chatId = resolveActiveChatId();
+    const studio = isStudioActive();
     const items = await getGallery(chatId);
     if (root.__urisTabId && root.__urisTabId !== 'gallery') return;
     root.innerHTML = `
         <div class="uris-gallery">
             <div class="uris-gallery-toolbar">
+                ${studio ? '<span class="uris-gallery-scope" title="Генерации без открытого чата">Студия</span>' : ''}
                 <span id="urisGalleryCount">${items.length}</span>
                 <button class="uris-btn uris-btn-danger uris-gallery-clear" id="urisGalleryClear"><i class="fa-solid fa-trash"></i> Очистить</button>
             </div>
@@ -40,7 +45,7 @@ export async function render(root) {
     }
     if (root.__urisTabId && root.__urisTabId !== 'gallery') return;
     root.querySelector('#urisGalleryClear').addEventListener('click', async () => {
-        if (await showConfirmModal('Очистить галерею этого чата?')) {
+        if (await showConfirmModal(studio ? 'Очистить галерею студии?' : 'Очистить галерею этого чата?')) {
             await clearGallery(chatId);
             if (root.__urisTabId && root.__urisTabId !== 'gallery') return;
             render(root);

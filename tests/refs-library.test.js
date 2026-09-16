@@ -18,6 +18,9 @@ function makeLocalforage() {
 let _chatMetadata = {};
 globalThis.SillyTavern = {
     getContext: () => ({
+        // chatMetadata only exists while a chat is open — the stub mirrors that
+        // invariant, otherwise chat-binding routing sends reads to the studio scope.
+        chatId: 'test-chat',
         extensionSettings,
         saveSettingsDebounced: () => { settingsSaveCalls += 1; },
         saveMetadata: () => {},

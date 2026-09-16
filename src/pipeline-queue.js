@@ -12,6 +12,7 @@ import { hashMessage } from './generation-drafts.js';
 import { resolveChatConfigSnapshot } from './pipeline-config.js';
 import { runStage1ForDraft } from './pipeline-stage1.js';
 import { runStage2ForDraft } from './pipeline-stage2.js';
+import { STUDIO_CHAT_ID } from './studio-scope.js';
 
 // ── Queue: explicit source identity and action ──
 
@@ -28,6 +29,8 @@ export async function createQueueItem({ chatId, msgId, messageText, requestedAct
     // Resolve schema-v5 binding and route together at enqueue time. The route is
     // deep-cloned so later connection edits cannot change a queued Stage 2 call.
     const chatConfig = deepFreeze(await resolveChatConfigSnapshot());
+    // Studio items carry their scene text: there is no chat message to re-read
+    // at execution time, and the studio scope survives chat switches.
     const item = {
         chatId,
         msgId,
@@ -36,6 +39,7 @@ export async function createQueueItem({ chatId, msgId, messageText, requestedAct
         templateId: templateId || null,
         chatConfig,
         enqueuedAt: now(),
+        ...(chatId === STUDIO_CHAT_ID ? { messageText: String(messageText || '') } : {}),
     };
     recordDiagnosticEvent({
         event: 'queue-enqueue', stage: 'queue', chatHash: hashDiagnosticId(chatId), msgId,
@@ -92,12 +96,18 @@ async function processQueue() {
             const { item, resolve, reject } = state.queue.shift();
             try {
                 const ctx = getCtx();
-                const messageText = ctx.chat?.[item.msgId]?.mes || '';
-                if (state.currentChatId && state.currentChatId !== item.chatId) {
+                // Studio items keep the text captured at enqueue time: there is
+                // no source message, and their scope does not go stale when the
+                // user opens another chat while the queue runs.
+                const isStudioItem = item.chatId === STUDIO_CHAT_ID;
+                const messageText = isStudioItem
+                    ? (item.messageText || '')
+                    : (ctx.chat?.[item.msgId]?.mes || '');
+                if (!isStudioItem && state.currentChatId && state.currentChatId !== item.chatId) {
                     recordDiagnosticEvent({ event: 'queue-reject-stale-chat', level: 'warn', stage: 'queue', chatHash: hashDiagnosticId(item.chatId), msgId: item.msgId });
                     throw new Error('Queued item belongs to another chat');
                 }
-                if (hashMessage(messageText) !== item.messageHash) {
+                if (!isStudioItem && hashMessage(messageText) !== item.messageHash) {
                     recordDiagnosticEvent({ event: 'queue-reject-message-changed', level: 'warn', stage: 'queue', chatHash: hashDiagnosticId(item.chatId), msgId: item.msgId });
                     throw new Error('Queued source message changed');
                 }

@@ -2550,3 +2550,17 @@ div.pswp__img--placeholder,
     white-space: nowrap;
     pointer-events: none;
 }
+
+/* ── Studio scope (генерация вне чата, welcome screen) ── */
+/* Сцена в студии: редактируемый источник Stage 1 вместо read-only эксерпта. */
+.uris-studio-scene { max-height: none; }
+.uris-scene-area {
+    width: 100%; resize: vertical; min-height: 54px;
+    font-size: var(--uris-font-sm); line-height: 1.4;
+}
+/* Бейдж скоупа студии в тулбаре галереи. */
+.uris-gallery-scope {
+    font-size: var(--uris-font-xs); color: var(--uris-text-mut);
+    background: var(--uris-surface-card); border: 1px solid var(--uris-border-soft);
+    padding: 2px 8px; border-radius: var(--uris-radius-pill); white-space: nowrap;
+}

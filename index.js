@@ -47,6 +47,7 @@ import { flushTemplateWrites, flushTemplateWritesOnUnload } from './src/template
 import { ensureGalleryStoreReady, flushGalleryWrites, flushGalleryWritesOnUnload } from './src/gallery-index.js';
 import { ensureRefsStoreReady, flushRefsWrites, flushRefsWritesOnUnload } from './src/refs-library.js';
 import { ensureParamPresetStoreReady, flushParamPresetWrites, flushParamPresetWritesOnUnload } from './src/param-presets.js';
+import { ensureStudioStoreReady, flushStudioWrites, flushStudioWritesOnUnload } from './src/studio-scope.js';
 import { exportNetDump } from './src/netdump.js';
 import { activateBridge, deactivateBridge, markBridgeReady } from './src/bridge.js';
 
@@ -79,6 +80,7 @@ let _pageHideHandler = null;
 let _onPostFollow = null;
 let _onGenerationDefaultsChanged = null;
 let _onLauncherModeChanged = null;
+let _onChatChangedRefresh = null;
 
 // ── Init ──
 
@@ -110,6 +112,7 @@ async function init() {
         ensureGalleryStoreReady(),
         ensureRefsStoreReady(),
         ensureParamPresetStoreReady(),
+        ensureStudioStoreReady(),
     ]);
 
     // v4: 6 tabs (API / References / Generation / Gallery / Templates / Settings)
@@ -127,18 +130,20 @@ async function init() {
     // ST settings panel (minimal)
     createSettingsPanel();
 
-    // Load and apply the current chat configuration (schema v4). Awaited:
-    // otherwise the UI is active before the chat config sets runtime fields, and
-    // persist calls from tabs silently no-op.
+    // Load and apply the generation config. With a chat open it is the chat's
+    // schema-v5 binding; on the welcome screen loadChatConfig routes to the
+    // studio store, so the panel works there too. Awaited: otherwise the UI is
+    // active before the config sets runtime fields, and persist calls from
+    // tabs silently no-op.
     // Must run BEFORE the first active tab render: the 'generate' render
     // reads state.currentMsgId and ctx.chat[msgId] — otherwise async-render
     // rejects in generationDraftKey (msgId=null) and the tab stays empty
     // until the user switches tabs and back.
     state.currentChatId = ctx.chatId;
-    if (ctx.chatId) {
-        const cfg = await loadChatConfig();
-        applyChatConfigToState(cfg);
-    }
+    // Never fake a chat here: currentChatId must stay null on the welcome
+    // screen so message-scoped paths (auto-generation, scanner) stay inert.
+    const bootConfig = await loadChatConfig();
+    applyChatConfigToState(bootConfig);
     // Guarantee a valid currentMsgId before the first render. After the chat config
     // loads, the chat is fully loaded, so getLastPostIndex returns a meaningful value.
     setCurrentMsgId(getLastPostIndex());
@@ -219,6 +224,16 @@ async function init() {
         }
     };
     window.addEventListener('uris:launcher-mode-changed', _onLauncherModeChanged);
+    // Chat opened / closed (back to the welcome screen): the Generate and
+    // Gallery tabs switch between the chat and the studio scope, so the active
+    // one must re-render after the config load completes (events.js dispatches
+    // this after applyChatConfigToState).
+    _onChatChangedRefresh = () => {
+        if (!isPanelVisible()) return;
+        const tab = getActiveTab();
+        if (tab === 'generate' || tab === 'gallery') refreshActive();
+    };
+    window.addEventListener('uris:chat-changed', _onChatChangedRefresh);
 
     // Singleton listeners keep the "Остановить" button and queue status in sync
     // with Stage 2 lifecycle events (manual, auto and queue alike).
@@ -239,6 +254,7 @@ async function init() {
             flushGalleryWritesOnUnload();
             flushRefsWritesOnUnload();
             flushParamPresetWritesOnUnload();
+            flushStudioWritesOnUnload();
             flushDiagnosticEvents();
             try { getCtx().saveMetadata?.(); } catch {}
         }
@@ -249,6 +265,7 @@ async function init() {
         flushGalleryWritesOnUnload();
         flushRefsWritesOnUnload();
         flushParamPresetWritesOnUnload();
+        flushStudioWritesOnUnload();
     };
     window.addEventListener('pagehide', _pageHideHandler);
 
@@ -456,6 +473,7 @@ function cleanup() {
     void flushTemplateWrites();
     void flushRefsWrites();
     void flushParamPresetWrites();
+    void flushStudioWrites();
     unbindEvents();
     unbindScanner();
     shutdownRender();
@@ -466,6 +484,7 @@ function cleanup() {
     if (_onPostFollow) { window.removeEventListener('uris:post-follow', _onPostFollow); _onPostFollow = null; }
     if (_onGenerationDefaultsChanged) { window.removeEventListener('uris:chat-generation-defaults-changed', _onGenerationDefaultsChanged); _onGenerationDefaultsChanged = null; }
     if (_onLauncherModeChanged) { window.removeEventListener('uris:launcher-mode-changed', _onLauncherModeChanged); _onLauncherModeChanged = null; }
+    if (_onChatChangedRefresh) { window.removeEventListener('uris:chat-changed', _onChatChangedRefresh); _onChatChangedRefresh = null; }
     removePanel();
     document.getElementById('uris_launcher')?.remove();
     removeFloatingLauncher();

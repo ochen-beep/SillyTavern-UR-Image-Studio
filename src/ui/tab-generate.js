@@ -35,11 +35,34 @@ import {
 } from '../dispatch-plan.js';
 import { resolveServerOwnedReferencePolicy as resolveServerOwnedRouteReferencePolicy } from '../reference-policy.js';
 import { recordUrisError } from '../error-pool.js';
+import { isStudioActive, STUDIO_CHAT_ID, STUDIO_MSG_ID } from '../studio-scope.js';
 
 // Module-level ref to the Generate tab root, so the singleton abort-UI listeners
 // (bindAbortUI) can refresh the in-flight "Остановить" button and queue status
 // without a full re-render (which would tear down the editor).
 let _generateRoot = null;
+
+/**
+ * Identity of the draft the Generate tab is currently editing: the real
+ * (chatId, msgId) pair in a chat, the single studio draft on the welcome
+ * screen. messageText is the Stage 1 scene source — the chat message text, or
+ * the live content of the studio scene textarea.
+ * @param {HTMLElement} [root]
+ */
+function activeScope(root) {
+    if (isStudioActive()) {
+        const sceneText = root?.querySelector('#urisScene')?.value || '';
+        return { studio: true, chatId: STUDIO_CHAT_ID, msgId: STUDIO_MSG_ID, messageText: sceneText };
+    }
+    const ctx = getCtx();
+    const msgId = state.currentMsgId;
+    return {
+        studio: false,
+        chatId: ctx.chatId,
+        msgId,
+        messageText: msgId != null ? (ctx.chat?.[msgId]?.mes || '') : '',
+    };
+}
 
 // ── Prompt-first pure view helpers ──
 
@@ -70,7 +93,10 @@ export function buildGenerateViewModel({ draft, snapshot, referenceResolution, a
     // explicit base-mode override where templateId is null.
     const effectiveTemplateId = resolveDraftTemplateId(normalizedDraft, activeTemplateId);
     const currentHash = hashMessage(messageText);
-    const isStale = normalizedDraft.messageHash !== currentHash;
+    // The studio scene text is an editable input, not a source message — there
+    // is no "original" it could drift from, so the stale badge never applies.
+    const isStale = normalizedDraft.chatId !== STUDIO_CHAT_ID
+        && normalizedDraft.messageHash !== currentHash;
     const { stage1Action, canGenerateImage } = decidePromptActions(normalizedDraft);
     const isRunning = normalizedDraft.stage1?.status === 'running' || normalizedDraft.stage2?.status === 'running';
     const stage1Error = normalizedDraft.stage1?.status === 'error' ? normalizedDraft.stage1.error : null;
@@ -253,6 +279,7 @@ export function renderPromptAmbiguities(root, referenceResolution) {
  */
 export function renderGenerateMarkup(vm) {
     const { draft, templates, isStale, stage1Action, canGenerateImage, isRunning, stage2RequestId, stage1Error, stage2Error, ambiguities, entities } = vm;
+    const isStudio = vm.isStudio === true;
     const excerpt = escapeHtml((vm.messageText || '').slice(0, 120));
     const staleBadge = isStale ? '<span class="uris-draft-stale">исходное сообщение изменилось</span>' : '';
     const runningAttr = isRunning ? ' disabled' : '';
@@ -272,16 +299,35 @@ export function renderGenerateMarkup(vm) {
             : '');
 
     const ambiguityList = renderAmbiguitiesMarkup(ambiguities, entities);
-
-    // Stage 1/2 errors are no longer rendered as a red inline block — they
-    // live in the header error pool (recordUrisError from the action handlers).
-
     const followOn = state.settings.followLastPost !== false;
     const followActiveClass = followOn ? ' is-active' : '';
     const followPressed = followOn ? 'true' : 'false';
 
-    return `
-        <div class="uris-gen">
+    // Stage 1/2 errors are no longer rendered as a red inline block — they
+    // live in the header error pool (recordUrisError from the action handlers).
+
+    // Source block: in a chat it is the read-only excerpt of the selected post;
+    // in the studio the scene text is an input the user edits freely.
+    const sourceBlock = isStudio
+        ? `
+            <div class="uris-context-box uris-studio-scene">
+                <textarea class="text_pole uris-scene-area" id="urisScene" rows="3" placeholder="Текст сцены — по нему распознаются референсы. Можно оставить пустым и написать промпт напрямую."${runningAttr}>${escapeHtml(vm.messageText || '')}</textarea>
+                <div class="uris-scene-context">${ambiguityList}</div>
+            </div>`
+        : `
+            <div class="uris-context-box">
+                <div class="uris-source-excerpt">${excerpt}${staleBadge}</div>
+                <div class="uris-scene-context">${ambiguityList}</div>
+            </div>`;
+
+    // Header: post navigator in a chat, a static studio badge on the welcome
+    // screen (post navigation is meaningless there).
+    const headerBlock = isStudio
+        ? `
+            <div class="uris-postnav">
+                <div class="uris-postnav-info" id="urisPostInfo" title="Генерация без открытого чата">Студия — генерация вне чата</div>
+            </div>`
+        : `
             <div class="uris-postnav">
                 <button class="uris-postnav-btn" id="urisPrev" title="Предыдущий пост" type="button" aria-label="Предыдущий пост"><i class="fa-solid fa-chevron-left"></i></button>
                 <div class="uris-postnav-info" id="urisPostInfo" title="Текущий пост">—</div>
@@ -290,12 +336,29 @@ export function renderGenerateMarkup(vm) {
                     title="Следить за последним постом" aria-pressed="${followPressed}" type="button">
                     <i class="fa-solid fa-magnet"></i>
                 </button>
-            </div>
+            </div>`;
 
-            <div class="uris-context-box">
-                <div class="uris-source-excerpt">${excerpt}${staleBadge}</div>
-                <div class="uris-scene-context">${ambiguityList}</div>
-            </div>
+    // Automation and message-flow selectors need chat messages to ever fire —
+    // they are hidden in the studio (the studio envelope keeps their defaults).
+    const chatOnlyParams = isStudio ? '' : `
+                <span class="uris-param"><span class="uris-param-label">Автоматизация</span>
+                    <select class="text_pole" id="urisAutomationMode">
+                        <option value="manual" ${vm.automationMode === 'manual' ? 'selected' : ''}>Вручную</option>
+                        <option value="build-prompt" ${vm.automationMode === 'build-prompt' ? 'selected' : ''}>Строить промпт</option>
+                        <option value="full-pipeline" ${vm.automationMode === 'full-pipeline' ? 'selected' : ''}>Полный pipeline</option>
+                    </select></span>
+                <span class="uris-param"><span class="uris-param-label">Флоу генерации</span>
+                    <select class="text_pole" id="urisGenerationFlow">
+                        <option value="${POST_FILTER.AI_ONLY}" ${state.chatGenerationFlow === POST_FILTER.AI_ONLY ? 'selected' : ''}>Только AI</option>
+                        <option value="${POST_FILTER.USER_ONLY}" ${state.chatGenerationFlow === POST_FILTER.USER_ONLY ? 'selected' : ''}>Только пользователь</option>
+                        <option value="${POST_FILTER.ALL}" ${state.chatGenerationFlow === POST_FILTER.ALL ? 'selected' : ''}>Все сообщения</option>
+                        <option value="${POST_FILTER.MANUAL}" ${state.chatGenerationFlow === POST_FILTER.MANUAL ? 'selected' : ''}>Ручной выбор</option>
+                    </select></span>`;
+
+    return `
+        <div class="uris-gen">
+            ${headerBlock}
+            ${sourceBlock}
 
             <div class="uris-prompt-card">
                 <textarea class="text_pole uris-prompt-area" id="urisPrompt" rows="6" placeholder="Промпт картинки"${runningAttr}>${escapeHtml(draft.prompt || '')}</textarea>
@@ -323,19 +386,7 @@ export function renderGenerateMarkup(vm) {
             <div class="uris-gen-params">
                 <span class="uris-param"><span class="uris-param-label">Шаблон</span>
                     <select class="text_pole" id="urisTemplate">${templateOptions}</select></span>
-                <span class="uris-param"><span class="uris-param-label">Автоматизация</span>
-                    <select class="text_pole" id="urisAutomationMode">
-                        <option value="manual" ${vm.automationMode === 'manual' ? 'selected' : ''}>Вручную</option>
-                        <option value="build-prompt" ${vm.automationMode === 'build-prompt' ? 'selected' : ''}>Строить промпт</option>
-                        <option value="full-pipeline" ${vm.automationMode === 'full-pipeline' ? 'selected' : ''}>Полный pipeline</option>
-                    </select></span>
-                <span class="uris-param"><span class="uris-param-label">Флоу генерации</span>
-                    <select class="text_pole" id="urisGenerationFlow">
-                        <option value="${POST_FILTER.AI_ONLY}" ${state.chatGenerationFlow === POST_FILTER.AI_ONLY ? 'selected' : ''}>Только AI</option>
-                        <option value="${POST_FILTER.USER_ONLY}" ${state.chatGenerationFlow === POST_FILTER.USER_ONLY ? 'selected' : ''}>Только пользователь</option>
-                        <option value="${POST_FILTER.ALL}" ${state.chatGenerationFlow === POST_FILTER.ALL ? 'selected' : ''}>Все сообщения</option>
-                        <option value="${POST_FILTER.MANUAL}" ${state.chatGenerationFlow === POST_FILTER.MANUAL ? 'selected' : ''}>Ручной выбор</option>
-                    </select></span>
+                ${chatOnlyParams}
             </div>
 
             <div class="uris-refs-panel" id="urisRefsPanel">
@@ -503,13 +554,12 @@ export function bindModelSelect(root, choices, options = {}) {
         if (!modelId) return;
         try {
             const ctx = getCtx();
-            const msgId = state.currentMsgId;
             await patchChatConfig({ generationDefaults: { modelId } });
             state.generationDefaults = { ...(state.generationDefaults || {}), modelId };
-            if (msgId != null && ctx.chat?.[msgId]) {
-                const messageText = ctx.chat[msgId].mes || '';
+            const scope = activeScope(root);
+            if (scope.studio || (scope.msgId != null && ctx.chat?.[scope.msgId])) {
                 const params = readGenerationParams(root, {});
-                await updateGenerationDraft(ctx.chatId, msgId, messageText, d => ({
+                await updateGenerationDraft(scope.chatId, scope.msgId, scope.messageText, d => ({
                     ...d,
                     prompt: root.querySelector('#urisPrompt')?.value || '',
                     ...params,
@@ -539,23 +589,27 @@ export async function render(root) {
     const renderEpoch = root.__urisRenderEpoch;
     const isCurrent = () => root.__urisRenderEpoch === renderEpoch && root.__urisTabId === 'generate';
     const ctx = getCtx();
-    const chatId = ctx.chatId;
-    const msgId = state.currentMsgId;
+    const studio = isStudioActive();
+    const chatId = studio ? STUDIO_CHAT_ID : ctx.chatId;
+    const msgId = studio ? STUDIO_MSG_ID : state.currentMsgId;
 
     // Guard: if no chat is open or no valid msgId exists (e.g., initialization
     // before CHAT_CHANGED), render the empty state instead of calling
     // getGenerationDraft(chatId, null, ...) — generationDraftKey throws,
     // async-render rejects, and the tab stays blank.
-    if (!chatId || msgId == null || !ctx.chat?.[msgId]) {
+    if (!studio && (!chatId || msgId == null || !ctx.chat?.[msgId])) {
         root.innerHTML = renderEmptyStateMarkup();
         bindEmptyState(root);
         return;
     }
 
-    const messageText = ctx.chat[msgId].mes || '';
-
-    const draft = await getGenerationDraft(chatId, msgId, messageText);
+    // Studio: the draft comes first — the scene text is an editable input that
+    // lives inside the draft, not an immutable source message.
+    const draft = studio
+        ? await getGenerationDraft(chatId, msgId, '')
+        : await getGenerationDraft(chatId, msgId, ctx.chat[msgId].mes || '');
     if (!isCurrent()) return;
+    const messageText = studio ? (draft.sceneText || '') : (ctx.chat[msgId].mes || '');
     const chatBinding = await loadChatConfig();
     if (!isCurrent()) return;
     const defaults = state.settings?.useParametersForAllChats === true
@@ -601,11 +655,11 @@ export async function render(root) {
         toastr?.error('Модель чата недоступна: ' + (e?.message || e));
     }
     if (!isCurrent()) return;
-    root.innerHTML = renderGenerateMarkup({ ...vm, modelChoices, qualityOptions: qualityOptionsFor(modelChoices?.current || '', effectiveDraft.quality) });
+    root.innerHTML = renderGenerateMarkup({ ...vm, modelChoices, qualityOptions: qualityOptionsFor(modelChoices?.current || '', effectiveDraft.quality), isStudio: studio });
     bindGenerate(root);
     syncCancelState(root);
     bindModelSelect(root, modelChoices, { onSwitched: () => render(root) });
-    updatePostInfo(root);
+    if (!studio) updatePostInfo(root);
     refreshReferencePanel(root, referenceResolution, snapshot);
 }
 
@@ -693,8 +747,9 @@ export async function executeGenerationAction({ action, input, buttons, runStage
  */
 export function bindGenerate(root) {
     // Post navigator — re-render the whole tab on navigation so the draft switches.
-    root.querySelector('#urisPrev').addEventListener('click', () => { navigatePosts(-1); render(root); });
-    root.querySelector('#urisNext').addEventListener('click', () => { navigatePosts(1); render(root); });
+    // Absent in the studio (no posts to navigate).
+    root.querySelector('#urisPrev')?.addEventListener('click', () => { navigatePosts(-1); render(root); });
+    root.querySelector('#urisNext')?.addEventListener('click', () => { navigatePosts(1); render(root); });
 
     // Follow-last-post toggle: flips the global flag, persists, and on enable
     // snaps the navigator to the last post immediately. Manual arrow nav never
@@ -707,6 +762,30 @@ export function bindGenerate(root) {
         }
         render(root);
     });
+
+    // Studio scene text: editable Stage 1 source. Autosaved into the draft
+    // (sceneText) and refreshes the prompt-driven reference preview live.
+    const sceneEl = root.querySelector('#urisScene');
+    if (sceneEl) {
+        const sceneAutosave = createCancellablePromptAutosave({
+            persist: async ({ value }) => {
+                const scope = activeScope(root);
+                const savedDraft = await updateGenerationDraft(scope.chatId, scope.msgId, scope.messageText, d => ({
+                    ...d,
+                    sceneText: value,
+                }));
+                if (isStudioActive()) {
+                    const resolution = await resolveDraftPromptReferences(scope.chatId, savedDraft);
+                    renderMatchedKeywords(root, undefined, resolution);
+                    await renderLivePreview(root, resolution);
+                    renderPromptAmbiguities(root, resolution);
+                }
+            },
+        });
+        sceneEl.addEventListener('input', () => {
+            sceneAutosave.schedule({ value: sceneEl.value });
+        });
+    }
 
     // Prompt autosave: editing sets origin to manual and refreshes the prompt-driven preview.
     // Identity (chatId/msgId) and text are captured at INPUT time into the scheduled payload:
@@ -721,8 +800,9 @@ export function bindGenerate(root) {
                 prompt: value,
                 promptOrigin: d.prompt ? 'manual' : d.promptOrigin,
             }));
-            // Only refresh if the user is still on the same message.
-            if (getCtx().chatId === chatId && state.currentMsgId === msgId) {
+            // Only refresh if the user is still editing the same draft.
+            const scope = activeScope(root);
+            if (scope.chatId === chatId && scope.msgId === msgId) {
                 const resolution = await resolveDraftPromptReferences(chatId, savedDraft);
                 renderMatchedKeywords(root, undefined, resolution);
                 await renderLivePreview(root, resolution);
@@ -731,12 +811,11 @@ export function bindGenerate(root) {
         },
     });
     promptEl?.addEventListener('input', () => {
-        const ctx = getCtx();
-        const msgId = state.currentMsgId;
+        const scope = activeScope(root);
         autosave.schedule({
-            chatId: ctx.chatId,
-            msgId,
-            messageText: ctx.chat?.[msgId]?.mes || '',
+            chatId: scope.chatId,
+            msgId: scope.msgId,
+            messageText: scope.messageText,
             value: promptEl.value,
         });
     });
@@ -787,23 +866,24 @@ export function bindGenerate(root) {
     });
 
     const prepareRunInput = async () => {
-        const ctx = getCtx();
         const chatConfig = await resolveChatConfigSnapshot();
-        const msgId = state.currentMsgId;
-        if (msgId == null) {
+        const scope = activeScope(root);
+        if (!scope.studio && scope.msgId == null) {
             toastr?.warning('Нет поста');
             return null;
         }
-        const messageText = ctx.chat?.[msgId]?.mes || '';
-        const currentDraft = await getGenerationDraft(ctx.chatId, msgId, messageText);
+        const currentDraft = await getGenerationDraft(scope.chatId, scope.msgId, scope.messageText);
         const templateId = resolveDraftTemplateId(currentDraft, state.activeTemplateId);
         const params = readGenerationParams(root, currentDraft);
-        await updateGenerationDraft(ctx.chatId, msgId, messageText, d => ({
+        await updateGenerationDraft(scope.chatId, scope.msgId, scope.messageText, d => ({
             ...d,
+            // Flush the visible scene text with the run: a pending debounced
+            // autosave must not miss it.
+            ...(scope.studio ? { sceneText: scope.messageText } : {}),
             prompt: promptEl?.value || '',
             ...params,
         }));
-        return { chatId: ctx.chatId, msgId, messageText, templateId, chatConfig };
+        return { chatId: scope.chatId, msgId: scope.msgId, messageText: scope.messageText, templateId, chatConfig };
     };
 
     // Stage 1 always builds or rebuilds the prompt independently of Stage 2.
@@ -881,11 +961,10 @@ export function bindGenerate(root) {
     const saveGenerationDefault = async (key, value) => {
         await patchChatConfig({ generationDefaults: { [key]: value || null } });
         state.generationDefaults = { ...(state.generationDefaults || {}), [key]: value || null };
+        const scope = activeScope(root);
         const ctx = getCtx();
-        const msgId = state.currentMsgId;
-        if (msgId != null && ctx.chat?.[msgId]) {
-            const messageText = ctx.chat[msgId].mes || '';
-            await updateGenerationDraft(ctx.chatId, msgId, messageText, d => ({ ...d, [key]: value || d[key] }));
+        if (scope.studio || (scope.msgId != null && ctx.chat?.[scope.msgId])) {
+            await updateGenerationDraft(scope.chatId, scope.msgId, scope.messageText, d => ({ ...d, [key]: value || d[key] }));
         }
     };
     for (const [selector, key] of [['#urisAspect', 'aspectRatio'], ['#urisImgSize', 'imageSize'], ['#urisQuality', 'quality']]) {
@@ -919,15 +998,13 @@ export function bindGenerate(root) {
     // Template is a chat-wide default. Keep legacy draft override fields aligned
     // for old consumers, but make the metadata choice authoritative for new runs.
     root.querySelector('#urisTemplate')?.addEventListener('change', async () => {
-        const ctx = getCtx();
-        const msgId = state.currentMsgId;
         const templateId = root.querySelector('#urisTemplate')?.value || null;
         try {
             await patchChatConfig({ templateId });
             state.activeTemplateId = templateId;
-            if (msgId != null && ctx.chat?.[msgId]) {
-                const messageText = ctx.chat[msgId].mes || '';
-                await updateGenerationDraft(ctx.chatId, msgId, messageText, d => ({
+            const scope = activeScope(root);
+            if (scope.studio || (scope.msgId != null && getCtx().chat?.[scope.msgId])) {
+                await updateGenerationDraft(scope.chatId, scope.msgId, scope.messageText, d => ({
                     ...d,
                     templateSelection: 'default',
                     templateId: null,
@@ -958,12 +1035,10 @@ export function bindGenerate(root) {
  * @param {boolean} include
  */
 async function applyReferenceCorrection(root, candidateId, include) {
-    const ctx = getCtx();
-    const msgId = state.currentMsgId;
-    if (msgId == null) return;
-    const messageText = ctx.chat?.[msgId]?.mes || '';
+    const scope = activeScope(root);
+    if (!scope.studio && scope.msgId == null) return;
 
-    await updateGenerationDraft(ctx.chatId, msgId, messageText, d => ({
+    await updateGenerationDraft(scope.chatId, scope.msgId, scope.messageText, d => ({
         ...d,
         references: updateReferenceCorrections(d.references, candidateId, include),
     }));
@@ -990,11 +1065,9 @@ async function addStage2Includes(root, refIds) {
         if (!nextIds.includes(refId)) nextIds.push(refId);
     }
     saveChatRefs({ referenceIds: nextIds });
-    const ctx = getCtx();
-    const msgId = state.currentMsgId;
-    if (msgId == null) return;
-    const messageText = ctx.chat?.[msgId]?.mes || '';
-    await updateGenerationDraft(ctx.chatId, msgId, messageText, d => {
+    const scope = activeScope(root);
+    if (!scope.studio && scope.msgId == null) return;
+    await updateGenerationDraft(scope.chatId, scope.msgId, scope.messageText, d => {
         let references = d.references;
         for (const refId of refIds) {
             references = updateReferenceCorrections(references, refId, true);
@@ -1006,13 +1079,11 @@ async function addStage2Includes(root, refIds) {
 
 export async function enqueueCurrent(root, requestedAction) {
     try {
-        const ctx = getCtx();
-        const msgId = state.currentMsgId;
-        if (msgId == null) { toastr?.warning('Нет поста'); return; }
-        const messageText = ctx.chat?.[msgId]?.mes || '';
-        const currentDraft = await getGenerationDraft(ctx.chatId, msgId, messageText);
+        const scope = activeScope(root);
+        if (!scope.studio && scope.msgId == null) { toastr?.warning('Нет поста'); return; }
+        const currentDraft = await getGenerationDraft(scope.chatId, scope.msgId, scope.messageText);
         const templateId = resolveDraftTemplateId(currentDraft, state.activeTemplateId);
-        const item = await createQueueItem({ chatId: ctx.chatId, msgId, messageText, requestedAction, templateId });
+        const item = await createQueueItem({ chatId: scope.chatId, msgId: scope.msgId, messageText: scope.messageText, requestedAction, templateId });
         const queued = enqueueGeneration(item);
         updateQueueStatus(root);
         toastr?.info('Добавлено в очередь');
@@ -1262,12 +1333,10 @@ function makeChipDraggable(chip, refId, onDrop) {
 }
 
 async function resolveCurrentRootReferences(root) {
-    const ctx = getCtx();
-    const msgId = state.currentMsgId;
-    if (msgId == null) return null;
-    const messageText = ctx.chat?.[msgId]?.mes || '';
-    const draft = await getGenerationDraft(ctx.chatId, msgId, messageText);
-    return await resolveDraftPromptReferences(ctx.chatId, draft);
+    const scope = activeScope(root);
+    if (!scope.studio && scope.msgId == null) return null;
+    const draft = await getGenerationDraft(scope.chatId, scope.msgId, scope.messageText);
+    return await resolveDraftPromptReferences(scope.chatId, draft);
 }
 
 async function getSnapshotReferencePolicy(snapshot, loadConnection = getConnection) {
@@ -1462,7 +1531,7 @@ function onGenerationStart(ev) {
     if (!requestId) return;
     if (source === 'queue') state.runningQueueRequestId = requestId;
     if (msgId != null) _runningByMsgId.set(msgId, requestId);
-    if (_generateRoot && msgId === state.currentMsgId) {
+    if (_generateRoot && msgId === activeScope(_generateRoot).msgId) {
         setCancelState(_generateRoot, requestId, true);
     }
     if (_generateRoot) updateQueueStatus(_generateRoot);
@@ -1493,7 +1562,8 @@ function onGenerationEnd(ev) {
  * @param {HTMLElement} root
  */
 export function syncCancelState(root) {
-    const requestId = state.currentMsgId != null ? _runningByMsgId.get(state.currentMsgId) : undefined;
+    const { msgId } = activeScope(root);
+    const requestId = msgId != null ? _runningByMsgId.get(msgId) : undefined;
     setCancelState(root, requestId, Boolean(requestId));
     updateQueueStatus(root);
 }
