@@ -19,18 +19,46 @@ import { STUDIO_CHAT_ID } from './studio-scope.js';
 /**
  * Build a queue item with captured source identity.
  *
- * @param {{chatId:string,msgId:number,messageText:string,requestedAction:'full-pipeline'|'current-prompt-stage2',templateId:string|null,now?:()=>string}} input
+ * @param {{chatId:string,msgId:number,messageText:string,requestedAction:'full-pipeline'|'current-prompt-stage2',templateId:string|null,submission?:object|null,now?:()=>string}} input
+ * `submission` (current-prompt-stage2 only) is the submit-time snapshot
+ * `{prompt, aspectRatio?, imageSize?, quality?, references?}` captured at
+ * click time; the queue deep-freezes a copy so later draft edits cannot
+ * change what a queued Stage 2 will submit.
  * @returns {import('./core.js').GenerationQueueItem}
  */
-export async function createQueueItem({ chatId, msgId, messageText, requestedAction, templateId, now = () => new Date().toISOString() }) {
+export async function createQueueItem({ chatId, msgId, messageText, requestedAction, templateId, submission = null, now = () => new Date().toISOString() }) {
     if (!['full-pipeline', 'current-prompt-stage2'].includes(requestedAction)) {
         throw new Error(`Unknown requestedAction: ${requestedAction}`);
     }
+    if (submission != null && requestedAction !== 'current-prompt-stage2') {
+        throw new Error('submission is only valid for current-prompt-stage2');
+    }
+    // Validate before copying: a non-string prompt (e.g. a number) must not
+    // pass coercion and fail loudly later at paid-dispatch time.
+    if (submission != null && (typeof submission.prompt !== 'string' || !submission.prompt.trim())) {
+        throw new Error('submission.prompt must be a non-empty string');
+    }
+    // Explicit field copy: the snapshot must not alias (or freeze) the caller's
+    // object, and its shape is validated here rather than at paid-dispatch time.
+    const submissionSnapshot = submission == null ? null : deepFreeze({
+        prompt: submission.prompt,
+        aspectRatio: submission.aspectRatio ?? null,
+        imageSize: submission.imageSize ?? null,
+        quality: submission.quality ?? null,
+        references: {
+            includedIds: [...(submission.references?.includedIds || [])],
+            excludedIds: [...(submission.references?.excludedIds || [])],
+            revision: submission.references?.revision || 0,
+        },
+    });
     // Resolve schema-v5 binding and route together at enqueue time. The route is
     // deep-cloned so later connection edits cannot change a queued Stage 2 call.
     const chatConfig = deepFreeze(await resolveChatConfigSnapshot());
     // Studio items carry their scene text: there is no chat message to re-read
     // at execution time, and the studio scope survives chat switches.
+    // Submission items deliberately do NOT: per the deferred-queue contract they
+    // keep re-reading the live chat and are rejected on stale state before any
+    // paid request.
     const item = {
         chatId,
         msgId,
@@ -40,10 +68,11 @@ export async function createQueueItem({ chatId, msgId, messageText, requestedAct
         chatConfig,
         enqueuedAt: now(),
         ...(chatId === STUDIO_CHAT_ID ? { messageText: String(messageText || '') } : {}),
+        ...(submissionSnapshot ? { submission: submissionSnapshot } : {}),
     };
     recordDiagnosticEvent({
         event: 'queue-enqueue', stage: 'queue', chatHash: hashDiagnosticId(chatId), msgId,
-        details: { requestedAction },
+        details: { requestedAction, submission: submissionSnapshot != null },
     });
     return item;
 }
@@ -120,7 +149,8 @@ async function processQueue() {
                 };
                 let entry;
                 if (item.requestedAction === 'current-prompt-stage2') {
-                    entry = await runStage2ForDraft(input, (s) => { log('Q:', s); }, state.queueAbort.signal);
+                    entry = await runStage2ForDraft(input, (s) => { log('Q:', s); }, state.queueAbort.signal,
+                        item.submission ? { submission: item.submission } : {});
                 } else {
                     const run = await runStage1ForDraft(input, (s) => { log('Q:', s); }, state.queueAbort.signal);
                     if (run.applied && run.draft?.prompt) {
