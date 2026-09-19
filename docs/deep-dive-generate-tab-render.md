@@ -17,7 +17,7 @@
 
 **Точечные обновления без ререндера:** `setCancelState`/`updateQueueStatus` по `uris:stage1/2-start/end` (`tab-generate.js:1431-1457`); `renderPromptAmbiguities` (241); `renderMatchedKeywords` (1039). Fire-and-forget: `updatePostInfo → refreshReferencePanel` (`1358-1366`), `renderLivePreview`/`renderCap` внутри него.
 
-**Запись черновика:** autosave input (694-713, debounce 400 мс через `core.debounce`), `prepareRunInput` (760-778, flush перед пуском), `bindModelSelect` change (502-524), `saveGenerationDefault` (852-861).
+**Запись черновика:** autosave input (`createCancellablePromptAutosave`, 711 — debounce 400 мс с отменой, идентичность поста снимается в момент input), `prepareSubmissionInput` (1023-1059, flush видимого текста в драфт + снапшот при постановке в очередь; с v0.9.0 заменил удалённый `prepareRunInput`), `bindModelSelect` change (554), `saveGenerationDefault` (897).
 
 ## 2. Поток данных рендера
 
@@ -42,11 +42,11 @@ guard пустого состояния (543-547) → `getGenerationDraft` (551)
 | Тот же throw из `updatePostInfo → refreshReferencePanel` (fire-and-forget) | unhandled rejection + полупустая панель референсов | **P2-2** (обернуть `getActiveReferencePolicy`) |
 | Быстрые include/exclude кандидатов | `applyReferenceCorrection` → полный ререндер на каждый клик: при задержке возможен устаревший DOM (та же механика P2-1) | закрывается P2-1 |
 | `escapeHtml`-пути имён/промптов | все вставки экранированы (проверено review) | ок |
-| Пустой чат / msgId=null | empty state, `prepareRunInput` тостит «Нет поста» | ок |
+| Пустой чат / msgId=null | empty state, `prepareSubmissionInput` тостит «Нет поста» | ок |
 
 ## 5. Хрупкие места
 
-1. `createCancellablePromptAutosave` (`637-656`) и `executeGenerationAction` (`659-670`) — **написаны и покрыты тестами, но не подключены**; прод использует `core.debounce` без отмены (694) и независимые `withBusy` на две кнопки.
+1. `createCancellablePromptAutosave` (711) давно подключён в прод — autosave промпта (784) и сцены (758), идентичность поста фиксируется в момент input (пин P1-1); `executeGenerationAction` удалён (v0.9.0): шифровал снятую семантику блокировки обеих кнопок на время стадии; прод использует независимые `withBusy` (858, 882), Stage 2 — fire-and-forget через очередь.
 2. Инвариант «текст в textarea = draft текущего currentMsgId» держится на дисциплине вызовов, а не на механизме: любое расхождение во времени (debounce, follow-ререндер) его ломает.
 3. `updatePostInfo` вызывает `refreshReferencePanel(root)` без `referenceResolution` → `renderLivePreview(null)` очищает превью до прихода полного рендера (мигание).
 4. Прямые `render(root)` не восстанавливают скролл (теряется позиция при каждой навигации/коррекции).
