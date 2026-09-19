@@ -49,7 +49,7 @@ import { ensureRefsStoreReady, flushRefsWrites, flushRefsWritesOnUnload } from '
 import { ensureParamPresetStoreReady, flushParamPresetWrites, flushParamPresetWritesOnUnload } from './src/param-presets.js';
 import { ensureStudioStoreReady, flushStudioWrites, flushStudioWritesOnUnload } from './src/studio-scope.js';
 import { exportNetDump } from './src/netdump.js';
-import { activateBridge, deactivateBridge, markBridgeReady } from './src/bridge.js';
+import { activateBridge, deactivateBridge, markBridgeReady, markBridgeFailed } from './src/bridge.js';
 
 // ── Lifecycle hooks ──
 
@@ -71,7 +71,13 @@ async function safeInit() {
     if (_initialized) { log('already initialized, skipping'); return; }
     _initialized = true;
     try { await init(); }
-    catch (e) { error('init:', e); _initialized = false; }
+    catch (e) {
+        error('init:', e);
+        _initialized = false;
+        // The bridge global is already published (activateBridge runs first):
+        // reject its ready promise so awaiting consumers don't hang forever.
+        markBridgeFailed(e);
+    }
 }
 
 let _launcherObserver = null;
@@ -86,8 +92,12 @@ let _onChatChangedRefresh = null;
 
 /** Bootstraps the extension, registers tabs, mounts UI and binds events. */
 async function init() {
-    if (typeof SillyTavern === 'undefined' || !SillyTavern.getContext) { error('SillyTavern unavailable'); return; }
-    const ctx = getCtx(); if (!ctx) { warn('context unavailable'); return; }
+    if (typeof SillyTavern === 'undefined' || !SillyTavern.getContext) {
+        error('SillyTavern unavailable');
+        markBridgeFailed(new Error('SillyTavern context is unavailable'));
+        return;
+    }
+    const ctx = getCtx(); if (!ctx) { warn('context unavailable'); markBridgeFailed(new Error('SillyTavern context is unavailable')); return; }
     // Publish globalThis.URIS before any async work so consumers can grab the
     // global early and await URIS.ready for actual readiness.
     activateBridge();

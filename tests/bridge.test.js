@@ -9,6 +9,7 @@ import {
     activateBridge,
     deactivateBridge,
     getBridge,
+    markBridgeFailed,
     markBridgeReady,
 } from '../src/bridge.js';
 
@@ -230,4 +231,54 @@ test('bridge: generate trigger lookup is case/ё-insensitive (symmetric with par
         deactivateBridge();
         assert.equal(globalThis.URIS, undefined);
     }
+});
+
+test('bridge: unknown connectionId → coded NO_CONNECTION (never a bare Error)', async () => {
+    const { state } = await import('../src/core.js');
+    const savedSettings = state.settings;
+    const savedST = globalThis.SillyTavern;
+    const bridge = activateBridge();
+    try {
+        state.settings = { enabled: true, bridgeEnabled: true };
+        // Минимальный ST-стаб: пустое хранилище соединений → resolveConnection null.
+        globalThis.SillyTavern = { getContext: () => ({ extensionSettings: {} }) };
+        await assert.rejects(
+            () => bridge.generate({ prompt: 'x', connectionId: 'nope-404' }, { caller: 'lab' }),
+            e => e instanceof UrisBridgeError && e.code === 'NO_CONNECTION',
+        );
+        // Соединение не резолвится и при modelId — NO_ROUTE не должен маскировать
+        // отсутствие соединения другим кодом.
+        await assert.rejects(
+            () => bridge.generate({ prompt: 'x', connectionId: 'nope-404', modelId: 'm' }, { caller: 'lab' }),
+            e => e instanceof UrisBridgeError && e.code === 'NO_CONNECTION',
+        );
+    } finally {
+        state.settings = savedSettings;
+        if (savedST === undefined) delete globalThis.SillyTavern; else globalThis.SillyTavern = savedST;
+        deactivateBridge();
+    }
+});
+
+test('bridge: failed init rejects URIS.ready instead of hanging', async () => {
+    const bridge = activateBridge();
+    // Слушатель вешается ДО отказа: потребители из брифа делают await URIS.ready.
+    const settled = assert.rejects(
+        () => bridge.ready,
+        e => e instanceof Error,
+    );
+    markBridgeFailed(new Error('boom'));
+    await settled;
+    deactivateBridge();
+    assert.equal(globalThis.URIS, undefined);
+});
+
+test('bridge: deactivate rejects a pending ready promise', async () => {
+    const bridge = activateBridge();
+    const settled = assert.rejects(
+        () => bridge.ready,
+        e => e instanceof UrisBridgeError && e.code === 'NOT_READY',
+    );
+    deactivateBridge();
+    await settled;
+    assert.equal(globalThis.URIS, undefined);
 });

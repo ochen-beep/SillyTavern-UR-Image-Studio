@@ -38,6 +38,8 @@ export const urisReady = async (timeoutMs = 15000) => {
             new Error('URIS not installed or disabled'), { code: 'URIS_UNAVAILABLE' });
         await new Promise(r => setTimeout(r, 150));
     }
+    // ready реджектится (НЕ висит), если init URIS упал или URIS выключили
+    // до готовности — оберните в try/catch и деградируйте тихо.
     await globalThis.URIS.ready;
     return globalThis.URIS;   // ВАЖНО: ссылку не кэшировать, звать globalThis.URIS каждый раз
 };
@@ -139,6 +141,10 @@ ctx.eventSource.on(ctx.event_types.MESSAGE_SENT, async (msgId) => {
 3. Маркер остаётся в сохранённом тексте (модель видит свои прошлые теги —
    формат самоподдерживается), юзеру не показывается. Слабое/пустое описание —
    деградация (скрыть), не вызов моста.
+   **Развилка платного клика**: пример выше — автопилот (генерация сразу по
+   тегу; легально только при явном согласии юзера, §6.5). Консервативный
+   вариант референс-интеграции (Offstage): тег превращается в заготовку
+   «фото ожидает запроса», платный вызов — по клику юзера по карточке.
 
 ### 5.3. Кнопка в вашем UI
 
@@ -155,17 +161,22 @@ URIS своих `/uris:*` команд пока не регистрирует �
 const ctx = SillyTavern.getContext();
 ctx.SlashCommandParser.addCommandObject(ctx.SlashCommand.fromProps({
     name: 'myext_draw',
-    callback: async (args, value) => {
-        const res = await urisGenerate({ prompt: String(value || '').trim() }, {});
+    callback: async (namedArgs, unnamedArgs) => {
+        const prompt = String(Array.isArray(unnamedArgs) ? unnamedArgs.join(' ') : unnamedArgs || '').trim();
+        const res = await urisGenerate({ prompt }, {});
         return String(res.imagePath);   // путь уходит в pipe
     },
-    unnamedArgumentList: [ctx.SlashCommandArgument_object.fromString('prompt', true)],
+    unnamedArgumentList: [ctx.SlashCommandArgument.fromProps({
+        description: 'Visually concrete description',
+        typeList: [ctx.ARGUMENT_TYPE.STRING],
+        isRequired: true,
+    })],
     help: 'Сгенерировать картинку через URIS и вернуть путь',
+    returns: 'image path',
 }));
 ```
-
-(Названия классов сверьте со своей версией ST: `SlashCommand.fromProps` /
-`SlashCommandParser.addCommandObject` — актуальная форма; в старых —
+(Рабочий пример целиком — `SlashCommand.fromProps` + `SlashCommandArgument.fromProps` —
+смотрите в Offstage `lib/draw-commands.js`; в старых версиях ST —
 `registerSlashCommand`.)
 
 ### 5.5. Что НЕ делать

@@ -81,10 +81,14 @@ export function createUrisClient({ caller, waitTimeoutMs = 15000 } = {}) {
             };
             const timer = setTimeout(() => {
                 cleanup();
-                if (bridge()) return; // ready may still be pending on the surface itself
-                const uris = bridge();
-                if (uris) attach(uris);
-                else reject(new UrisUnavailableError(`URIS bridge not found within ${timeoutMs}ms (not installed or disabled)`));
+                // Timeout is a hard budget even when the global is already up:
+                // a caller relying on ready() must never be blocked forever.
+                // The cache is cleared on rejection, so a later ready() re-attaches.
+                if (bridge()) {
+                    reject(new UrisUnavailableError(`URIS bridge exists but did not become ready within ${timeoutMs}ms`));
+                } else {
+                    reject(new UrisUnavailableError(`URIS bridge not found within ${timeoutMs}ms (not installed or disabled)`));
+                }
             }, timeoutMs);
             function cleanup() {
                 clearTimeout(timer);
@@ -165,8 +169,18 @@ export function createUrisClient({ caller, waitTimeoutMs = 15000 } = {}) {
             const detail = ev?.detail || {};
             if (detail.type === type || type === '*') cb(detail);
         };
+        // 'destroyed' travels on its own window event without a detail payload,
+        // so synthesize the detail here — the plain bridge-events handler above
+        // would never see it.
+        const onDestroyed = () => {
+            if (type === 'destroyed' || type === '*') cb({ type: 'destroyed' });
+        };
         window.addEventListener(BRIDGE_READY_EVENT, handler);
-        return () => window.removeEventListener(BRIDGE_READY_EVENT, handler);
+        window.addEventListener(BRIDGE_DESTROYED_EVENT, onDestroyed);
+        return () => {
+            window.removeEventListener(BRIDGE_READY_EVENT, handler);
+            window.removeEventListener(BRIDGE_DESTROYED_EVENT, onDestroyed);
+        };
     }
 
     return {

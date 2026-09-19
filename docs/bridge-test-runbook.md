@@ -145,13 +145,73 @@ await Promise.allSettled(runs);
    ```
 3. Включить обратно → `URIS` и `ready` восстановлены, `generate` работает.
 
-## G. Сценарий «Offstage» — аватар контакта руками
+## G. Сценарий «Offstage» — референс-интеграция (реализована)
 
-Минимальная проверка consumer-сценария телефона: сгенерировать квадратный
-портрет и отдать путь в `<img>` (в Offstage аватар рисует
-`createContactAvatar` → `attachImage(container, contact.avatarUrl, …)` —
-путь из моста подойдёт без изменений, `safeAvatarUrl` пропускает
-same-origin `/…`).
+Offstage — полноценный потребитель моста, не патч-кандидат. Клиент:
+`lib/uris-bridge.js` (перечитывает `globalThis.URIS` на каждом вызове, poll
+`ready` с дедлайном, нормализация `imagePath` и кодов), точки входа:
+
+1. **`/offstage-draw <описание> | aspect=<ratio>`** — слеш-команда, путь
+   картинки уходит в STscript-pipe (`lib/draw-commands.js`,
+   `globalThis.OffstageDraw`). Быстрая проверка без GUI:
+   `await OffstageDraw('test sketch', {})` → `'/user/images/…/uris_ext_offstage_….png'`.
+2. **Фото-бабблы телефона** — «Дополнительно → Запросить фото» в переписке:
+   описание уходит в мост (`caller: 'offstage'`, `useSceneRefs` из настроек),
+   карточка рисует результат; повторная генерация с готовым `imagePath`
+   невозможна — перезагрузка страницы не оплачивается дважды
+   (`lib/photo-runtime.js`: один полёт на расширение, `BUSY` при параллели).
+3. **`<photo>`-протокол LLM** — включается в настройках Offstage
+   («Включить команды фото», режимы «по запросу»/«всегда»). Модель отвечает
+   тегом, телефон парсит его в фото-заготовку и **вырезает тег из видимого
+   текста** (`lib/commands-parser.js`, `lib/photo-commands.js`). Платную
+   генерацию при этом запускает **клик юзера** («Сгенерировать фото» на
+   карточке): автопилота нет — заготовка ложится в статус «ожидает запроса»,
+   `URIS.getStatus().active` остаётся пустым до нажатия. Это сознательная
+   развилка («платное — только по действию юзера», гайд §10): модель
+   *предлагает* фото, оплачивает его человек.
+
+Что проверить на живом стенде (проверено 2026-09-20, Offstage 0.8.1):
+
+- `/offstage-draw` возвращает путь с префиксом `uris_ext_offstage_`; в
+  галерее URIS карточка с тем же `requestId`.
+- Ручной photo-request: в `URIS.getStatus().active` появляется запись
+  `caller: 'offstage'`; по завершении картинка на баббле.
+- `<photo>`-тег в ответе модели (инъекция, см. ниже): тег вырезан, баббл
+  «ожидает запроса», мост пуст; клик по карточке запускает генерацию.
+- Перезагрузка страницы: баббл с сохранённым `imagePath` показывает
+  картинку, `generation:started` НЕ срабатывает (подписка в консоли).
+- Stop таверны (`GENERATION_STOPPED`) прерывает и мостовые вызовы — фото-
+  или консольный запрос в полёте получает `ABORTED`, заготовка убирается.
+- Выключение URIS посреди фото-генерации → баббл не остаётся вечным
+  спиннером: `ABORTED` обрабатывается молча, состояние pending можно
+  перезапустить вручную.
+
+**Детерминированная проверка тега без LLM** (модель капризна: может не
+прислать тег — так проверка легко даёт ложный «зелёный»). В консоли
+страницы подменяется единственная точка, через которую телефон зовёт
+текстовую LLM, ответ читается как `result.content`:
+
+```js
+const svc = SillyTavern.getContext().ConnectionManagerRequestService;
+const orig = svc.sendRequest;
+svc.sendRequest = async function (profileId, prompt, maxTokens, opts) {
+    if (window.__canned) {
+        const c = window.__canned; window.__canned = null;
+        return { content: c };
+    }
+    return orig.call(this, profileId, prompt, maxTokens, opts);
+};
+window.__canned = 'Вот. <photo>close-up portrait of Gaius on the basilica steps, golden hour</photo> Ну как?';
+```
+
+Затем «Продолжить переписку» в переписке. Проверить: тег вырезан из бабблов,
+карточка «ожидает запроса», `URIS.listActive()` пуст; клик по карточке —
+генерация с `caller: 'offstage'`. Негативы тем же способом: описание короче
+3 символов — тег вырезан, баббла нет; незакрытый `<photo>` — вырезан вместе
+с хвостом ответа. После проверки вернуть `svc.sendRequest = orig`.
+
+Для аватарного сценария руками (без Offstage) — генерация квадратного
+портрета и показ через `<img>`:
 
 ```js
 async function testContactAvatar(name) {
@@ -166,42 +226,10 @@ async function testContactAvatar(name) {
 await testContactAvatar('Mira');
 ```
 
-После обкатки сценария G в коде Offstage появляется один адаптер
-(`lib/image-bridge.js`, ~15 строк: guard `globalThis.URIS` + `await ready` +
-`generate` с `caller: 'offstage'`) и точка вызова — см. «Минимальный патч
-Offstage» ниже.
-
-## Минимальный патч Offstage (после успешного G)
-
-```js
-// lib/image-bridge.js — в стиле репозитория: зависимости инъектятся, node-тестируемо
-export function createImageBridge({ getUris = () => globalThis.URIS } = {}) {
-    return {
-        available: () => !!getUris(),
-        async generateAvatar({ name, appearancePrompt = '', signal } = {}) {
-            const uris = getUris();
-            if (!uris) throw Object.assign(new Error('URIS not installed'), { code: 'uris_unavailable' });
-            await uris.ready;
-            return uris.generate(
-                { prompt: `square profile avatar, head-and-shoulders portrait of ${name}. ${appearancePrompt}`,
-                  aspectRatio: '1:1' },
-                { caller: 'offstage', signal });
-        },
-    };
-}
-```
-
-Точка входа в текущем состоянии — там, где контакт получает `avatarUrl`
-(`lib/context.js` `normalizeCharacter` сейчас ставит только ST-thumbnail).
-Патч-кандидат: опция «сгенерировать аватар через URIS» в контекстном меню
-контакта (их message-menu.js), результат пишется в персистентный contact как
-`avatarUrl` (создаётся поле `avatarSource: 'uris'`, чтобы rebuild не
-перезатирал путь ST-thumbnail'ом). Это предложение, не реализация.
-
 ## Что сознательно НЕ тестируется в этой сборке
 
 - Разрешения/allowlist по caller'ам (M3) — любой включённый扩展 может
   генерировать; атрибуция только логируется.
-- `refId` из пула референсов, слэш-команды `/uris:*`, `buildPrompt`/
-  `generateForMessage` (M2).
+- Слэш-команды `/uris:*` со стороны URIS (потребители регистрируют свои —
+  как `/offstage-draw` у Offstage).
 - Параллельные внешние запросы (`queue: false` доступен, но не рекомендуется).

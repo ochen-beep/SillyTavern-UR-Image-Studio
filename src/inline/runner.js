@@ -250,7 +250,8 @@ export async function processJob({ msgId, idx, type, desc }, operation = null) {
         if (canWrite && !wasReady) {
             upsertItem(msgId, { idx, type, descHash, desc, status: 'error', imagePath: null, cardId: null, requestId, error: errorCode, createdAt: Date.now() });
         }
-        if (cancelled && e?.code == null) throw Object.assign(new Error('aborted'), { code: 'ABORTED' });
+        // DOMException AbortError carries a legacy numeric .code (20): wrap by string-code check.
+        if (cancelled && typeof e?.code !== 'string') throw Object.assign(new Error('aborted'), { code: 'ABORTED' });
         throw e;
     } finally {
         state.activeGenerations.delete(requestId);

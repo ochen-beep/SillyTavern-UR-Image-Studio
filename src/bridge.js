@@ -143,6 +143,7 @@ export function normalizeBridgeRequest(request) {
 
 let _bridge = null;
 let _readyResolve = null;
+let _readyReject = null;
 let _readyPromise = null;
 let _ready = false;
 /** @type {Map<string, {caller:string, startedAt:number, controller:AbortController, queued:boolean}>} */
@@ -225,19 +226,9 @@ async function generateOnce(caller, requestId, norm, controller, onStatus) {
             throw bridgeError('NO_CONNECTION', 'No image connection available. Pass connectionId or select a connection in the current chat (URIS.getStatus().connection).');
         }
 
-        /** @type {Record<string, unknown>} */
-        const dispatchOpts = {};
-        if (norm.modelId) {
-            const resolved = await resolveConnection(connId);
-            if (!resolved) throw bridgeError('NO_CONNECTION', `Connection ${connId} was not found`);
-            const plan = resolveDispatchPlan({ ...resolved.conn, model: { id: norm.modelId, source: 'manual' } });
-            if (!plan?.route?.generationContract) {
-                throw bridgeError('NO_ROUTE', `Model "${norm.modelId}" has no dispatchable route on connection ${connId}`);
-            }
-            dispatchOpts.route = plan.route;
-        }
-
         // Trigger-профиль (опционально): приносит aspect/shell/refsPolicy из реестра.
+        // Проверяется ДО соединения: структурная ошибка запроса не должна
+        // требовать рабочее соединение, чтобы проявиться.
         let aspect = norm.aspectRatio;
         let basePromptSource = norm.prompt;
         let refsPolicyOverride = null;           // 'off' форсит отказ от авторефов
@@ -250,6 +241,21 @@ async function generateOnce(caller, requestId, norm, controller, onStatus) {
             aspect = profile.aspect || aspect;
             basePromptSource = buildInlinePrompt(profile, norm.prompt);
             if (profile.refsPolicy === 'off') refsPolicyOverride = 'off';
+        }
+
+        /** @type {Record<string, unknown>} */
+        const dispatchOpts = {};
+        // Resolve the connection in the bridge even when only connectionId is
+        // given: generateImageRequest would fail with a bare uncoded Error, and
+        // the contract is that consumers branch on NO_CONNECTION.
+        const resolvedConn = await resolveConnection(connId);
+        if (!resolvedConn) throw bridgeError('NO_CONNECTION', `Connection ${connId} was not found`);
+        if (norm.modelId) {
+            const plan = resolveDispatchPlan({ ...resolvedConn.conn, model: { id: norm.modelId, source: 'manual' } });
+            if (!plan?.route?.generationContract) {
+                throw bridgeError('NO_ROUTE', `Model "${norm.modelId}" has no dispatchable route on connection ${connId}`);
+            }
+            dispatchOpts.route = plan.route;
         }
 
         // Reference pipeline: pool refs by id, then the Stage 2 scene resolver
@@ -334,7 +340,10 @@ async function generateOnce(caller, requestId, norm, controller, onStatus) {
             durationMs: Date.now() - startedAt,
             details: { caller, code: e?.code || null, message: e?.message || String(e) },
         });
-        if (cancelled && e?.code == null) throw bridgeError('ABORTED', 'Generation aborted');
+        // DOMException AbortError carries a legacy numeric .code (20), so the
+        // wrap condition must ask for a *string* code — otherwise the raw
+        // DOMException leaks to consumers instead of the coded ABORTED.
+        if (cancelled && typeof e?.code !== 'string') throw bridgeError('ABORTED', 'Generation aborted');
         emitBridge('generation:error', { requestId, caller, error: { code: e?.code || null, message: e?.message || String(e) } });
         throw e;
     } finally {
@@ -601,7 +610,8 @@ async function buildPrompt(request, opts = {}) {
             durationMs: Date.now() - startedAt,
             details: { caller, code: e?.code || null, message: e?.message || String(e) },
         });
-        if (cancelled && e?.code == null) throw bridgeError('ABORTED', 'Request aborted');
+        // Same numeric-code caveat as generateOnce: DOMException carries code 20.
+        if (cancelled && typeof e?.code !== 'string') throw bridgeError('ABORTED', 'Request aborted');
         emitBridge('prompt:error', { requestId, caller, error: { code: e?.code || null, message: e?.message || String(e) } });
         throw e;
     } finally {
@@ -620,7 +630,7 @@ async function buildPrompt(request, opts = {}) {
  */
 export function activateBridge() {
     if (_bridge) return _bridge;
-    _readyPromise = new Promise(resolve => { _readyResolve = resolve; });
+    _readyPromise = new Promise((resolve, reject) => { _readyResolve = resolve; _readyReject = reject; });
     _ready = false;
     _bridge = Object.freeze({
         apiVersion: BRIDGE_API_VERSION,
@@ -651,7 +661,27 @@ export function markBridgeReady() {
     _ready = true;
     _readyResolve?.();
     _readyResolve = null;
+    _readyReject = null;
     emitBridge('ready', {});
+}
+
+/**
+ * Reject `URIS.ready` when init() failed or bailed out early, so consumers
+ * awaiting it get a rejection instead of hanging forever. A later
+ * re-enable re-activates the bridge with a fresh pending promise.
+ * @param {unknown} err
+ */
+export function markBridgeFailed(err) {
+    if (_ready) return;
+    const failure = err instanceof Error ? err : bridgeError('NOT_READY', `URIS failed to initialize: ${String(err?.message || err)}`);
+    try {
+        _readyReject?.(failure);
+        // No-op handler so a rejection with no awaiting consumer does not
+        // surface as an unhandledRejection; awaiting consumers still get it.
+        _readyPromise?.catch(() => {});
+    } catch { /* already settled */ }
+    _readyResolve = null;
+    _readyReject = null;
 }
 
 /**
@@ -667,7 +697,18 @@ export function deactivateBridge() {
     _listeners.clear();
     _bridge = null;
     _ready = false;
+    const pendingReady = _readyPromise;
     _readyPromise = null;
+    // A pending ready promise must not outlive the bridge: awaiting consumers
+    // would hang forever on a global that no longer exists. The no-op catch
+    // keeps the rejection from surfacing as an unhandledRejection when no
+    // consumer is awaiting it at that moment.
+    try {
+        _readyReject?.(bridgeError('NOT_READY', 'URIS was disabled before initialization finished'));
+        pendingReady?.catch(() => {});
+    } catch { /* already settled */ }
+    _readyResolve = null;
+    _readyReject = null;
     delete globalThis.URIS;
     if (typeof window !== 'undefined' && typeof window.dispatchEvent === 'function') {
         try { window.dispatchEvent(new CustomEvent('uris:bridge-destroyed')); } catch { /* ignore */ }
