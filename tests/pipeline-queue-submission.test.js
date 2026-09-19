@@ -102,6 +102,7 @@ test('createQueueItem validates and deep-freezes the submission snapshot', async
     assert.deepEqual(item.submission.references.includedIds, ['ref-a']);
     assert.ok(Object.isFrozen(item.submission));
     assert.ok(Object.isFrozen(item.submission.references));
+    assert.ok(Object.isFrozen(item.submission.references.includedIds));
 });
 
 test('createQueueItem rejects malformed submissions', async () => {
@@ -131,20 +132,24 @@ test('queued submissions run FIFO, each with its submit-time prompt', async () =
     });
     try {
         const { createQueueItem, enqueueGeneration } = await import('../src/pipeline-queue.js');
-        const mk = (prompt) => createQueueItem({
+        // Разные quality у item'ов: пин того, что очередь передаёт ВЕСЬ снапшот,
+        // а не только промпт ('auto' в тело провайдера не попадает, low/high — да).
+        const mk = (prompt, quality) => createQueueItem({
             chatId: 'test-chat', msgId: 0, messageText: 'A cat.',
             requestedAction: 'current-prompt-stage2', templateId: null,
-            submission: { prompt, aspectRatio: '1:1', imageSize: '1K', quality: 'auto',
+            submission: { prompt, aspectRatio: '1:1', imageSize: '1K', quality,
                 references: { includedIds: [], excludedIds: [], revision: 0 } },
         });
-        const p1 = enqueueGeneration(await mk('P1'));
-        const p2 = enqueueGeneration(await mk('P2'));
+        const p1 = enqueueGeneration(await mk('P1', 'low'));
+        const p2 = enqueueGeneration(await mk('P2', 'high'));
         const [e1, e2] = await Promise.all([p1, p2]);
         assert.ok(e1 && e2, 'both items complete with gallery entries');
         assert.equal(bodies.length, 2);
         assert.match(bodies[0], /P1/);
         assert.doesNotMatch(bodies[0], /P2/);
+        assert.match(bodies[0], /"quality":"low"/);
         assert.match(bodies[1], /P2/, 'FIFO order, each with its submit-time prompt');
+        assert.match(bodies[1], /"quality":"high"/, 'the whole snapshot is forwarded, not just the prompt');
     } finally {
         restore();
     }
@@ -184,6 +189,46 @@ test('a submission item still rejects when the source message changed before its
         await p1;
         await assert.rejects(async () => p2, /source message changed/i);
         assert.equal(bodies.length, 1, 'the stale item never reaches the provider');
+    } finally {
+        restore();
+        releaseFirst?.();
+    }
+});
+
+// Контрактный пин: stale-chat гвард — sibling проверки message-changed —
+// распространяется и на submission item'ы.
+test('a submission item still rejects when the chat switched before its turn', async () => {
+    let releaseFirst;
+    const gate = new Promise(resolve => { releaseFirst = resolve; });
+    const bodies = [];
+    const restore = mockFetch((url, options) => {
+        if (String(url).endsWith('/images/generations')) {
+            bodies.push(String(options?.body || ''));
+            return (async () => {
+                if (bodies.length === 1) await gate; // держим item 1 в полёте
+                return { ok: true, status: 200, json: async () => ({ data: [{ b64_json: 'b3JkZXI=' }] }) };
+            })();
+        }
+        if (String(url) === '/api/images/upload') {
+            return { ok: true, status: 200, json: async () => ({ path: 'user/images/UR%20Image%20Studio/q-stale-chat.png' }) };
+        }
+        throw new Error(`unexpected ${url}`);
+    });
+    try {
+        const { createQueueItem, enqueueGeneration } = await import('../src/pipeline-queue.js');
+        const mk = () => createQueueItem({
+            chatId: 'test-chat', msgId: 0, messageText: 'A cat.',
+            requestedAction: 'current-prompt-stage2', templateId: null,
+            submission: { prompt: 'PX', aspectRatio: '1:1', imageSize: '1K', quality: 'auto',
+                references: { includedIds: [], excludedIds: [], revision: 0 } },
+        });
+        const p1 = enqueueGeneration(await mk()); // стартует сразу: чек прошёл синхронно
+        const p2 = enqueueGeneration(await mk()); // ждёт за item 1
+        coreState.currentChatId = 'other-chat';   // чат переключён, пока item 2 ждёт
+        releaseFirst();                           // item 1 доходит до конца
+        await p1;
+        await assert.rejects(async () => p2, /another chat/i);
+        assert.equal(bodies.length, 1, 'the stale-chat item never reaches the provider');
     } finally {
         restore();
         releaseFirst?.();
