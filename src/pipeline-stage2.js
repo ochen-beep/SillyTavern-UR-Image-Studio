@@ -67,6 +67,12 @@ async function loadDraftForStage2(chatId, msgId, messageText) {
  * @param {object} [opts]
  * @param {object} [opts.instruction] - compatibility override for positional wrapper.
  * @param {Array<{image:string,name?:string}>} [opts.refs] - compatibility override for references.
+ * @param {object} [opts.submission] - submit-time snapshot for queued manual runs:
+ *   { prompt:string, aspectRatio?:string, imageSize?:string, quality?:string,
+ *     references?:{includedIds:string[],excludedIds:string[],revision:number} }.
+ *   Authoritative over the live draft: never written back into it, and exempt
+ *   from the post-materialize revision re-check — the snapshot IS the submitted
+ *   intent; whatever the editor holds by execution time belongs to the next run.
  * @param {(refs: Array<{image:string,name?:string}>) => void} [opts.onRefsSent]
  * @param {boolean} [opts.isAuto]
  * @returns {Promise<object|null>}
@@ -147,10 +153,14 @@ export async function runStage2ForDraft(input, onStatus = () => {}, signal, opts
             source: opts.isAuto ? 'auto' : (signal ? 'queue' : 'manual'),
         });
 
+        // Normalize once: only a string prompt makes a submission usable.
+        const submission = opts.submission && typeof opts.submission.prompt === 'string'
+            ? opts.submission
+            : null;
         let draft = await loadDraftForStage2(chatId, msgId, messageText);
         if (useSignal.aborted) throw new DOMException('Aborted', 'AbortError');
         const generationDefaults = snapshot.generationDefaults || {};
-        if (!opts.instruction && Object.values(generationDefaults).some(Boolean)) {
+        if (!opts.instruction && !submission && Object.values(generationDefaults).some(Boolean)) {
             draft = {
                 ...draft,
                 aspectRatio: generationDefaults.aspectRatio || draft.aspectRatio,
@@ -170,6 +180,22 @@ export async function runStage2ForDraft(input, onStatus = () => {}, signal, opts
             }));
         }
 
+        if (submission) {
+            // The snapshot overrides draft fields for THIS run only. Nothing is
+            // persisted: the draft may already hold the next run's prompt, and
+            // the post-materialize re-read below is skipped — by construction
+            // there is nothing it could protect (refs resolve from the snapshot
+            // corrections too).
+            draft = {
+                ...draft,
+                prompt: submission.prompt,
+                aspectRatio: submission.aspectRatio || draft.aspectRatio,
+                imageSize: submission.imageSize || draft.imageSize,
+                quality: submission.quality || draft.quality,
+                templateId: templateId ?? draft.templateId,
+            };
+        }
+
         if (!draft.prompt) {
             throw new Error('Prompt is empty');
         }
@@ -184,7 +210,13 @@ export async function runStage2ForDraft(input, onStatus = () => {}, signal, opts
         const referenceResolution = await resolvePromptReferenceContext({
             prompt: draft.prompt,
             candidates,
-            corrections: draft.references || { includedIds: [], excludedIds: [], revision: 0 },
+            corrections: submission
+                ? {
+                    includedIds: submission.references?.includedIds || [],
+                    excludedIds: submission.references?.excludedIds || [],
+                    revision: submission.references?.revision || 0,
+                }
+                : (draft.references || { includedIds: [], excludedIds: [], revision: 0 }),
         });
 
         const { imageConnId: resolvedImageConnId } = await resolveActivePresets(snapshot);
@@ -220,8 +252,9 @@ export async function runStage2ForDraft(input, onStatus = () => {}, signal, opts
 
         // Re-read the draft after awaited candidate/reference work. Manual
         // parameter edits made while references resolve must win before the
-        // immutable paid-request snapshot is created.
-        if (!opts.instruction) {
+        // immutable paid-request snapshot is created. Skipped for submission
+        // runs: their inputs are already frozen at submit time.
+        if (!opts.instruction && !submission) {
             const latest = await loadDraftForStage2(chatId, msgId, messageText);
             if ((latest.promptRevision || 0) !== submissionPromptRevision
                 || (latest.references?.revision || 0) !== submissionReferenceRevision) {
@@ -245,7 +278,10 @@ export async function runStage2ForDraft(input, onStatus = () => {}, signal, opts
         ];
         const composed = composeReferencePrompt(draft.prompt, referenceEntries);
 
-        const submission = createStage2Snapshot({
+        // Named immutableSubmission: `submission` above is the submit-time
+        // input snapshot; this is the frozen paid-request snapshot built from
+        // the (possibly submission-overridden) draft.
+        const immutableSubmission = createStage2Snapshot({
             draft,
             contextSnapshot: {
                 contextRevision: referenceResolution.referencesRevision,
@@ -257,16 +293,16 @@ export async function runStage2ForDraft(input, onStatus = () => {}, signal, opts
         // Persist the immutable submission before any provider call.
         draft = await updateGenerationDraft(chatId, msgId, messageText, d => ({
             ...d,
-            stage2: { ...d.stage2, status: 'running', requestId: activeRequestId, lastSubmittedSnapshot: submission, error: null },
+            stage2: { ...d.stage2, status: 'running', requestId: activeRequestId, lastSubmittedSnapshot: immutableSubmission, error: null },
         }));
 
         request = {
             requestId: activeRequestId,
-            prompt: submission.effectivePrompt || submission.prompt,
-            aspectRatio: submission.aspectRatio,
-            imageSize: submission.imageSize,
-            quality: submission.quality,
-            references: submission.refs,
+            prompt: immutableSubmission.effectivePrompt || immutableSubmission.prompt,
+            aspectRatio: immutableSubmission.aspectRatio,
+            imageSize: immutableSubmission.imageSize,
+            quality: immutableSubmission.quality,
+            references: immutableSubmission.refs,
             referenceBindings: composed.bindings,
             chatId,
             sourceMsgId: msgId,
@@ -278,7 +314,7 @@ export async function runStage2ForDraft(input, onStatus = () => {}, signal, opts
             generationContract: effectiveRoute?.generationContract || null,
             operation: refs.length ? 'edit' : 'generate', delivery: effectiveRoute?.transport?.initialDelivery || null,
             bodyKind: effectiveRoute?.transport?.bodyKind || null, referenceCount: refs.length,
-            details: { aspectRatio: submission.aspectRatio, imageSize: submission.imageSize, quality: submission.quality, promptChars: (submission.effectivePrompt || submission.prompt || '').length },
+            details: { aspectRatio: immutableSubmission.aspectRatio, imageSize: immutableSubmission.imageSize, quality: immutableSubmission.quality, promptChars: (immutableSubmission.effectivePrompt || immutableSubmission.prompt || '').length },
         });
         const result = await generateImageRequest(imageConnId, request, onStatus, useSignal, { route: effectiveRoute });
         if (useSignal.aborted) throw new DOMException('Aborted', 'AbortError');
