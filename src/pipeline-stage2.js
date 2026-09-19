@@ -73,6 +73,9 @@ async function loadDraftForStage2(chatId, msgId, messageText) {
  *   Authoritative over the live draft: never written back into it, and exempt
  *   from the post-materialize revision re-check — the snapshot IS the submitted
  *   intent; whatever the editor holds by execution time belongs to the next run.
+ *   Fail-closed: a present submission with a missing/blank prompt throws
+ *   (never silently degrades to the reading path), and combining it with
+ *   opts.instruction throws as well.
  * @param {(refs: Array<{image:string,name?:string}>) => void} [opts.onRefsSent]
  * @param {boolean} [opts.isAuto]
  * @returns {Promise<object|null>}
@@ -153,13 +156,22 @@ export async function runStage2ForDraft(input, onStatus = () => {}, signal, opts
             source: opts.isAuto ? 'auto' : (signal ? 'queue' : 'manual'),
         });
 
-        // Normalize once: only a string prompt makes a submission usable.
-        const submission = opts.submission && typeof opts.submission.prompt === 'string'
-            ? opts.submission
-            : null;
+        // Fail-closed: a present-but-malformed submission must never silently
+        // degrade into the reading path — that would re-read the live draft and
+        // double-generate, exactly what this mode exists to prevent.
+        if (opts.instruction && opts.submission) {
+            throw new Error('opts.instruction and opts.submission are mutually exclusive.');
+        }
+        if (opts.submission
+            && (typeof opts.submission.prompt !== 'string' || !opts.submission.prompt.trim())) {
+            throw new Error('Invalid submission snapshot: prompt must be a non-empty string.');
+        }
+        const submission = opts.submission || null;
         let draft = await loadDraftForStage2(chatId, msgId, messageText);
         if (useSignal.aborted) throw new DOMException('Aborted', 'AbortError');
         const generationDefaults = snapshot.generationDefaults || {};
+        // Skipped for submission runs on purpose: their parameter fields are
+        // overridden by the snapshot in the overlay below.
         if (!opts.instruction && !submission && Object.values(generationDefaults).some(Boolean)) {
             draft = {
                 ...draft,
@@ -253,7 +265,8 @@ export async function runStage2ForDraft(input, onStatus = () => {}, signal, opts
         // Re-read the draft after awaited candidate/reference work. Manual
         // parameter edits made while references resolve must win before the
         // immutable paid-request snapshot is created. Skipped for submission
-        // runs: their inputs are already frozen at submit time.
+        // runs: their inputs are already frozen at submit time. (The captured
+        // revisions above are therefore consumed by reading runs only.)
         if (!opts.instruction && !submission) {
             const latest = await loadDraftForStage2(chatId, msgId, messageText);
             if ((latest.promptRevision || 0) !== submissionPromptRevision
