@@ -176,6 +176,21 @@ test('renderGenerateMarkup renders build and disabled Stage 2 for whitespace pro
     assert.match(markup, /id="urisGenerateImage"[^>]*disabled[^>]*>\s*<i[^>]*><\/i> Сгенерировать/);
 });
 
+test('renderGenerateMarkup keeps the editor and actions enabled while a generation is running', () => {
+    const messageText = 'message text';
+    const draft = {
+        prompt: 'a cat', aspectRatio: '9:16', imageSize: '2K', quality: 'high', templateId: null,
+        messageHash: hashMessage(messageText),
+        stage2: { status: 'running', requestId: 'req-1' },
+    };
+    const markup = renderGenerateMarkup(baseVm({ draft, messageText }));
+    assert.match(markup, /id="urisPrompt"(?![^>]*disabled)/);
+    assert.match(markup, /id="urisPromptExpand"(?![^>]*disabled)/);
+    assert.match(markup, /id="urisBuildPrompt"(?![^>]*disabled)/);
+    assert.match(markup, /id="urisGenerateImage"(?![^>]*disabled)/);
+    assert.match(markup, /id="urisCancelImage"(?![^>]*hidden)/, 'Stop button stays visible for the running request');
+});
+
 test('renderGenerateMarkup does not ask for confirmation before replacing manual prompt', () => {
     const messageText = 'message text';
     const draft = { prompt: 'manual edit', promptOrigin: 'manual', aspectRatio: '9:16', imageSize: '2K', quality: 'high', messageHash: hashMessage(messageText) };
@@ -446,43 +461,6 @@ test('persistVisibleGenerationDraft preserves prompt origin when visible prompt 
         persist: async updater => { savedUpdater = updater; },
     });
     assert.equal(savedUpdater(stored).promptOrigin, 'stage1');
-});
-
-test('executeGenerationAction dispatches Stage 1 only and disables both buttons during execution', async () => {
-    const build = { disabled: false };
-    const generate = { disabled: false };
-    const calls = [];
-    await tabGenerate.executeGenerationAction({
-        action: 'stage1', input: { msgId: 1 }, buttons: [build, generate],
-        runStage1: async input => {
-            calls.push(['stage1', input]);
-            assert.equal(build.disabled, true);
-            assert.equal(generate.disabled, true);
-            return 'stage1-result';
-        },
-        runStage2: async () => calls.push(['stage2']),
-    });
-    assert.deepEqual(calls, [['stage1', { msgId: 1 }]]);
-    assert.equal(build.disabled, false);
-    assert.equal(generate.disabled, false);
-});
-
-test('executeGenerationAction dispatches Stage 2 only and disables both buttons during execution', async () => {
-    const build = { disabled: false };
-    const generate = { disabled: false };
-    const calls = [];
-    await tabGenerate.executeGenerationAction({
-        action: 'stage2', input: { msgId: 2 }, buttons: [build, generate],
-        runStage1: async () => calls.push(['stage1']),
-        runStage2: async input => {
-            calls.push(['stage2', input]);
-            assert.equal(build.disabled, true);
-            assert.equal(generate.disabled, true);
-        },
-    });
-    assert.deepEqual(calls, [['stage2', { msgId: 2 }]]);
-    assert.equal(build.disabled, false);
-    assert.equal(generate.disabled, false);
 });
 
 test('cancelling prompt autosave prevents a delayed old write', async () => {

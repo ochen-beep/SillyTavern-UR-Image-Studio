@@ -282,8 +282,10 @@ export function renderGenerateMarkup(vm) {
     const isStudio = vm.isStudio === true;
     const excerpt = escapeHtml((vm.messageText || '').slice(0, 120));
     const staleBadge = isStale ? '<span class="uris-draft-stale">исходное сообщение изменилось</span>' : '';
-    const runningAttr = isRunning ? ' disabled' : '';
-    const generateDisabledAttr = isRunning || !canGenerateImage ? ' disabled' : '';
+    // The editor and action buttons are never disabled by generation state —
+    // submissions are fire-and-forget; isRunning only drives the Stop button
+    // visibility below.
+    const generateDisabledAttr = !canGenerateImage ? ' disabled' : '';
     // #urisCancelImage is always rendered so setCancelState can toggle it live
     // (the pipeline dispatches uris:stage2-start/end); it stays hidden when idle.
     const cancelHidden = (isRunning && stage2RequestId) ? '' : ' hidden';
@@ -311,7 +313,7 @@ export function renderGenerateMarkup(vm) {
     const sourceBlock = isStudio
         ? `
             <div class="uris-context-box uris-studio-scene">
-                <textarea class="text_pole uris-scene-area" id="urisScene" rows="3" placeholder="Текст сцены — по нему распознаются референсы. Можно оставить пустым и написать промпт напрямую."${runningAttr}>${escapeHtml(vm.messageText || '')}</textarea>
+                <textarea class="text_pole uris-scene-area" id="urisScene" rows="3" placeholder="Текст сцены — по нему распознаются референсы. Можно оставить пустым и написать промпт напрямую.">${escapeHtml(vm.messageText || '')}</textarea>
                 <div class="uris-scene-context">${ambiguityList}</div>
             </div>`
         : `
@@ -361,10 +363,10 @@ export function renderGenerateMarkup(vm) {
             ${sourceBlock}
 
             <div class="uris-prompt-card">
-                <textarea class="text_pole uris-prompt-area" id="urisPrompt" rows="6" placeholder="Промпт картинки"${runningAttr}>${escapeHtml(draft.prompt || '')}</textarea>
-                <button class="uris-expand-btn" id="urisPromptExpand" type="button" title="Развернуть редактор" aria-label="Развернуть редактор"${runningAttr}><i class="fa-solid fa-maximize"></i></button>
+                <textarea class="text_pole uris-prompt-area" id="urisPrompt" rows="6" placeholder="Промпт картинки">${escapeHtml(draft.prompt || '')}</textarea>
+                <button class="uris-expand-btn" id="urisPromptExpand" type="button" title="Развернуть редактор" aria-label="Развернуть редактор"><i class="fa-solid fa-maximize"></i></button>
                 <div class="uris-gen-actions">
-                    <button class="uris-btn uris-btn-ghost" id="urisBuildPrompt"${runningAttr} type="button">
+                    <button class="uris-btn uris-btn-ghost" id="urisBuildPrompt" type="button">
                         <i class="fa-solid fa-wand-magic-sparkles"></i> ${stage1Label}
                     </button>
                     <button class="uris-btn uris-btn-primary" id="urisGenerateImage"${generateDisabledAttr} type="button">
@@ -725,20 +727,6 @@ export function createCancellablePromptAutosave({ persist, delay = 400, setTimer
             timer = null;
         },
     };
-}
-
-/** Dispatch one generation stage while locking both action buttons. */
-export async function executeGenerationAction({ action, input, buttons, runStage1, runStage2, lock = { active: false } }) {
-    if (lock.active) return undefined;
-    lock.active = true;
-    const priorDisabled = buttons.map(button => Boolean(button?.disabled));
-    for (const button of buttons) if (button) button.disabled = true;
-    try {
-        return action === 'stage1' ? await runStage1(input) : await runStage2(input);
-    } finally {
-        buttons.forEach((button, index) => { if (button) button.disabled = priorDisabled[index]; });
-        lock.active = false;
-    }
 }
 
 /**
@@ -1527,11 +1515,10 @@ export function updateQueueStatus(root) {
 }
 
 /**
- * Toggle the in-flight "Остановить" button without a full re-render. Only the
- * button's visibility and data-request-id are touched: input disabled states
- * are left to the normal render cycle (withBusy already prevents a double
- * submit, and locking the editor mid-generation was never the original
- * behaviour).
+ * Toggle the in-flight "Остановить" button without a full re-render. The editor
+ * and action buttons are never disabled by generation state (fire-and-forget
+ * submissions); the only live chrome this drives is the Stop button and the
+ * queue status line.
  * @param {HTMLElement|null} root
  * @param {string|null} requestId
  * @param {boolean} running
@@ -1589,9 +1576,8 @@ function onGenerationEnd(ev) {
 /**
  * Re-apply the in-flight "Остановить" state after a tab re-render. Rendering
  * rebuilds the button DOM (losing data-request-id / hidden state), so the
- * running map is what tells whether a generation is in flight for the current
- * post; without this a re-render mid-generation hides the button and unlocks
- * the action buttons.
+ * running map tells whether a generation is in flight for the current post.
+ * Action buttons stay enabled regardless — submissions are fire-and-forget.
  * @param {HTMLElement} root
  */
 export function syncCancelState(root) {
