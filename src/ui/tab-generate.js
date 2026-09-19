@@ -1517,8 +1517,7 @@ export function updateQueueStatus(root) {
 /**
  * Toggle the in-flight "Остановить" button without a full re-render. The editor
  * and action buttons are never disabled by generation state (fire-and-forget
- * submissions); the only live chrome this drives is the Stop button and the
- * queue status line.
+ * submissions); the only live chrome this drives is the Stop button.
  * @param {HTMLElement|null} root
  * @param {string|null} requestId
  * @param {boolean} running
@@ -1539,35 +1538,73 @@ let _onStage2Start = null;
 let _onStage2End = null;
 let _onStage1Start = null;
 let _onStage1End = null;
-// msgId → requestId of the latest in-flight generation (Stage 1 or 2). Source
-// of truth for syncCancelState: a tab re-render rebuilds the button DOM and
-// would otherwise lose the in-flight state.
-const _runningByMsgId = new Map();
+// Scope key (`chatId:msgId`) → Set of in-flight requestIds (Stage 1 and Stage 2
+// tracked together). A Set — not a single value — so an interleaved Stage 1
+// («Перестроить промпт») cannot clobber a still-running Stage 2 of the same
+// post: the Stop button survives until the LAST in-flight request ends. Keyed
+// by chatId too, so post #0 of a chat never collides with the studio draft
+// (STUDIO_MSG_ID = 0). Source of truth for syncCancelState: a tab re-render
+// rebuilds the button DOM and would otherwise lose the in-flight state.
+const _inflightByScope = new Map();
+
+/** Scope key of the in-flight map; same shape as the Stage 2 chain key. */
+function inflightKey(chatId, msgId) {
+    return `${chatId}:${msgId}`;
+}
+
+/** Latest-inserted id of an in-flight Set (Sets keep insertion order). */
+function latestInflight(set) {
+    if (!set || set.size === 0) return undefined;
+    const ids = [...set];
+    return ids[ids.length - 1];
+}
 
 /** Shared uris:stage{1,2}-start handling: show the Stop button, tag the queue item. */
 function onGenerationStart(ev) {
     const detail = /** @type {CustomEvent} */ (ev).detail || {};
-    const { requestId, msgId, source } = detail;
+    const { requestId, msgId, chatId, source } = detail;
     if (!requestId) return;
     if (source === 'queue') state.runningQueueRequestId = requestId;
-    if (msgId != null) _runningByMsgId.set(msgId, requestId);
-    if (_generateRoot && msgId === activeScope(_generateRoot).msgId) {
-        setCancelState(_generateRoot, requestId, true);
+    if (chatId != null && msgId != null) {
+        const key = inflightKey(chatId, msgId);
+        const inflight = _inflightByScope.get(key) || new Set();
+        inflight.add(requestId);
+        _inflightByScope.set(key, inflight);
     }
-    if (_generateRoot) updateQueueStatus(_generateRoot);
+    if (_generateRoot) {
+        const scope = activeScope(_generateRoot);
+        if (msgId === scope.msgId && chatId === scope.chatId) {
+            setCancelState(_generateRoot, requestId, true);
+        }
+        updateQueueStatus(_generateRoot);
+    }
 }
 
-/** Shared uris:stage{1,2}-end handling: hide the Stop button only if it still points at this request. */
+/**
+ * Shared uris:stage{1,2}-end handling. Hides the Stop button only when the last
+ * in-flight request for the scope ended; while others remain (interleaved
+ * Stage 1 under Stage 2), the button is retargeted to the remaining request.
+ */
 function onGenerationEnd(ev) {
     const detail = /** @type {CustomEvent} */ (ev).detail || {};
-    const { requestId, msgId } = detail;
+    const { requestId, msgId, chatId } = detail;
     if (!requestId) return;
     if (state.runningQueueRequestId === requestId) state.runningQueueRequestId = null;
-    if (msgId != null && _runningByMsgId.get(msgId) === requestId) _runningByMsgId.delete(msgId);
+    const key = (chatId != null && msgId != null) ? inflightKey(chatId, msgId) : null;
+    const inflight = key ? _inflightByScope.get(key) : null;
+    if (inflight) {
+        inflight.delete(requestId);
+        if (inflight.size === 0) _inflightByScope.delete(key);
+    }
     if (_generateRoot) {
-        const btn = _generateRoot.querySelector('#urisCancelImage');
-        if (btn && btn.getAttribute('data-request-id') === String(requestId)) {
-            setCancelState(_generateRoot, null, false);
+        const scope = activeScope(_generateRoot);
+        if (key === inflightKey(scope.chatId, scope.msgId)) {
+            const btn = _generateRoot.querySelector('#urisCancelImage');
+            if (btn && btn.getAttribute('data-request-id') === String(requestId)) {
+                const remaining = latestInflight(inflight);
+                if (remaining) setCancelState(_generateRoot, remaining, true);
+                else setCancelState(_generateRoot, null, false);
+            }
         }
         updateQueueStatus(_generateRoot);
     }
@@ -1576,13 +1613,15 @@ function onGenerationEnd(ev) {
 /**
  * Re-apply the in-flight "Остановить" state after a tab re-render. Rendering
  * rebuilds the button DOM (losing data-request-id / hidden state), so the
- * running map tells whether a generation is in flight for the current post.
- * Action buttons stay enabled regardless — submissions are fire-and-forget.
+ * in-flight map (chatId:msgId → Set of running requestIds) tells whether a
+ * generation is in flight for the current post; the button is tagged with the
+ * latest remaining requestId. Action buttons stay enabled regardless —
+ * submissions are fire-and-forget.
  * @param {HTMLElement} root
  */
 export function syncCancelState(root) {
-    const { msgId } = activeScope(root);
-    const requestId = msgId != null ? _runningByMsgId.get(msgId) : undefined;
+    const { chatId, msgId } = activeScope(root);
+    const requestId = msgId != null ? latestInflight(_inflightByScope.get(inflightKey(chatId, msgId))) : undefined;
     setCancelState(root, requestId, Boolean(requestId));
     updateQueueStatus(root);
 }
@@ -1610,6 +1649,6 @@ export function unbindAbortUI() {
     _onStage1End = null;
     _onStage2Start = null;
     _onStage2End = null;
-    _runningByMsgId.clear();
+    _inflightByScope.clear();
     _abortUIBound = false;
 }

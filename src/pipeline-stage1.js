@@ -87,7 +87,7 @@ export async function runStage1ForDraft(input, onStatus = () => {}, signal, opts
     const useSignal = ownController.signal;
     state.activeGenerations.set(stage1RequestId, ownController);
     emitStage1Event('uris:stage1-start', {
-        requestId: stage1RequestId, msgId,
+        requestId: stage1RequestId, chatId, msgId,
         source: opts.isAuto ? 'auto' : (signal ? 'queue' : 'manual'),
     });
 
@@ -96,7 +96,7 @@ export async function runStage1ForDraft(input, onStatus = () => {}, signal, opts
     } finally {
         state.activeGenerations.delete(stage1RequestId);
         recordDiagnosticEvent({ event: 'stage1-end', stage: 'stage1', requestId: stage1RequestId, msgId });
-        emitStage1Event('uris:stage1-end', { requestId: stage1RequestId, msgId });
+        emitStage1Event('uris:stage1-end', { requestId: stage1RequestId, chatId, msgId });
     }
 
     async function runStage1Inner() {

@@ -178,17 +178,31 @@ test('renderGenerateMarkup renders build and disabled Stage 2 for whitespace pro
 
 test('renderGenerateMarkup keeps the editor and actions enabled while a generation is running', () => {
     const messageText = 'message text';
-    const draft = {
-        prompt: 'a cat', aspectRatio: '9:16', imageSize: '2K', quality: 'high', templateId: null,
-        messageHash: hashMessage(messageText),
-        stage2: { status: 'running', requestId: 'req-1' },
-    };
-    const markup = renderGenerateMarkup(baseVm({ draft, messageText }));
-    assert.match(markup, /id="urisPrompt"(?![^>]*disabled)/);
-    assert.match(markup, /id="urisPromptExpand"(?![^>]*disabled)/);
-    assert.match(markup, /id="urisBuildPrompt"(?![^>]*disabled)/);
+    for (const runningStage of ['stage1', 'stage2']) {
+        const draft = {
+            prompt: 'a cat', aspectRatio: '9:16', imageSize: '2K', quality: 'high', templateId: null,
+            messageHash: hashMessage(messageText),
+            [runningStage]: { status: 'running', requestId: 'req-1' },
+        };
+        const markup = renderGenerateMarkup(baseVm({ draft, messageText }));
+        assert.match(markup, /id="urisPrompt"(?![^>]*disabled)/, `${runningStage}: editor stays enabled`);
+        assert.match(markup, /id="urisPromptExpand"(?![^>]*disabled)/, `${runningStage}: expand stays enabled`);
+        assert.match(markup, /id="urisBuildPrompt"(?![^>]*disabled)/, `${runningStage}: Stage 1 action stays enabled`);
+        assert.match(markup, /id="urisGenerateImage"(?![^>]*disabled)/, `${runningStage}: Stage 2 action stays enabled`);
+        if (runningStage === 'stage2') {
+            assert.match(markup, /id="urisCancelImage"(?![^>]*hidden)/, 'Stop button stays visible for the running request');
+        }
+    }
+});
+
+test('renderGenerateMarkup renders the studio scene editor enabled and without post navigation', () => {
+    const sceneText = 'a quiet room';
+    const draft = { prompt: 'studio cat', promptOrigin: 'manual', sceneText, aspectRatio: '1:1', imageSize: '1K', quality: 'auto', messageHash: 'h' };
+    const markup = renderGenerateMarkup({ ...baseVm({ draft, messageText: sceneText }), isStudio: true });
+    assert.match(markup, /id="urisScene"(?![^>]*disabled)/, 'studio scene textarea stays enabled');
+    assert.match(markup, new RegExp(`>${sceneText}</textarea>`), 'scene text renders as the editable source');
+    assert.doesNotMatch(markup, /id="urisPrev"/, 'post navigator is absent in the studio');
     assert.match(markup, /id="urisGenerateImage"(?![^>]*disabled)/);
-    assert.match(markup, /id="urisCancelImage"(?![^>]*hidden)/, 'Stop button stays visible for the running request');
 });
 
 test('renderGenerateMarkup does not ask for confirmation before replacing manual prompt', () => {
@@ -691,13 +705,17 @@ test('submitCurrentGeneration stays silent for items rejected by a whole-queue s
     } finally {
         globalThis.SillyTavern.getContext = originalCtx;
     }
-    // toastr stays installed until the deferred continuation has run.
-    const infosBefore = infos.length;
-    rejectQueued(new DOMException('Queue stopped', 'AbortError'));
-    await new Promise(r => setImmediate(r));
-    globalThis.toastr = undefined;
-    assert.equal(infos.length, infosBefore, 'no cancel toast for queue-stop rejections');
-    assert.equal(errors.length, 0);
+    // toastr stays installed until the deferred continuation has run; restored
+    // in finally so a failing assert cannot leak the stub into later tests.
+    try {
+        const infosBefore = infos.length;
+        rejectQueued(new DOMException('Queue stopped', 'AbortError'));
+        await new Promise(r => setImmediate(r));
+        assert.equal(infos.length, infosBefore, 'no cancel toast for queue-stop rejections');
+        assert.equal(errors.length, 0);
+    } finally {
+        globalThis.toastr = undefined;
+    }
 });
 
 test('submitCurrentGeneration toasts once for an in-flight item aborted by the user', async () => {
@@ -725,12 +743,16 @@ test('submitCurrentGeneration toasts once for an in-flight item aborted by the u
     } finally {
         globalThis.SillyTavern.getContext = originalCtx;
     }
-    // toastr stays installed until the deferred continuation has run.
-    rejectQueued(new DOMException('Aborted by user', 'AbortError'));
-    await new Promise(r => setImmediate(r));
-    globalThis.toastr = undefined;
-    assert.equal(infos.filter(m => /Генерация отменена/.test(m)).length, 1, 'exactly one cancel toast');
-    assert.equal(errors.length, 0);
+    // toastr stays installed until the deferred continuation has run; restored
+    // in finally so a failing assert cannot leak the stub into later tests.
+    try {
+        rejectQueued(new DOMException('Aborted by user', 'AbortError'));
+        await new Promise(r => setImmediate(r));
+        assert.equal(infos.filter(m => /Генерация отменена/.test(m)).length, 1, 'exactly one cancel toast');
+        assert.equal(errors.length, 0);
+    } finally {
+        globalThis.toastr = undefined;
+    }
 });
 
 test('submitCurrentGeneration toasts success and provider warnings on resolve', async () => {
@@ -763,12 +785,16 @@ test('submitCurrentGeneration toasts success and provider warnings on resolve', 
     } finally {
         globalThis.SillyTavern.getContext = originalCtx;
     }
-    // toastr stays installed until the deferred continuation has run.
-    await new Promise(r => setImmediate(r));
-    globalThis.toastr = undefined;
-    assert.equal(successes.length, 1, 'success toast fired');
-    assert.equal(warnings.filter(m => /Стороны/.test(m)).length, 1, 'provider warning surfaced');
-    assert.equal(errors.length, 0);
+    // toastr stays installed until the deferred continuation has run; restored
+    // in finally so a failing assert cannot leak the stub into later tests.
+    try {
+        await new Promise(r => setImmediate(r));
+        assert.equal(successes.length, 1, 'success toast fired');
+        assert.equal(warnings.filter(m => /Стороны/.test(m)).length, 1, 'provider warning surfaced');
+        assert.equal(errors.length, 0);
+    } finally {
+        globalThis.toastr = undefined;
+    }
 });
 
 // ── Message-scoped reference corrections ──
@@ -1110,4 +1136,173 @@ test('bindModelSelect writes the model through to the connection and flushes the
     await root.querySelector('#urisModel').dispatchEvent({ type: 'change' });
     assert.deepEqual(saves, [], 'model selection is chat-scoped and does not rewrite the shared connection');
     assert.equal(switched, 'new');
+});
+
+// ── Stop button vs interleaved Stage 1/2 (in-flight registry) ──
+
+const { makeFakeDocument } = await import('./fake-dom.js');
+const { render, bindAbortUI, unbindAbortUI, syncCancelState } = tabGenerate;
+
+/**
+ * The file-level window stub has no listener registry. These tests install a
+ * local one (plus a CustomEvent class, same pattern as
+ * tests/pipeline-stage2-serialization.test.js) so bindAbortUI() can be driven
+ * through the real window events the pipeline dispatches.
+ */
+function installWindowEventStub() {
+    const listeners = new Map();
+    const prev = {
+        dispatchEvent: globalThis.window.dispatchEvent,
+        addEventListener: globalThis.window.addEventListener,
+        removeEventListener: globalThis.window.removeEventListener,
+    };
+    globalThis.window.addEventListener = (type, fn) => {
+        if (!listeners.has(type)) listeners.set(type, new Set());
+        listeners.get(type).add(fn);
+    };
+    globalThis.window.removeEventListener = (type, fn) => { listeners.get(type)?.delete(fn); };
+    globalThis.window.dispatchEvent = ev => {
+        for (const fn of [...(listeners.get(ev.type) || [])]) fn(ev);
+        return true;
+    };
+    globalThis.CustomEvent ||= class CustomEvent extends Event {
+        constructor(type, init) { super(type, init); this.detail = init?.detail; }
+    };
+    return () => {
+        globalThis.window.dispatchEvent = prev.dispatchEvent;
+        if (prev.addEventListener) globalThis.window.addEventListener = prev.addEventListener;
+        else delete globalThis.window.addEventListener;
+        if (prev.removeEventListener) globalThis.window.removeEventListener = prev.removeEventListener;
+        else delete globalThis.window.removeEventListener;
+    };
+}
+
+/** Point getContext at a chat with post #0 and render the Generate tab into a fake DOM. */
+async function setupGenerateTab(chatId) {
+    const originalCtx = globalThis.SillyTavern.getContext;
+    globalThis.SillyTavern.getContext = () => ({
+        chatId,
+        chat: [{ mes: 'hello' }],
+        chatMetadata: {},
+        extensionSettings: {},
+        saveSettingsDebounced: () => {},
+        getRequestHeaders: () => ({}),
+    });
+    const originalDocument = globalThis.document;
+    const { document: fakeDoc, root } = makeFakeDocument();
+    globalThis.document = fakeDoc;
+    // tabs.js tags the tab body before rendering; without the tag render()'s
+    // epoch guard bails before binding the UI.
+    root.__urisTabId = 'generate';
+    state.currentMsgId = 0;
+    state.queue = [];
+    state.queueRunning = false;
+    globalThis.toastr = undefined;
+    await render(root);
+    return {
+        root,
+        restore() {
+            globalThis.SillyTavern.getContext = originalCtx;
+            globalThis.document = originalDocument;
+            state.currentMsgId = null;
+            state.runningQueueRequestId = null;
+        },
+    };
+}
+
+function stageEvent(type, detail) {
+    window.dispatchEvent(new CustomEvent(type, { detail }));
+}
+
+test('Stop button survives an interleaved Stage 1 and stays tagged with the Stage 2 request', async () => {
+    const restoreWindow = installWindowEventStub();
+    let tab;
+    try {
+        tab = await setupGenerateTab('c1');
+        bindAbortUI();
+        const btn = tab.root.querySelector('#urisCancelImage');
+        assert.ok(btn, 'Stop button is rendered');
+
+        // Stage 2 (image generation) is in flight for post #0 of chat c1.
+        stageEvent('uris:stage2-start', { requestId: 'req2', msgId: 0, chatId: 'c1', source: 'manual' });
+        assert.equal(btn.hidden, false, 'Stop visible while Stage 2 runs');
+        assert.equal(btn.getAttribute('data-request-id'), 'req2');
+
+        // «Перестроить промпт» starts Stage 1 for the same post while Stage 2 flies.
+        stageEvent('uris:stage1-start', { requestId: 'req1', msgId: 0, chatId: 'c1', source: 'manual' });
+        assert.equal(btn.getAttribute('data-request-id'), 'req1');
+
+        // Stage 1 ends — Stage 2 is still in flight: the Stop button must survive
+        // and retarget to the Stage 2 request (pre-fix the single-value map
+        // dropped the entry and hid the button here).
+        stageEvent('uris:stage1-end', { requestId: 'req1', msgId: 0, chatId: 'c1' });
+        assert.equal(btn.hidden, false, 'Stop must stay visible while Stage 2 is still in flight');
+        assert.equal(btn.getAttribute('data-request-id'), 'req2');
+
+        // Stage 2 ends — only now the Stop button hides.
+        stageEvent('uris:stage2-end', { requestId: 'req2', msgId: 0, chatId: 'c1' });
+        assert.equal(btn.hidden, true, 'Stop hides after the last in-flight request ends');
+    } finally {
+        unbindAbortUI();
+        restoreWindow();
+        tab?.restore();
+    }
+});
+
+test('Stop button state is scoped per chat: another chat finishing must not touch it', async () => {
+    const restoreWindow = installWindowEventStub();
+    let tab;
+    try {
+        tab = await setupGenerateTab('c1');
+        bindAbortUI();
+        const btn = tab.root.querySelector('#urisCancelImage');
+
+        stageEvent('uris:stage2-start', { requestId: 'req-c1', msgId: 0, chatId: 'c1', source: 'manual' });
+        assert.equal(btn.hidden, false);
+        assert.equal(btn.getAttribute('data-request-id'), 'req-c1');
+
+        // Post #0 of another chat starts and ends — the c1 Stop button must stay
+        // untouched (a bare msgId key made chat c2 overwrite and then hide it).
+        stageEvent('uris:stage1-start', { requestId: 'req-c2', msgId: 0, chatId: 'c2', source: 'manual' });
+        assert.equal(btn.getAttribute('data-request-id'), 'req-c1', 'c2 start must not retarget the c1 button');
+        stageEvent('uris:stage1-end', { requestId: 'req-c2', msgId: 0, chatId: 'c2' });
+        assert.equal(btn.hidden, false, 'c2 end must not hide the c1 Stop button');
+        assert.equal(btn.getAttribute('data-request-id'), 'req-c1');
+
+        stageEvent('uris:stage2-end', { requestId: 'req-c1', msgId: 0, chatId: 'c1' });
+        assert.equal(btn.hidden, true, 'c1 Stop hides when its own request ends');
+    } finally {
+        unbindAbortUI();
+        restoreWindow();
+        tab?.restore();
+    }
+});
+
+test('syncCancelState restores the Stop button with the last remaining requestId after a re-render', async () => {
+    const restoreWindow = installWindowEventStub();
+    let tab;
+    try {
+        tab = await setupGenerateTab('c1');
+        bindAbortUI();
+        stageEvent('uris:stage2-start', { requestId: 'req2', msgId: 0, chatId: 'c1', source: 'manual' });
+        stageEvent('uris:stage1-start', { requestId: 'req1', msgId: 0, chatId: 'c1', source: 'manual' });
+        stageEvent('uris:stage1-end', { requestId: 'req1', msgId: 0, chatId: 'c1' });
+
+        // A re-render rebuilds the button DOM; syncCancelState must restore the
+        // in-flight state from the registry (last remaining request wins).
+        const second = await setupGenerateTab('c1');
+        const btn = second.root.querySelector('#urisCancelImage');
+        syncCancelState(second.root);
+        assert.equal(btn.hidden, false, 'Stop restored for the post with an in-flight request');
+        assert.equal(btn.getAttribute('data-request-id'), 'req2');
+
+        stageEvent('uris:stage2-end', { requestId: 'req2', msgId: 0, chatId: 'c1' });
+        syncCancelState(second.root);
+        assert.equal(btn.hidden, true, 'Stop hidden once the registry is empty');
+        second.restore();
+    } finally {
+        unbindAbortUI();
+        restoreWindow();
+        tab?.restore();
+    }
 });

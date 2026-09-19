@@ -152,7 +152,7 @@ export async function runStage2ForDraft(input, onStatus = () => {}, signal, opts
         });
         try { opts.onStart?.(activeRequestId); } catch { /* listener error must not break generation */ }
         emitStage2Event('uris:stage2-start', {
-            requestId: activeRequestId, msgId,
+            requestId: activeRequestId, chatId, msgId,
             source: opts.isAuto ? 'auto' : (signal ? 'queue' : 'manual'),
         });
 
@@ -439,7 +439,7 @@ export async function runStage2ForDraft(input, onStatus = () => {}, signal, opts
                     outcome: cancelled ? 'cancelled' : (failure ? 'error' : 'ready'),
                     durationMs: startedAt ? Date.now() - startedAt : null,
                 });
-                emitStage2Event('uris:stage2-end', { requestId: activeRequestId, msgId });
+                emitStage2Event('uris:stage2-end', { requestId: activeRequestId, chatId, msgId });
             }
         }
         if (releaseNext) {
