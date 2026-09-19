@@ -7,7 +7,7 @@
 import { state, getCtx, escapeHtml, error, warn, VALID_ASPECT_RATIOS, VALID_IMAGE_SIZES, abortGeneration } from '../core.js';
 import { notifyStage1Ready } from '../events.js';
 import { POST_FILTER, navigatePosts, getPostInfo, setFilter, setCurrentMsgId, getLastPostIndex } from '../post-navigator.js';
-import { runStage1ForDraft, runStage2ForDraft, enqueueGeneration, createQueueItem, stopQueue, buildCandidates } from '../pipeline.js';
+import { runStage1ForDraft, enqueueGeneration, createQueueItem, stopQueue, buildCandidates } from '../pipeline.js';
 import { buildSceneContextSnapshot, resolvePromptReferenceContext } from '../scene-context.js';
 import { getGenerationDraft, updateGenerationDraft, hashMessage, normalizeTemplateSelection, resolveDraftTemplateId } from '../generation-drafts.js';
 import { listTemplates } from '../prompt-templates.js';
@@ -865,32 +865,11 @@ export function bindGenerate(root) {
         await applyReferenceCorrection(root, refId, false);
     });
 
-    const prepareRunInput = async () => {
-        const chatConfig = await resolveChatConfigSnapshot();
-        const scope = activeScope(root);
-        if (!scope.studio && scope.msgId == null) {
-            toastr?.warning('Нет поста');
-            return null;
-        }
-        const currentDraft = await getGenerationDraft(scope.chatId, scope.msgId, scope.messageText);
-        const templateId = resolveDraftTemplateId(currentDraft, state.activeTemplateId);
-        const params = readGenerationParams(root, currentDraft);
-        await updateGenerationDraft(scope.chatId, scope.msgId, scope.messageText, d => ({
-            ...d,
-            // Flush the visible scene text with the run: a pending debounced
-            // autosave must not miss it.
-            ...(scope.studio ? { sceneText: scope.messageText } : {}),
-            prompt: promptEl?.value || '',
-            ...params,
-        }));
-        return { chatId: scope.chatId, msgId: scope.msgId, messageText: scope.messageText, templateId, chatConfig };
-    };
-
     // Stage 1 always builds or rebuilds the prompt independently of Stage 2.
     const buildPromptButton = root.querySelector('#urisBuildPrompt');
     buildPromptButton?.addEventListener('click', withBusy(buildPromptButton, async () => {
         try {
-            const input = await prepareRunInput();
+            const input = await prepareSubmissionInput(root);
             if (!input) return;
             setStatus('Построение промпта...');
             const run = await runStage1ForDraft(input, s => setStatus(s));
@@ -908,42 +887,11 @@ export function bindGenerate(root) {
         await render(root);
     }));
 
-    // Stage 2 always generates from the saved prompt currently visible in the editor.
+    // Stage 2 is fire-and-forget: snapshot the visible state, enqueue, return.
+    // withBusy only guards the (fast) snapshot+enqueue part against a literal
+    // double-click; the editor and buttons stay live for the whole generation.
     const generateImageButton = root.querySelector('#urisGenerateImage');
-    generateImageButton?.addEventListener('click', withBusy(generateImageButton, async () => {
-        try {
-            const input = await prepareRunInput();
-            if (!input) return;
-            setStatus('Генерация изображения...');
-            const result = await runStage2ForDraft(input, s => setStatus(s));
-            setStatus('Готово');
-            toastr?.success('Картинка сгенерирована');
-            // Provider warnings (dropped size/quality etc.) — surface, don't bury.
-            if (Array.isArray(result?.warnings)) {
-                for (const warning of result.warnings) {
-                    toastr?.warning(`${warning.feature}: ${warning.details}`);
-                }
-            }
-            if (getActiveTab() === 'gallery') refreshActive();
-        } catch (e) {
-            if (e?.name === 'AbortError') {
-                toastr?.info('Генерация отменена');
-                await render(root);
-            } else {
-                error('Generate action:', e.message);
-                recordUrisError({ scope: 'Генерация', message: e.message });
-                toastr?.error(e.message);
-            }
-            setStatus('');
-        }
-        // Deliberately no `await render(root)` here: re-rendering the tab would
-        // tear down the editor DOM, discard the user's scroll position and
-        // focus, and visually look like the tab was switched out from under
-        // the user. The generation toast already confirms success; the draft
-        // state is persisted and will surface naturally on the next render.
-        // (AbortError is the exception: cancellation should refresh the UI to
-        // hide the Cancel button and reflect the 'cancelled' draft status.)
-    }));
+    generateImageButton?.addEventListener('click', withBusy(generateImageButton, () => submitCurrentGeneration(root)));
 
     // Cancel an in-flight Stage 2 generation by requestId.
     const cancelButton = root.querySelector('#urisCancelImage');
@@ -1077,24 +1025,106 @@ async function addStage2Includes(root, refIds) {
     await render(root);
 }
 
-export async function enqueueCurrent(root, requestedAction) {
+/**
+ * Build the Stage 1/2 run input AND the submit-time submission snapshot from
+ * the visible editor state. The snapshot is what a queued Stage 2 will send:
+ * later edits belong to the next submission and must not leak into this one.
+ * @param {HTMLElement} root
+ * @returns {Promise<object|null>} null when there is no post to submit for
+ */
+export async function prepareSubmissionInput(root) {
+    const chatConfig = await resolveChatConfigSnapshot();
+    const scope = activeScope(root);
+    if (!scope.studio && scope.msgId == null) {
+        toastr?.warning('Нет поста');
+        return null;
+    }
+    const promptEl = root.querySelector('#urisPrompt');
+    const currentDraft = await getGenerationDraft(scope.chatId, scope.msgId, scope.messageText);
+    const templateId = resolveDraftTemplateId(currentDraft, state.activeTemplateId);
+    const params = readGenerationParams(root, currentDraft);
+    const prompt = promptEl?.value || '';
+    const savedDraft = await updateGenerationDraft(scope.chatId, scope.msgId, scope.messageText, d => ({
+        ...d,
+        // Flush the visible scene text with the run: a pending debounced
+        // autosave must not miss it.
+        ...(scope.studio ? { sceneText: scope.messageText } : {}),
+        prompt,
+        ...params,
+    }));
+    return {
+        chatId: scope.chatId,
+        msgId: scope.msgId,
+        messageText: scope.messageText,
+        templateId,
+        chatConfig,
+        submission: {
+            prompt,
+            ...params,
+            references: {
+                includedIds: [...(savedDraft.references?.includedIds || [])],
+                excludedIds: [...(savedDraft.references?.excludedIds || [])],
+                revision: savedDraft.references?.revision || 0,
+            },
+        },
+    };
+}
+
+/**
+ * Fire-and-forget Stage 2 submission: snapshot the visible editor state, put it
+ * on the serial queue, and return. The editor is never locked for the duration
+ * of a generation — completion is reported via toasts and the queue status line.
+ * @param {HTMLElement} root
+ * @param {{enqueue?:Function}} [deps] - enqueue injection for tests
+ */
+export async function submitCurrentGeneration(root, deps = {}) {
+    const enqueueFn = deps.enqueue || enqueueGeneration;
     try {
-        const scope = activeScope(root);
-        if (!scope.studio && scope.msgId == null) { toastr?.warning('Нет поста'); return; }
-        const currentDraft = await getGenerationDraft(scope.chatId, scope.msgId, scope.messageText);
-        const templateId = resolveDraftTemplateId(currentDraft, state.activeTemplateId);
-        const item = await createQueueItem({ chatId: scope.chatId, msgId: scope.msgId, messageText: scope.messageText, requestedAction, templateId });
-        const queued = enqueueGeneration(item);
-        updateQueueStatus(root);
-        toastr?.info('Добавлено в очередь');
-        await queued;
-        toastr?.success('Готово (из очереди)');
-        updateQueueStatus(root);
-        if (getActiveTab() === 'gallery') refreshActive();
+        const input = await prepareSubmissionInput(root);
+        if (!input) return;
+        if (!input.submission.prompt.trim()) {
+            toastr?.warning('Промпт пуст — постройте или напишите промпт');
+            return;
+        }
+        const wasBusy = state.queueRunning || state.queue.length > 0;
+        const item = await createQueueItem({
+            chatId: input.chatId,
+            msgId: input.msgId,
+            messageText: input.messageText,
+            requestedAction: 'current-prompt-stage2',
+            templateId: input.templateId,
+            submission: input.submission,
+        });
+        const queued = enqueueFn(item);
+        if (_generateRoot) updateQueueStatus(_generateRoot);
+        toastr?.info(wasBusy ? 'Добавлено в очередь' : 'Генерация началась');
+        queued.then(entry => {
+            if (!entry) return;
+            toastr?.success('Картинка сгенерирована');
+            // Provider warnings (dropped size/quality etc.) — surface, don't bury.
+            if (Array.isArray(entry?.warnings)) {
+                for (const warning of entry.warnings) {
+                    toastr?.warning(`${warning.feature}: ${warning.details}`);
+                }
+            }
+            if (getActiveTab() === 'gallery') refreshActive();
+        }).catch(e => {
+            if (e?.name === 'AbortError') {
+                // A whole-queue stop rejects every waiting item at once — one
+                // quiet path instead of N «отменена» toasts.
+                if (e?.message !== 'Queue stopped') toastr?.info('Генерация отменена');
+            } else {
+                error('Generate action:', e?.message || e);
+                recordUrisError({ scope: 'Генерация', message: e?.message || String(e) });
+                toastr?.error(e?.message || String(e));
+            }
+        }).finally(() => {
+            if (_generateRoot) updateQueueStatus(_generateRoot);
+        });
     } catch (e) {
-        recordUrisError({ scope: 'Очередь', message: 'Очередь: ' + (e?.message || e) });
-        toastr?.error('Очередь: ' + (e?.message || e));
-        updateQueueStatus(root);
+        error('Generate action:', e?.message || e);
+        recordUrisError({ scope: 'Генерация', message: e?.message || String(e) });
+        toastr?.error(e?.message || String(e));
     }
 }
 

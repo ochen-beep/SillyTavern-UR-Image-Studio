@@ -25,7 +25,7 @@ const { hashMessage } = await import('../src/generation-drafts.js');
 const { MAX_REFS } = await import('../src/refs-library.js');
 const { MAX_REFERENCE_CAPABILITY } = await import('../src/reference-limits.js');
 const tabGenerate = await import('../src/ui/tab-generate.js');
-const { decidePromptActions, buildGenerateViewModel, renderGenerateMarkup, readGenerationParams, enqueueCurrent, updateReferenceCorrections, refreshReferencePanel, buildReferencePanelState, resolveServerOwnedReferencePolicy, resolveConnectionReferencePolicy, getSnapshotReferencePolicy } = tabGenerate;
+const { decidePromptActions, buildGenerateViewModel, renderGenerateMarkup, readGenerationParams, submitCurrentGeneration, updateReferenceCorrections, refreshReferencePanel, buildReferencePanelState, resolveServerOwnedReferencePolicy, resolveConnectionReferencePolicy, getSnapshotReferencePolicy } = tabGenerate;
 
 beforeEach(() => {
     state.settings = {
@@ -590,7 +590,7 @@ test('bindGenerate attaches Stage 1 and Stage 2 click handlers without throwing'
     assert.ok(!clickSels.includes('#urisPrimaryGenerate'), 'legacy primary button is not referenced');
 });
 
-test('enqueueCurrent surfaces storage errors via toastr', async () => {
+test('submitCurrentGeneration surfaces storage errors via toastr', async () => {
     const originalCtx = globalThis.SillyTavern.getContext;
     const originalGetItem = globalThis.SillyTavern.libs.localforage.getItem;
     const errors = [];
@@ -604,6 +604,7 @@ test('enqueueCurrent surfaces storage errors via toastr', async () => {
     globalThis.SillyTavern.getContext = () => ({
         chatId: 'c1',
         chat: [{ mes: 'hello' }],
+        chatMetadata: {},
         extensionSettings: {},
         saveSettingsDebounced: () => {},
         getRequestHeaders: () => ({}),
@@ -615,7 +616,7 @@ test('enqueueCurrent surfaces storage errors via toastr', async () => {
     state.queue = [];
     const fakeRoot = { querySelector: () => null };
     try {
-        await enqueueCurrent(fakeRoot, 'full-pipeline');
+        await tabGenerate.submitCurrentGeneration(fakeRoot);
     } finally {
         globalThis.SillyTavern.getContext = originalCtx;
         globalThis.SillyTavern.libs.localforage.getItem = originalGetItem;
@@ -624,6 +625,67 @@ test('enqueueCurrent surfaces storage errors via toastr', async () => {
     assert.equal(errors.length, 1, 'expected one error toast');
     assert.match(errors[0], /storage failed/);
     assert.equal(warnings.length, 0);
+});
+
+test('submitCurrentGeneration enqueues a queue item with the visible prompt snapshot', async () => {
+    const originalCtx = globalThis.SillyTavern.getContext;
+    const infos = [];
+    globalThis.toastr = { info: m => infos.push(m), success: () => {}, error: () => {}, warning: () => {} };
+    globalThis.SillyTavern.getContext = () => ({
+        chatId: 'c1',
+        chat: [{ mes: 'hello' }],
+        chatMetadata: {},
+        extensionSettings: {},
+        saveSettingsDebounced: () => {},
+        getRequestHeaders: () => ({}),
+    });
+    state.currentMsgId = 0;
+    state.queue = [];
+    const captured = [];
+    const promptEl = { value: 'draw a cat' };
+    const fakeRoot = { querySelector: sel => (sel === '#urisPrompt' ? promptEl : null) };
+    try {
+        await tabGenerate.submitCurrentGeneration(fakeRoot, {
+            enqueue: item => { captured.push(item); return Promise.resolve(null); },
+        });
+    } finally {
+        globalThis.SillyTavern.getContext = originalCtx;
+        globalThis.toastr = undefined;
+    }
+    assert.equal(captured.length, 1);
+    assert.equal(captured[0].requestedAction, 'current-prompt-stage2');
+    assert.equal(captured[0].chatId, 'c1');
+    assert.equal(captured[0].msgId, 0);
+    assert.equal(captured[0].submission.prompt, 'draw a cat');
+    assert.match(infos.join(' '), /Генерация началась|Добавлено в очередь/);
+});
+
+test('submitCurrentGeneration warns instead of enqueuing an empty prompt', async () => {
+    const originalCtx = globalThis.SillyTavern.getContext;
+    const warnings = [];
+    globalThis.toastr = { info: () => {}, success: () => {}, error: () => {}, warning: m => warnings.push(m) };
+    globalThis.SillyTavern.getContext = () => ({
+        chatId: 'c1',
+        chat: [{ mes: 'hello' }],
+        chatMetadata: {},
+        extensionSettings: {},
+        saveSettingsDebounced: () => {},
+        getRequestHeaders: () => ({}),
+    });
+    state.currentMsgId = 0;
+    const captured = [];
+    const fakeRoot = { querySelector: sel => (sel === '#urisPrompt' ? { value: '   ' } : null) };
+    try {
+        await tabGenerate.submitCurrentGeneration(fakeRoot, {
+            enqueue: item => { captured.push(item); return Promise.resolve(null); },
+        });
+    } finally {
+        globalThis.SillyTavern.getContext = originalCtx;
+        globalThis.toastr = undefined;
+    }
+    assert.equal(captured.length, 0);
+    assert.equal(warnings.length, 1);
+    assert.match(warnings[0], /Промпт пуст/);
 });
 
 // ── Message-scoped reference corrections ──
@@ -938,10 +1000,10 @@ test('renderModelSelectMarkup covers no-connection, empty-list, manual and list 
     assert.doesNotMatch(empty, /urisGenerateShowAll/, 'the all-models toggle was removed from Generate');
     assert.doesNotMatch(empty, /value="chat-model"/);
 
-    const list = renderModelSelectMarkup({ connId: 'c', connName: 'LinkAPI', ids: ['a', 'b'], current: 'a', manual: false });
+    const list = renderModelSelectMarkup({ connId: 'c', connName: 'Relay', ids: ['a', 'b'], current: 'a', manual: false });
     assert.match(list, /id="urisModel"/);
     assert.match(list, /value="a" selected/);
-    assert.match(list, /LinkAPI/);
+    assert.match(list, /Relay/);
     assert.doesNotMatch(list, /urisGenerateShowAll/, 'the all-models toggle was removed from Generate');
 
     const manual = renderModelSelectMarkup({ connId: 'c', connName: 'X', ids: ['a'], current: 'zzz', manual: true });
