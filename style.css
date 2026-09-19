@@ -481,6 +481,10 @@
     border: 1px solid transparent; transition: background .12s, border-color .12s, color .12s;
 }
 .uris-btn:disabled { opacity: .5; cursor: default; }
+/* [hidden] обязан побеждать авторский display: UA-стиль `[hidden]{display:none}`
+   слабее `.uris-btn { display: inline-flex }`, из-за чего скрытая «Остановить»
+   рисовалась в покое. Специфичности (0,2,0) хватает — !important не нужен. */
+.uris-btn[hidden] { display: none; }
 .uris-btn-ghost {
     background: var(--uris-surface-btn); border-color: var(--uris-border-soft);
     color: var(--uris-text-strong);
