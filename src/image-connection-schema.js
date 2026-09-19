@@ -29,8 +29,9 @@ export const EDIT_PROTOCOLS = new Set(['multipart', 'json']);
 //   - 'openrouter': top-level `image_config: { aspect_ratio, image_size }`
 //     plus `modalities: ['image','text']` (docs.openrouter.ai, image generation).
 //   - 'new-api': `extra_body: { google: { image_config: { aspect_ratio,
-//     image_size } } }` — the QuantumNous/new-api converter (DDTokens and most
-//     relay gateways) forwards it to generationConfig.imageConfig and silently
+//     image_size } } }` — the new-api relay software (the base most
+//     OpenAI-compatible gateways run) forwards it to
+//     generationConfig.imageConfig and silently
 //     IGNORES the top-level OpenRouter shape; keys must be snake_case (camelCase
 //     hard-fails the request conversion, verified live 2026-09-16).
 export const CHAT_COMPLETIONS_IMAGE_CONFIGS = new Set(['openrouter', 'new-api']);

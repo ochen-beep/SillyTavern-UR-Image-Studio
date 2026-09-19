@@ -137,8 +137,8 @@ export async function fetchImageRoute(url, options = {}, route, timeoutMs = 1200
         bodyKind: transport.bodyKind,
     });
     // Proxy-first delivery: the connection explicitly opted into the ST CORS
-    // proxy for a JSON-eligible route (provider sends no CORS headers at all,
-    // e.g. CloseAI). Dispatch the paid POST through /proxy/ on the FIRST
+    // proxy for a JSON-eligible route (provider sends no CORS headers at all).
+    // Dispatch the paid POST through /proxy/ on the FIRST
     // attempt - no direct try, no ambiguous state, no double billing risk.
     // Multipart routes are rejected by transportFor before reaching here.
     if (transport.initialDelivery === 'proxy') {

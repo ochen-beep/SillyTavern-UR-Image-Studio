@@ -3,7 +3,7 @@ import { trace } from '../core.js';
 import { summarizeReference } from '../references.js';
 import { endpointBase, imageResultFromValue, providerError, readJsonResponse, referencesFor, requireInvocation, assertEncodedReferenceCount, diagnosticRequestOptions } from './image-base.js';
 
-// Map all VALID_ASPECT_RATIOS (core.js) to OpenAI/CloseAI image sizes. The
+// Map all VALID_ASPECT_RATIOS (core.js) to OpenAI-compatible image sizes. The
 // previous table only covered 5 ratios; selecting 3:4, 4:3, 4:5, 5:4 or 21:9
 // used to omit `size` entirely, so the provider picked an aspect freely
 // (often 9:16) and the user's choice was silently ignored.
@@ -85,17 +85,17 @@ function generationBody(route, request) {
   // magic bytes, so whatever the provider returns is handled correctly.
   // response_format is deliberately NOT sent. It is a DALL-E compatibility
   // parameter that GPT Image models reject outright ("Unknown parameter:
-  // 'response_format'" on LinkAPI and other strict gateways). GPT Image always
+  // 'response_format'" on strict gateways). GPT Image always
   // returns base64 anyway, and `parse` below accepts both b64_json and url, so
   // omitting it is strictly safer across providers.
   return { model: route.modelId, prompt: String(request?.prompt || ''), n: 1, ...(size ? { size } : {}), ...(quality ? { quality } : {}) };
 }
 
 // input_fidelity is documented ONLY for gpt-image-1. Sending it to any other
-// model can hard-fail the request before generation: observed 2026-08-06,
-// elysiumai.garden rejected `gpt-image-2` with HTTP 400 "The model
+// model can hard-fail the request before generation: observed 2026-08-06, one
+// strict gateway rejected `gpt-image-2` with HTTP 400 "The model
 // 'gpt-image-2' does not support the 'input_fidelity' parameter", while a
-// lenient gateway (linkapi.ai, gpt-image-2-c) silently accepted it. The old
+// lenient gateway silently accepted it. The old
 // prefix match (gpt-image-*) assumed future gpt-image-N models would inherit
 // the parameter - gateways do not, so assume nothing: match exactly
 // gpt-image-1 (tolerating aggregator namespace prefixes like
@@ -130,8 +130,8 @@ function editProtocol(connection) {
 // Multipart filenames must carry an extension consistent with the declared
 // MIME: relay upstreams derive the expected file type from the filename, and a
 // bare "image" name fails validation with "Image edit file content does not
-// match its declared MIME type" even for perfectly valid bytes (novaproxy.space
-// incident 2026-09-09: same jpeg bytes → 400 as "image", 200 as "ref.jpg").
+// match its declared MIME type" even for perfectly valid bytes (observed
+// 2026-09-09: same jpeg bytes → 400 as "image", 200 as "ref.jpg").
 const FILE_EXT_BY_MIME = { 'image/png': 'png', 'image/jpeg': 'jpg', 'image/webp': 'webp' };
 
 function formData(route, request, references) {
@@ -152,8 +152,8 @@ function formData(route, request, references) {
 // JSON edit body for the OpenAI /v1/images/edits application/json variant.
 // References are passed as images[].image_url data URLs, which the OpenAI spec
 // explicitly accepts. Unlike multipart, this JSON body can traverse the ST CORS
-// proxy, so it is the dialect to pick for providers that send no CORS headers
-// (CloseAI, etc.). Selected per connection via `editProtocol: 'json'`.
+// proxy, so it is the dialect to pick for providers that send no CORS headers.
+// Selected per connection via `editProtocol: 'json'`.
 function editJsonBody(route, request, references) {
   const size = sizesForRoute(route).get(request?.aspectRatio);
   const quality = wireQuality(route, request?.quality);

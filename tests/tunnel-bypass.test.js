@@ -26,7 +26,7 @@ const NGROK = { 'ngrok-skip-browser-warning': '1' };
 // ── 1. хелпер: таблица хостов ────────────────────────────────────────────────
 
 test('tunnelBypassHeaders: поддомен loca.lt → bypass-tunnel-reminder', () => {
-    assert.deepEqual(tunnelBypassHeaders('https://novaproxy.loca.lt/v1/models'), LOCA);
+    assert.deepEqual(tunnelBypassHeaders('https://relay.loca.lt/v1/models'), LOCA);
 });
 
 test('tunnelBypassHeaders: поддомен localtunnel.me → bypass-tunnel-reminder', () => {

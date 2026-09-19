@@ -137,7 +137,7 @@ const DIALECT_ORDER = {
     [API_SHAPES.OPENAI]: {
         // Gemini image models behind an OpenAI-compatible gateway: the
         // chat-completions multimodal path is the most widely implemented
-        // (observed working on new-api gateways incl. linkapi); the native
+        // on relay gateways (new-api family); the native
         // :generateContent path is exposed by several gateways under the same
         // base; /images/edits JSON is the long tail.
         [MODEL_FAMILIES.GEMINI_IMAGE]: [D.CHAT_COMPLETIONS, D.GEMINI_NATIVE, D.OPENAI_IMAGES],

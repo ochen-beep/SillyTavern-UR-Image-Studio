@@ -8,7 +8,7 @@
 
 ## 1. Problem
 
-The `fuzhan.magicv4.ltd` Gemini proxy returns **zstd-compressed** response bodies. The SillyTavern CORS proxy (`/proxy/<url>`) forwards the body but **hides the `Content-Encoding` response header**, so the browser:
+The `другие.magicv4.ltd` Gemini proxy returns **zstd-compressed** response bodies. The SillyTavern CORS proxy (`/proxy/<url>`) forwards the body but **hides the `Content-Encoding` response header**, so the browser:
 
 - does not auto-decompress (Chrome 123+ would, if it saw `Content-Encoding: zstd`),
 - hands the raw `28 b5 2f fd …` bytes to the extension,

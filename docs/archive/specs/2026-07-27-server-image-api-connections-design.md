@@ -24,7 +24,7 @@ The first version supports three API families:
 - Gemini Native image generation;
 - OpenRouter Images.
 
-These cover direct services and compatible API proxies such as LinkAPI that expose GPT Image and Gemini Image through standard upstream contracts.
+These cover direct services and compatible API proxies such as relay gateways that expose GPT Image and Gemini Image through standard upstream contracts.
 
 The server plugin is mandatory for these three families. There is no browser fallback. Existing Agnes and Pollinations connections remain on their current legacy path and are outside this migration.
 
@@ -34,7 +34,7 @@ The implementation must:
 
 - make `endpoint + API key + model` the normal user-facing setup;
 - load GPT Image, Gemini Image, and OpenRouter image models through one button;
-- support one endpoint exposing several API families, as LinkAPI does;
+- support one endpoint exposing several API families, as a relay gateway does;
 - select the correct request format for the selected model route;
 - generate without references and edit/generate with references where supported;
 - remove migrated API keys from browser storage only after confirmed server persistence;
@@ -83,10 +83,10 @@ The normal form contains:
 
 ```text
 Name
-[ LinkAPI                              ]
+[ Relay gateway                        ]
 
 API address
-[ https://api.linkapi.ai               ]
+[ https://api.relay.example            ]
 
 API key
 [ ------------------------------------ ]
@@ -342,7 +342,7 @@ Request:
 
 ```js
 {
-  endpoint: 'https://api.linkapi.ai',
+  endpoint: 'https://api.relay.example',
   apiKey: 'sk-...',
   apiFamilyOverride: 'auto'
 }
@@ -360,7 +360,7 @@ It returns a transient catalog:
 ```js
 {
   ok: true,
-  normalizedEndpoint: 'https://api.linkapi.ai',
+  normalizedEndpoint: 'https://api.relay.example',
   routes: [],
   warnings: []
 }
@@ -388,8 +388,8 @@ Request:
 ```js
 {
   id: 'client-generated-stable-id',
-  name: 'LinkAPI',
-  endpoint: 'https://api.linkapi.ai',
+  name: 'Relay gateway',
+  endpoint: 'https://api.relay.example',
   apiKey: 'sk-...',
   modelRoute: {
     routeId: 'route-id',
@@ -423,8 +423,8 @@ Editable fields:
 
 ```js
 {
-  name: 'LinkAPI',
-  endpoint: 'https://api.linkapi.ai',
+  name: 'Relay gateway',
+  endpoint: 'https://api.relay.example',
   apiKey: 'optional-new-key',
   modelRoute: { routeId, modelId, apiFamily },
   apiFamilyOverride: 'auto',
@@ -553,8 +553,8 @@ Returns the same safe state/result envelope as `/generate`, without submitting u
 {
   schemaVersion: 1,
   id: 'stable-connection-id',
-  name: 'LinkAPI',
-  endpoint: 'https://api.linkapi.ai',
+  name: 'Relay gateway',
+  endpoint: 'https://api.relay.example',
   modelRouteId: 'route-id',
   apiFamilyOverride: 'auto',
   secretId: 'opaque-secret-id',
@@ -613,13 +613,13 @@ Preference order:
 4. known image model family;
 5. conservative adapter default.
 
-For a LinkAPI-style endpoint:
+For a relay-style endpoint:
 
 - `gpt-image-*` prefers `openai-images`;
 - `gemini-*-image*` prefers `gemini-native`;
 - routes from OpenRouter's dedicated image catalog use `openrouter-images`.
 
-A hostname rule may enable a documented LinkAPI catalog enrichment, but it is never the sole route decision.
+A hostname rule may enable a documented relay catalog enrichment, but it is never the sole route decision.
 
 ## 10. Probe coordinator
 
@@ -718,7 +718,7 @@ If the supplied endpoint already ends in `/v1` or `/v1beta`, that exact version 
 Auth strategies:
 
 1. `x-goog-api-key` for native Google-compatible APIs;
-2. query `key` for the documented LinkAPI native Gemini route when header auth is rejected;
+2. query `key` for the documented relay native Gemini route when header auth is rejected;
 3. no generic Bearer guess.
 
 References use Gemini inline image parts. Semantic ordering is preserved and the existing role guide may be appended to prompt text.
@@ -949,8 +949,8 @@ Export obtains portable templates from the server:
 ```js
 {
   id: 'stable-id',
-  name: 'LinkAPI',
-  endpoint: 'https://api.linkapi.ai',
+  name: 'Relay gateway',
+  endpoint: 'https://api.relay.example',
   selectedRoute: {
     modelId: 'gemini-3.1-flash-image',
     apiFamily: 'gemini-native',
@@ -1084,7 +1084,7 @@ This phase is the first releasable server-backed path.
 - `v1`/`v1beta` discovery;
 - native generation;
 - inline references;
-- LinkAPI-compatible query-key auth fallback.
+- relay-compatible query-key auth fallback.
 
 ### Phase 4: merged discovery
 
@@ -1151,7 +1151,7 @@ Verify exact bare-origin, `/v1`, and custom-subpath URLs; generations and edits 
 
 ### 21.4 Gemini Native
 
-Verify bare origin, `/v1`, `/v1beta`, trailing slash, and custom subpath; no duplicated version segments; pagination; header and LinkAPI query-key auth; multiple inline references; response modalities; camelCase/snake_case parts; and safety/no-image diagnostics.
+Verify bare origin, `/v1`, `/v1beta`, trailing slash, and custom subpath; no duplicated version segments; pagination; header and Relay gateway query-key auth; multiple inline references; response modalities; camelCase/snake_case parts; and safety/no-image diagnostics.
 
 ### 21.5 OpenRouter Images
 
@@ -1163,7 +1163,7 @@ Verify:
 
 - several families may succeed for one endpoint;
 - one failure does not hide another catalog;
-- LinkAPI-style GPT and Gemini routes merge;
+- relay-style GPT and Gemini routes merge;
 - duplicate model IDs produce distinct route IDs;
 - an override runs only one family;
 - no paid endpoint is probed;
@@ -1198,7 +1198,7 @@ The MVP is complete when:
 
 1. A user creates a server-backed connection using only name, endpoint, and key.
 2. Probe does not persist anything until the user saves.
-3. **Connect and load models** returns a merged list for a LinkAPI-style endpoint.
+3. **Connect and load models** returns a merged list for a relay-style endpoint.
 4. GPT Image and Gemini Image from one connection retain distinct correct routes.
 5. GPT Image generates and edits with references through OpenAI Images.
 6. Gemini Image generates and accepts supported references through native inline parts.

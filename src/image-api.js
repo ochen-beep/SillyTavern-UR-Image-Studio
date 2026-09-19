@@ -63,7 +63,7 @@ function pendingSnapshot(connectionId, route, request) {
 function browserDeliveryRoute(route, conn, hasReferences = false) {
     // The connection-level `useCorsProxy` opt-in was previously scoped to
     // catalog discovery only. For providers that send no CORS headers at all
-    // (CloseAI, etc.) the direct-first generation POST always dies on the
+    // the direct-first generation POST always dies on the
     // browser preflight and `IMAGE_DELIVERY_AMBIGUOUS` then blocks the safe
     // proxy retry - leaving the connection unusable for generation. When the
     // user has explicitly ticked "through the ST CORS proxy" AND the route is

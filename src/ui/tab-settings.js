@@ -178,7 +178,7 @@ export function render(root) {
             <section class="uris-settings-section">
                 <h3>Хранилище</h3>
                 <div class="uris-store-list" id="urisStoreList">${storageRowsHtml()}</div>
-                <small class="uris-hint">Данные (галерея, референсы, пресеты, шаблоны) лежат отдельными файлами на сервере SillyTavern — <code>data/&lt;user&gt;/user/files/</code>. В <code>settings.json</code> остаются только настройки. Режим «настройки» означает, что серверные файлы недоступны (старая версия ST) и расширение работает как раньше.</small>
+                <small class="uris-hint">Данные (галерея, референсы, пресеты, шаблоны) лежат отдельными файлами на сервере SillyTavern — <code>data/&lt;user&gt;/user/files/</code>. В <code>settings.json</code> остаются только настройки. Режим «настройки» означает, что серверные файлы недоступны (старая версия ST): данные хранятся в <code>settings.json</code>.</small>
             </section>
         </div>`;
     bindScaleControls(root);

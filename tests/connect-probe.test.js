@@ -22,7 +22,7 @@ function corsTypeError() {
 test('probe: bearer + OpenAI body shape on the first candidate', async () => {
     const seen = [];
     const outcome = await probeConnection({
-        endpoint: 'https://linkapi.ai/v1',
+        endpoint: 'https://relay.example/v1',
         apiKey: 'sk-test',
         fetch: async (url, options) => {
             seen.push({ url: String(url), auth: options.headers.Authorization || options.headers['x-goog-api-key'] || null });
@@ -43,9 +43,9 @@ test('probe: bearer + OpenAI body shape on the first candidate', async () => {
     assert.ok(outcome.checkedAt);
 });
 
-test('probe: generic LinkAPI catalog retains nai-diffusion IDs without capability metadata', async () => {
+test('probe: generic Relay catalog retains nai-diffusion IDs without capability metadata', async () => {
     const outcome = await probeConnection({
-        endpoint: 'https://linkapi.ai/v1',
+        endpoint: 'https://relay.example/v1',
         apiKey: 'key',
         fetch: async () => jsonResponse({ data: [
             { id: 'nai-diffusion' },
@@ -56,7 +56,7 @@ test('probe: generic LinkAPI catalog retains nai-diffusion IDs without capabilit
     });
     assert.deepEqual(outcome.modelIds, ['nai-diffusion', 'vendor/nai-diffusion-v2', 'text-model']);
     assert.equal(outcome.catalogSource, 'generic-models');
-    assert.equal(outcome.catalogUrl, 'https://linkapi.ai/v1/models');
+    assert.equal(outcome.catalogUrl, 'https://relay.example/v1/models');
 });
 
 test('probe: bearer rejected → x-goog-api-key wins (google-style gateway)', async () => {
@@ -93,7 +93,7 @@ test('probe: direct CORS block falls back to the ST proxy and records delivery',
 test('probe: corsMode proxy goes straight through the proxy without a direct attempt', async () => {
     const calls = [];
     const outcome = await probeConnection({
-        endpoint: 'https://linkapi.ai/v1',
+        endpoint: 'https://relay.example/v1',
         apiKey: 'k',
         corsMode: 'proxy',
         fetch: async () => { calls.push('direct'); return jsonResponse({ data: [] }); },
@@ -103,7 +103,7 @@ test('probe: corsMode proxy goes straight through the proxy without a direct att
         },
     });
     assert.equal(outcome.delivery, 'proxy');
-    assert.deepEqual(calls, [['proxy', 'https://linkapi.ai/v1/models', 'Bearer k']]);
+    assert.deepEqual(calls, [['proxy', 'https://relay.example/v1/models', 'Bearer k']]);
 });
 
 test('probe: google host prefers the native URL and x-goog auth', async () => {
@@ -294,7 +294,7 @@ test('probe: результат «Проверить» пишется в жур�
     const journal = await import('../src/diagnostic-events.js');
     journal.resetDiagnosticEventsForTests();
     const outcome = await probeConnection({
-        endpoint: 'https://linkapi.ai/v1',
+        endpoint: 'https://relay.example/v1',
         apiKey: 'sk-test',
         fetch: async () => jsonResponse({ data: [{ id: 'gpt-image-1' }, { id: 'gemini-3.1-flash-lite-image' }] }),
         proxiedFetch: async () => { throw new Error('proxy must not be called'); },
@@ -311,7 +311,7 @@ test('probe: ошибка «Проверить» пишется в журнал 
     const journal = await import('../src/diagnostic-events.js');
     journal.resetDiagnosticEventsForTests();
     await assert.rejects(probeConnection({
-        endpoint: 'https://linkapi.ai/v1',
+        endpoint: 'https://relay.example/v1',
         fetch: async () => { throw new Error('connection refused'); },
         proxiedFetch: async () => { throw new Error('no proxy'); },
     }));

@@ -33,7 +33,7 @@ test('aspectDeviates: документированный слот Gemini 9:16 (7
   assert.equal(aspectDeviates(1024, 1024, '1:1'), null);
 });
 
-test('aspectDeviates: наблюдаемый провал ddtnew (1376x768 вместо 9:16) ловится', () => {
+test('aspectDeviates: наблюдаемый провал релея (1376x768 вместо 9:16) ловится', () => {
   const deviation = aspectDeviates(1376, 768, '9:16');
   assert.ok(deviation !== null && deviation > 1, 'портрет вместо альбома — отклонение больше 100%');
   // умеренный промах тоже виден: 1024x1024 против 16:9

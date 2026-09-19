@@ -735,8 +735,8 @@ export async function discoverCatalog({ endpoint, apiKey = '', contract, timeout
         url.pathname += '/models';
         // Auth must mirror the generation path (providers/image-gemini.js
         // headers()): Google's own endpoint takes x-goog-api-key, while
-        // OpenAI-compatible gateways fronting gemini models (new-api et al.,
-        // observed on linkapi.ai) expect Authorization: Bearer even on the
+        // OpenAI-compatible gateways fronting gemini models (new-api family)
+        // expect Authorization: Bearer even on the
         // native-looking /models path. Sending x-goog-api-key there produced
         // HTTP 400 "Invalid token" while generation with Bearer worked.
         const isGoogleHost = /generativelanguage\.googleapis\.com/i.test(url.hostname);

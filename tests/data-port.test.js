@@ -300,8 +300,8 @@ test('v7 backup migrates connections to the derived-dialect read model (v8)', ()
         shared: {
             connections: [{
                 id: 'legacy',
-                name: 'LinkAPI',
-                endpoint: 'https://linkapi.ai/v1',
+                name: 'Relay',
+                endpoint: 'https://relay.example/v1',
                 apiFamilyOverride: 'gemini-native',
                 useCorsProxy: true,
                 editProtocol: 'json',

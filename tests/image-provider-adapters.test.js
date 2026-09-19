@@ -109,7 +109,7 @@ test('openai-images sends edits as multipart with repeated image fields by defau
 test('openai-images multipart edit: reference filenames carry a proper extension', async () => {
   // Relay upstreams derive the expected file type from the multipart filename:
   // a bare "image" name fails with "Image edit file content does not match its
-  // declared MIME type" even for perfectly valid bytes (novaproxy.space,
+  // declared MIME type" even for perfectly valid bytes (one relay,
   // incident 2026-09-09: same jpeg bytes → 400 as "image", 200 as "ref.jpg").
   const transport = makeTransport(jsonResponse({ data: [{ b64_json: 'cmVzdWx0' }] }));
   await invokeImageProvider({
@@ -134,7 +134,7 @@ test('openai-images sends input_fidelity for gpt-image-1 edits only', async () =
     });
     assert.equal(transport.calls[0].options.body.get('input_fidelity'), 'high', modelId);
   }
-  // ...but gpt-image-2 must not get it: elysiumai.garden rejects it with
+  // ...but gpt-image-2 must not get it: vendor.example rejects it with
   // HTTP 400 "The model 'gpt-image-2' does not support the 'input_fidelity'
   // parameter" (2026-08-06). Never send a parameter the model has not
   // documented - a lenient gateway accepting it proves nothing.
@@ -365,12 +365,15 @@ test('gemini-native keeps references ordered and parses inline image data', asyn
   const result = await invokeImageProvider({
     endpoint: 'https://generativelanguage.googleapis.com/v1beta', apiKey: 'gem-key',
     connection: { timeoutMs: 4300 },
-    route: route('gemini-native', 'gemini-2.5-flash-image'),
+    // 3.x pro: 2K is a real tier for this model, so the test keeps covering
+    // reference ordering and inline parsing without tripping the size guard.
+    // (2.5 has no size parameter at all — covered by the guard tests below.)
+    route: route('gemini-native', 'gemini-3-pro-image-preview'),
     request: { prompt: 'Combine', aspectRatio: '1:1', imageSize: '2K', references: [{ dataUrl: PNG }, { dataUrl: JPEG }] }, transport,
   });
 
   assert.deepEqual(result, { kind: 'dataUrl', value: 'data:image/webp;base64,d2VicA==', mimeType: 'image/webp', warnings: [] });
-  assert.equal(transport.calls[0].url, 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-image:generateContent');
+  assert.equal(transport.calls[0].url, 'https://generativelanguage.googleapis.com/v1beta/models/gemini-3-pro-image-preview:generateContent');
   assert.equal(transport.calls[0].options.headers['x-goog-api-key'], 'gem-key');
   assert.deepEqual(JSON.parse(transport.calls[0].options.body).contents[0].parts, [
     { inlineData: { mimeType: 'image/png', data: 'cG5n' } },
@@ -421,7 +424,7 @@ test('chat-completions sends multimodal content and parses message images', asyn
 test('chat-completions conditionally sends OpenRouter-compatible image_config', async () => {
   const transport = makeTransport(jsonResponse({ choices: [{ message: { images: [{ image_url: { url: PNG } }] } }] }));
   await invokeImageProvider({
-    endpoint: 'https://linkapi.ai/v1', apiKey: 'key',
+    endpoint: 'https://relay.example/v1', apiKey: 'key',
     route: route('chat-completions', 'gemini-3.1-flash-image-preview', {
       capabilities: { chatCompletionsImageConfig: 'openrouter' },
     }),
@@ -489,7 +492,7 @@ test('chat-completions new-api: geometry travels in extra_body.google.image_conf
   assert.deepEqual(result.warnings, [
     { feature: 'Quality', details: 'значение «high» не передаётся: у контракта Chat Completions нет параметра quality.' },
   ]);
-  // Live-verified shape (ddtnew 2026-09-16): the new-api converter forwards
+  // Live-verified shape (2026-09-16): the new-api converter forwards
   // extra_body.google.image_config to generationConfig.imageConfig and
   // silently ignores the OpenRouter-style top-level image_config.
   assert.deepEqual(JSON.parse(transport.calls[0].options.body), {
@@ -569,8 +572,7 @@ test('chat-completions: prompt aspect conflicting with settings warns, prompt is
   assert.equal(plain.warnings.filter(w => w.feature === 'Стороны').length, 1);
 });
 
-test('chat-completions: connection extraBody merges deep, reserved keys stay untouchable', async () => {
-  const transport = makeTransport(jsonResponse({ choices: [{ message: { images: [{ image_url: { url: PNG } }] } }] }));
+test('chat-completions: connection extraBody merges deep, reserved keys stay untouchable', async () => {  const transport = makeTransport(jsonResponse({ choices: [{ message: { images: [{ image_url: { url: PNG } }] } }] }));
   await invokeImageProvider({
     endpoint: 'https://ddt.example/v1', apiKey: 'key',
     connection: {
@@ -842,4 +844,103 @@ test('openai-images uses the dall-e-3 size table (16:9 → 1792x1024, gpt-image 
     });
     assert.equal(JSON.parse(transport.calls[0].options.body).size, expectedSize);
   }
+});
+
+// ── Per-model resolution guard ──
+//
+// An unsupported imageSize can fail the whole request on this model family
+// (new-api clears it for nano-banana for exactly that reason), which would cost
+// the user the aspect ratio too. The tier is therefore dropped on the wire and
+// reported, while aspect_ratio keeps travelling.
+
+test('chat-completions: unsupported imageSize is dropped from the wire, aspect ratio survives', async () => {
+  const transport = makeTransport(jsonResponse({ choices: [{ message: { images: [{ image_url: { url: PNG } }] } }] }));
+  const result = await invokeImageProvider({
+    endpoint: 'https://ddt.example/v1', apiKey: 'key',
+    route: route('chat-completions', 'gemini-3.1-flash-lite-image', {
+      capabilities: { chatCompletionsImageConfig: 'new-api' },
+    }),
+    request: { prompt: 'Apple', aspectRatio: '9:16', imageSize: '2K', references: [] }, transport,
+  });
+
+  assert.deepEqual(JSON.parse(transport.calls[0].options.body).extra_body, {
+    google: { image_config: { aspect_ratio: '9:16' } },
+  });
+  assert.equal(result.warnings.length, 1);
+  assert.equal(result.warnings[0].feature, 'Размер');
+  assert.match(result.warnings[0].details, /2K не поддерживается.*только 1K/);
+});
+
+test('chat-completions: lite with its own 1K tier warns about nothing', async () => {
+  const transport = makeTransport(jsonResponse({ choices: [{ message: { images: [{ image_url: { url: PNG } }] } }] }));
+  const result = await invokeImageProvider({
+    endpoint: 'https://ddt.example/v1', apiKey: 'key',
+    route: route('chat-completions', 'gemini-3.1-flash-lite-image', {
+      capabilities: { chatCompletionsImageConfig: 'new-api' },
+    }),
+    request: { prompt: 'Apple', aspectRatio: '9:16', imageSize: '1K', references: [] }, transport,
+  });
+  assert.deepEqual(result.warnings, []);
+  assert.deepEqual(JSON.parse(transport.calls[0].options.body).extra_body.google.image_config, { aspect_ratio: '9:16', image_size: '1K' });
+});
+
+test('chat-completions: a model with no size parameter at all drops imageSize with its own reason', async () => {
+  const transport = makeTransport(jsonResponse({ choices: [{ message: { images: [{ image_url: { url: PNG } }] } }] }));
+  const result = await invokeImageProvider({
+    endpoint: 'https://ddt.example/v1', apiKey: 'key',
+    route: route('chat-completions', 'gemini-2.5-flash-image', {
+      capabilities: { chatCompletionsImageConfig: 'new-api' },
+    }),
+    request: { prompt: 'Apple', aspectRatio: '16:9', imageSize: '1K', references: [] }, transport,
+  });
+  assert.deepEqual(JSON.parse(transport.calls[0].options.body).extra_body.google.image_config, { aspect_ratio: '16:9' });
+  assert.match(result.warnings[0].details, /не имеет параметра размера/);
+});
+
+test('chat-completions: unknown models keep the permissive path (no false guard)', async () => {
+  const transport = makeTransport(jsonResponse({ choices: [{ message: { images: [{ image_url: { url: PNG } }] } }] }));
+  const result = await invokeImageProvider({
+    endpoint: 'https://ddt.example/v1', apiKey: 'key',
+    route: route('chat-completions', 'brand-new-image-model', {
+      capabilities: { chatCompletionsImageConfig: 'new-api' },
+    }),
+    request: { prompt: 'Apple', aspectRatio: '9:16', imageSize: '4K', references: [] }, transport,
+  });
+  assert.deepEqual(result.warnings, []);
+  assert.deepEqual(JSON.parse(transport.calls[0].options.body).extra_body.google.image_config, { aspect_ratio: '9:16', image_size: '4K' });
+});
+
+test('gemini-native: unsupported imageSize is dropped, aspectRatio still sent, warning returned', async () => {
+  const transport = makeTransport(jsonResponse({ candidates: [{ content: { parts: [{ inlineData: { mimeType: 'image/png', data: 'cG5n' } }] } }] }));
+  const result = await invokeImageProvider({
+    endpoint: 'https://generativelanguage.googleapis.com/v1beta', apiKey: 'gem-key',
+    connection: { timeoutMs: 4200 },
+    route: route('gemini-native', 'gemini-3.1-flash-lite-image'),
+    request: { prompt: 'Apple', aspectRatio: '9:16', imageSize: '4K', references: [] }, transport,
+  });
+
+  assert.deepEqual(JSON.parse(transport.calls[0].options.body).generationConfig.imageConfig, { aspectRatio: '9:16' });
+  assert.deepEqual(result.warnings, [{ feature: 'Размер', details: 'размер 4K не поддерживается: модель gemini-3.1-flash-lite-image поддерживает только 1K — параметр опущен.' }]);
+});
+
+test('gemini-native: 2K on a 3.x pro model stays on the wire without warnings', async () => {
+  const transport = makeTransport(jsonResponse({ candidates: [{ content: { parts: [{ inlineData: { mimeType: 'image/png', data: 'cG5n' } }] } }] }));
+  const result = await invokeImageProvider({
+    endpoint: 'https://generativelanguage.googleapis.com/v1beta', apiKey: 'gem-key',
+    route: route('gemini-native', 'gemini-3-pro-image-preview'),
+    request: { prompt: 'Apple', aspectRatio: '16:9', imageSize: '2K', references: [] }, transport,
+  });
+  assert.deepEqual(JSON.parse(transport.calls[0].options.body).generationConfig.imageConfig, { aspectRatio: '16:9', imageSize: '2K' });
+  assert.deepEqual(result.warnings, []);
+});
+
+test('gemini-native: 2.5 generation has no size parameter, so imageSize is dropped with its reason', async () => {
+  const transport = makeTransport(jsonResponse({ candidates: [{ content: { parts: [{ inlineData: { mimeType: 'image/png', data: 'cG5n' } }] } }] }));
+  const result = await invokeImageProvider({
+    endpoint: 'https://generativelanguage.googleapis.com/v1beta', apiKey: 'gem-key',
+    route: route('gemini-native', 'gemini-2.5-flash-image'),
+    request: { prompt: 'Apple', aspectRatio: '9:16', imageSize: '2K', references: [] }, transport,
+  });
+  assert.deepEqual(JSON.parse(transport.calls[0].options.body).generationConfig.imageConfig, { aspectRatio: '9:16' });
+  assert.match(result.warnings[0].details, /не имеет параметра размера/);
 });

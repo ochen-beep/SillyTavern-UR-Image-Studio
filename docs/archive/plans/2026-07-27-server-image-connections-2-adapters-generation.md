@@ -210,7 +210,7 @@ Test bare origin probes `/v1/models` and `/v1beta/models`; supplied `/v1` or `/v
 
 - [ ] **Step 2: Write failing auth tests**
 
-Primary request uses `x-goog-api-key`. Query `?key=` is attempted only for the documented LinkAPI-compatible preset/host after header auth rejection. No generic Bearer header is guessed.
+Primary request uses `x-goog-api-key`. Query `?key=` is attempted only for the documented relay-compatible preset/host after header auth rejection. No generic Bearer header is guessed.
 
 - [ ] **Step 3: Write failing catalog/pagination tests**
 

@@ -9,16 +9,20 @@
     --uris-label-w: 90px;
 
     /* ── Слои (z-index) ──
-       Ориентиры SillyTavern: левый nav-drawer 3000, топ-бар 3005, легаси-диалоги
+       Ориентиры SillyTavern: панели-дроверы 3000 (#left-nav-panel, .fillRight),
+       nav-toggle/bg_menu 3001, топ-бар и шелл настроек 3005, легаси-диалоги
        #dialogue_popup 9999; новые <dialog>-попапы ST живут в top layer и выше
-       любого z-index. Всё хозяйство URIS — ниже 9999: окно живёт под хромом ST
-       (не перекрывает таверну и чужие расширения), модалки — над хромом, но под
-       диалогами, просмотрщик — иммерсивный. Порядок строгий:
-       window < fab < ghost < modal < lightbox < modal-top (кроп/копи-меню
-       поверх pswp). Контракт закреплён в tests/popup-viewport-css.test.js. */
+       любого z-index. Полоса 2990–2999 свободна от ST и занята расширениями:
+       чужие панели и FAB (Glosses / DS Comments) стоят на 2998–2999.
+       Отсюда: окно URIS живёт НИЖЕ чужих панелей (не перекрывает другие
+       расширения), а FAB — ВЫШЕ них (иначе кнопка исчезает, когда панель
+       расширения накрывает её точку) и при этом НИЖЕ хрома ST, чтобы никогда
+       не перекрывать настройки таверны. Модалки — уже осознанно поверх хрома.
+       Порядок строгий: window < ghost < fab < modal < lightbox < modal-top.
+       Контракт закреплён в tests/popup-viewport-css.test.js. */
     --uris-z-window: 2990;
-    --uris-z-fab: 2991;
     --uris-z-ghost: 2992;
+    --uris-z-fab: 2999;
     --uris-z-modal: 3500;
     --uris-z-lightbox: 5000;
     --uris-z-modal-top: 5100;
@@ -95,16 +99,31 @@
     }
 }
 
-/* ── Launcher в quick-reply bar ── */
-#uris_launcher { cursor: pointer; user-select: none; }
+/* ── Launcher в quick-reply bar ──
+   Квадрат задан явно, как у соседних лаунчеров в баре и у собственного FAB.
+   Без фиксации ширины она складывалась из advance-ширины глифа 🎨 (у разных
+   эмодзи-шрифтов она разная), паддингов и рамки ST, а высота — из строки:
+   кнопка лишь случайно выходила квадратной и «плыла» при смене эмодзи-шрифта,
+   зума или темы. Селектор с двумя id нужен, чтобы перебить паддинг ST
+   (`#qr--bar > .qr--buttons .qr--button { padding: 3px 5px }`): при фиксированной
+   рамке он не влияет на габарит, но сжимает контентную область под глиф. */
+#uris_launcher,
+#qr--bar #uris_launcher,
+#qr--popout #uris_launcher {
+    cursor: pointer; user-select: none;
+    width: 36px; height: 36px; min-width: 36px; min-height: 36px;
+    padding: 0; flex: 0 0 auto;
+    display: inline-flex; align-items: center; justify-content: center;
+}
 #uris_launcher.uris_launcher_active { background: var(--uris-accent); }
 
 /* ── Плавающая кнопка (FAB) ──
-   Перенос из DS Comments. Слой --uris-z-fab НАД окном (2991 > 2990), как у
-   DSC: FAB остаётся кликабельным тогглом поверх открытого окна и мобильного
-   fullscreen-оверлея. При этом модалки (3500) и лайтбокс (5000) перекрывают
-   его димом. Топ-бар ST (3005) всё же выше FAB — drag/restore клэмпят позицию
-   ниже него (floating-launcher.js). */
+   Перенос из DS Comments. Слой --uris-z-fab намеренно ВЫШЕ чужих панелей и
+   фабов (2998–2999 у Glosses / DS Comments) и НИЖЕ хрома ST (дроверы 3000,
+   top-bar 3005): кнопка остаётся видимой и кликабельной, когда панель другого
+   расширения накрывает её точку, но физически не может перекрыть настройки
+   таверны. Модалки (3500) и лайтбокс (5000) перекрывают её димом. Позиция
+   клэмпится ниже топ-бара (floating-launcher.js). */
 .uris_fab {
     position: fixed; z-index: var(--uris-z-fab);
     width: 36px; height: 36px; border-radius: 50%;

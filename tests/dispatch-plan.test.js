@@ -39,12 +39,12 @@ test('nai-diffusion variants are visible image aliases without inventing a wire 
     for (const id of ids) {
         assert.equal(classifyModelCapability(id).kind, 'image', id);
         assert.equal(detectModelFamily(id), MODEL_FAMILIES.UNKNOWN, id);
-        const plan = resolveDispatchPlan({ endpoint: 'https://linkapi.ai/v1', model: { id } });
+        const plan = resolveDispatchPlan({ endpoint: 'https://relay.example/v1', model: { id } });
         assert.equal(plan.dialect, 'openai-images', id);
     }
     assert.equal(classifyModelCapability('nai-diffusion', { mediaKind: 'text' }).kind, 'non-image');
     assert.throws(
-        () => resolveDispatchPlan({ endpoint: 'https://linkapi.ai/v1', model: { id: 'nai-diffusion' }, detected: { modelMetadata: [{ modelId: 'nai-diffusion', mediaKind: 'text' }] } }),
+        () => resolveDispatchPlan({ endpoint: 'https://relay.example/v1', model: { id: 'nai-diffusion' }, detected: { modelMetadata: [{ modelId: 'nai-diffusion', mediaKind: 'text' }] } }),
         error => error?.code === 'MODEL_NOT_IMAGE',
     );
 });
@@ -105,7 +105,7 @@ test('maxReferencesFor: per-family wire limits', () => {
 test('inferApiShape: host-based inference with openai-compatible default', () => {
     assert.equal(inferApiShape('https://openrouter.ai/api/v1'), 'openrouter');
     assert.equal(inferApiShape('https://generativelanguage.googleapis.com/v1beta'), 'gemini');
-    assert.equal(inferApiShape('https://linkapi.ai/v1'), 'openai');
+    assert.equal(inferApiShape('https://relay.example/v1'), 'openai');
     assert.equal(inferApiShape(''), 'openai');
 });
 
@@ -122,9 +122,9 @@ test('dialectOrder: gemini-image on an openai gateway prefers chat-completions',
     assert.deepEqual(dialectOrder('openrouter', MODEL_FAMILIES.UNKNOWN), ['openrouter-images']);
 });
 
-test('resolveDispatchPlan: linkapi shape — gemini image model on an openai gateway', () => {
+test('resolveDispatchPlan: relay shape — gemini image model on an openai gateway', () => {
     const plan = resolveDispatchPlan({
-        endpoint: 'https://linkapi.ai/v1',
+        endpoint: 'https://relay.example/v1',
         model: { id: 'gemini-3.1-flash-lite-image', source: 'list' },
     });
     assert.ok(plan);
@@ -141,7 +141,7 @@ test('resolveDispatchPlan: linkapi shape — gemini image model on an openai gat
 
 test('resolveDispatchPlan: explicit chat image config override is route-scoped', () => {
     const plan = resolveDispatchPlan({
-        endpoint: 'https://linkapi.ai/v1',
+        endpoint: 'https://relay.example/v1',
         model: { id: 'gemini-3.1-flash-image-preview' },
         overrides: { chatCompletionsImageConfig: 'openrouter' },
     });
@@ -149,7 +149,7 @@ test('resolveDispatchPlan: explicit chat image config override is route-scoped',
     assert.equal(plan.route.capabilities.chatCompletionsImageConfig, 'openrouter');
 
     const native = resolveDispatchPlan({
-        endpoint: 'https://linkapi.ai/v1',
+        endpoint: 'https://relay.example/v1',
         model: { id: 'gemini-3.1-flash-image-preview' },
         overrides: { dialect: 'gemini-native', chatCompletionsImageConfig: 'openrouter' },
     });
@@ -159,14 +159,14 @@ test('resolveDispatchPlan: explicit chat image config override is route-scoped',
 
 test('resolveDispatchPlan: new-api override passes through only on chat-completions', () => {
     const plan = resolveDispatchPlan({
-        endpoint: 'https://ddtnew.com/v1',
+        endpoint: 'https://relay2.example/v1',
         model: { id: 'gemini-3.1-flash-image-preview' },
         overrides: { chatCompletionsImageConfig: 'new-api' },
     });
     assert.equal(plan.route.capabilities.chatCompletionsImageConfig, 'new-api');
 
     const native = resolveDispatchPlan({
-        endpoint: 'https://ddtnew.com/v1',
+        endpoint: 'https://relay2.example/v1',
         model: { id: 'gemini-3.1-flash-image-preview' },
         overrides: { dialect: 'gemini-native', chatCompletionsImageConfig: 'new-api' },
     });
@@ -210,7 +210,7 @@ test('resolveDispatchPlan: gpt-image on an openai gateway speaks openai-images',
 
 test('resolveDispatchPlan: explicit dialect override wins over the static order', () => {
     const plan = resolveDispatchPlan({
-        endpoint: 'https://linkapi.ai/v1',
+        endpoint: 'https://relay.example/v1',
         model: { id: 'gemini-3.1-flash-lite-image' },
         overrides: { dialect: 'gemini-native' },
     });
@@ -258,7 +258,7 @@ test('resolveDispatchPlan: no model — null, caller decides the error', () => {
 
 test('synthesized route is accepted by assertReferencePolicy', () => {
     const withRefs = resolveDispatchPlan({
-        endpoint: 'https://linkapi.ai/v1',
+        endpoint: 'https://relay.example/v1',
         model: { id: 'gemini-3.1-flash-lite-image' },
     }).route;
     assert.doesNotThrow(() => assertReferencePolicy(withRefs, { references: [{}, {}] }));
@@ -275,7 +275,7 @@ test('synthesized route is accepted by assertReferencePolicy', () => {
 
 test('overrides.refs never blocks references regardless of family limit', () => {
     const plan = resolveDispatchPlan({
-        endpoint: 'https://linkapi.ai/v1',
+        endpoint: 'https://relay.example/v1',
         model: { id: 'gemini-3.1-flash-lite-image' },
         overrides: { refs: 'never' },
     });

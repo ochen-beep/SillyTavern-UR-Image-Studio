@@ -491,7 +491,7 @@ test('gemini.generateImage: zstd-compressed inlineData JSON → dataUrl', async 
     }));
     try {
         const r = await gemini.generateImage(
-            { provider: 'gemini', endpoint: 'https://fuzhan.magicv4.ltd', apiKey: 'k', model: 'gemini-3.1-flash-image-preview' },
+            { provider: 'gemini', endpoint: 'https://другие.magicv4.ltd', apiKey: 'k', model: 'gemini-3.1-flash-image-preview' },
             { prompt: 'cat', style: '', aspectRatio: '1:1', imageSize: '1K' },
             [], () => {},
         );
@@ -1106,7 +1106,7 @@ Fixed by adding proxy-safe response-body reading across all providers.
 
 ### Result
 
-- The `fuzhan.magicv4.ltd` zstd responses now decompress and produce a valid `dataUrl`.
+- The `другие.magicv4.ltd` zstd responses now decompress and produce a valid `dataUrl`.
 - The same defense covers any other provider going through the same proxy.
 - When WHATWG ships `DecompressionStream('zstd')`, the fzstd path becomes dead code automatically — no future edit required.
 ```

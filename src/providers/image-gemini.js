@@ -2,6 +2,7 @@
 import { trace } from '../core.js';
 import { summarizeReference } from '../references.js';
 import { endpointBase, imageResultFromValue, providerError, readJsonResponse, referencesFor, requireInvocation, assertEncodedReferenceCount, diagnosticRequestOptions } from './image-base.js';
+import { unsupportedImageSizeReason } from '../image-model-capabilities.js';
 
 function generationUrl(endpoint, route) {
   const savedBase = route?.remoteMetadata?.versionedBase;
@@ -20,10 +21,16 @@ function headers(endpoint, route, apiKey) {
     : { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' };
 }
 
-function body(request, references) {
+// The generationConfig carries the geometry a model actually owns. An
+// unsupported resolution tier is dropped rather than forwarded: on this family
+// an unknown imageSize can fail the entire request (and with it the aspect
+// ratio), and the caller gets a warning explaining what was dropped and why.
+function body(route, request, references) {
+  const requestedSize = typeof request?.imageSize === 'string' && request.imageSize.trim() ? request.imageSize.trim() : null;
+  const sizeReason = requestedSize ? unsupportedImageSizeReason(route?.modelId, requestedSize) : null;
   const imageConfig = {
     ...(typeof request?.aspectRatio === 'string' ? { aspectRatio: request.aspectRatio } : {}),
-    ...(typeof request?.imageSize === 'string' ? { imageSize: request.imageSize } : {}),
+    ...(requestedSize && !sizeReason ? { imageSize: requestedSize } : {}),
   };
   const referenceBindings = Array.isArray(request?.referenceBindings) ? request.referenceBindings : [];
   const parts = [];
@@ -34,8 +41,11 @@ function body(request, references) {
   });
   parts.push({ text: String(request?.prompt || '') });
   return {
-    contents: [{ parts }],
-    generationConfig: { responseModalities: ['TEXT', 'IMAGE'], ...(Object.keys(imageConfig).length ? { imageConfig } : {}) },
+    payload: {
+      contents: [{ parts }],
+      generationConfig: { responseModalities: ['TEXT', 'IMAGE'], ...(Object.keys(imageConfig).length ? { imageConfig } : {}) },
+    },
+    sizeWarning: sizeReason ? { size: requestedSize, reason: sizeReason } : null,
   };
 }
 
@@ -70,7 +80,7 @@ function parse(payload) {
 export async function generateGeminiImage(input) {
   const { endpoint, apiKey, route, request, transport, signal, connection = {}, diagnostic = null } = requireInvocation(input);
   const references = referencesFor(request);
-  const payload = body(request, references);
+  const { payload, sizeWarning } = body(route, request, references);
   const encodedReferences = payload.contents[0].parts.filter(part => part?.inlineData).length;
   assertEncodedReferenceCount(references.length, encodedReferences, 'gemini-inlineData');
   trace('gemini-native: outgoing payload', {
@@ -82,9 +92,16 @@ export async function generateGeminiImage(input) {
     encodedRefs: encodedReferences,
     refs: (request?.references || []).map(ref => ({ id: ref?.id, name: ref?.name, ...summarizeReference(ref) })),
     imageConfig: payload.generationConfig.imageConfig || null,
+    droppedImageSize: sizeWarning ? sizeWarning.size : null,
   });
   const response = await transport.requestJson(generationUrl(endpoint, route), diagnosticRequestOptions({
     method: 'POST', headers: headers(endpoint, route, apiKey), body: JSON.stringify(payload), signal,
-  }, diagnostic, { bodyKind: 'json', wireFields: ['contents', 'generationConfig', 'responseModalities', ...(payload.generationConfig.imageConfig ? ['imageConfig'] : [])] }), route, connection.timeoutMs);
-  return parse(await readJsonResponse(response, 'Gemini Native'));
+  }, diagnostic, {
+    bodyKind: 'json', wireFields: ['contents', 'generationConfig', 'responseModalities', ...(payload.generationConfig.imageConfig ? ['imageConfig'] : [])],
+    ...(sizeWarning ? { omittedFields: ['imageSize'] } : {}),
+  }), route, connection.timeoutMs);
+  const warnings = sizeWarning
+    ? [{ feature: 'Размер', details: `размер ${sizeWarning.size} не поддерживается: ${sizeWarning.reason} — параметр опущен.` }]
+    : [];
+  return { ...parse(await readJsonResponse(response, 'Gemini Native')), warnings };
 }

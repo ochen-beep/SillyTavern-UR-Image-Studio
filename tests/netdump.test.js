@@ -251,8 +251,8 @@ test('classifyUrl: skip для /api/secrets и probe example.com', () => {
 });
 
 test('classifyUrl: Gemini generateContent с -image → image-gemini; без → text-llm', () => {
-    assert.equal(classifyUrl('https://linkapi.ai/v1beta/models/gemini-3.1-flash-image:generateContent').kind, 'image-gemini');
-    assert.equal(classifyUrl('https://linkapi.ai/v1beta/models/gemini-3-pro:generateContent').kind, 'text-llm');
+    assert.equal(classifyUrl('https://relay.example/v1beta/models/gemini-3.1-flash-image:generateContent').kind, 'image-gemini');
+    assert.equal(classifyUrl('https://relay.example/v1beta/models/gemini-3-pro:generateContent').kind, 'text-llm');
 });
 
 test('classifyUrl: proxy-путь декодируется', () => {

@@ -127,7 +127,7 @@ node --test --test-concurrency=1 \
 
 Обязательные доказательства:
 
-- LinkAPI-like endpoint объединяет GPT и Gemini routes;
+- relay-like endpoint объединяет GPT и Gemini routes;
 - duplicate model IDs не теряют API family;
 - OpenRouter использует dedicated `/api/v1/images`;
 - probes не вызывают paid endpoints.

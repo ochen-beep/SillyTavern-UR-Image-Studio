@@ -9,7 +9,7 @@ A [SillyTavern](https://docs.sillytavern.app/) extension that generates images f
 ## Features
 
 - Two-stage pipeline: a scene-first image prompt built from the chat by a text LLM, then image generation — plus a manual mode where only your prompt is used.
-- Image sources (browser-side connections): OpenAI Images (DALL·E / gpt-image), Gemini native, OpenRouter Images, image-capable Chat Completions gateways (both the OpenRouter-style `image_config` and the `new-api` `extra_body` dialect used by DDTokens and most relays), Pollinations, Naistera.
+- Image sources (browser-side connections): OpenAI Images (DALL·E / gpt-image), Gemini native, OpenRouter Images, image-capable Chat Completions gateways (both the OpenRouter-style `image_config` and the `new-api` `extra_body` dialect used by most relay gateways), Pollinations, Naistera.
 - Stage 1 sources: a Connection Manager profile (routed through the ST server — no CORS hassle) or a custom OpenAI-compatible / Gemini endpoint.
 - Reference images: a pool with folders and chat binding, batch upload, crop, per-generation send mode, and provider reference caps.
 - Gallery: images are stored in SillyTavern's native gallery with a server-side metadata index; a full-screen viewer (PhotoSwipe) with crop, "send to references" and copy actions.
@@ -66,7 +66,7 @@ A detailed walkthrough — in Russian, with connections, inline markers and all 
 
 - Browser-side image requests need either a CORS-permissive endpoint or the SillyTavern CORS proxy. The connection's delivery setting is **auto** by default: direct first, proxy on a CORS block. See `docs/cors-proxy-setup.md`.
 - Stopping a generation that is delivered through the ST proxy cancels only the wait: the provider keeps processing and may bill the request (the proxy does not forward cancellation).
-- Chat Completions gateways ignore aspect ratio/size unless the correct dialect is selected: OpenRouter documents a top-level `image_config`, while new-api relays (DDTokens and most gateways) silently ignore it and only forward `extra_body.google.image_config`. Without the right dialect the gateway quietly returns its default format — URIS warns about dropped parameters and, after the image arrives, verifies that the actual pixels match the request.
+- Chat Completions gateways ignore aspect ratio/size unless the correct dialect is selected: OpenRouter documents a top-level `image_config`, while new-api relays (most gateways) silently ignore it and only forward `extra_body.google.image_config`. Without the right dialect the gateway quietly returns its default format — URIS warns about dropped parameters and, after the image arrives, verifies that the actual pixels match the request.
 - Stage 1 via a Connection Manager profile is the most robust option behind proxies and non-CORS endpoints; custom endpoints depend on the provider allowing direct browser calls.
 
 ---
@@ -83,7 +83,7 @@ A connection states its contract explicitly (`src/image-connection-schema.js`): 
 
 #### Storage
 
-Image metadata, templates, parameter presets, references and the studio config live in server-side user files (`uris_gallery.json`, `uris_studio.json`, …) behind the shared file-store machinery (`src/file-store.js`) — they used to bloat `settings.json` by megabytes, and ST re-uploads the whole settings object on every unrelated change. Actual image files live in SillyTavern's native gallery. Browser-local keys (API keys, legacy stores) stay in localforage and never enter exports. First load migrates legacy `extensionSettings` copies into the server files.
+Image metadata, templates, parameter presets, references and the studio config live in server-side user files (`uris_gallery.json`, `uris_studio.json`, …) behind the shared file-store machinery (`src/file-store.js`), which keeps `settings.json` small — ST re-uploads the whole settings object on every unrelated change. Actual image files live in SillyTavern's native gallery. Browser-local keys (API keys, browser-side stores) stay in localforage and never enter exports. On first load the studio copies any browser-side data into the server files.
 
 #### Inline engine
 

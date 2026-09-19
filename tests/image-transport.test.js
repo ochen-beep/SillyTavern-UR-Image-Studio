@@ -316,7 +316,7 @@ test('fetchImageRoute does not proxy a deliberate abort', async () => {
 // JSON-eligible, `browserDeliveryRoute` sets `transport.initialDelivery =
 // 'proxy'`. The paid POST must go through /proxy/ on the FIRST attempt with
 // no direct try - this is the safe path for providers that send no CORS
-// headers at all (CloseAI etc.), because the browser preflight would kill
+// headers at all (providers without CORS headers etc.), because the browser preflight would kill
 // the direct POST before it ever reaches the provider, and the resulting
 // `IMAGE_DELIVERY_AMBIGUOUS` would otherwise block the only working path.
 
@@ -327,7 +327,7 @@ test('fetchImageRoute dispatches through the proxy immediately when initialDeliv
         return { ok: true, status: 200, json: async () => ({ data: [{ b64_json: 'aGk=' }] }) };
     });
     try {
-        const response = await fetchImageRoute('https://closeai.example/v1/images/generations', {
+        const response = await fetchImageRoute('https://no-cors.example/v1/images/generations', {
             method: 'POST', headers: { Authorization: 'Bearer key' }, body: '{"prompt":"cat"}',
         }, route({ initialDelivery: 'proxy' }));
         assert.equal(response.status, 200);
@@ -338,7 +338,7 @@ test('fetchImageRoute dispatches through the proxy immediately when initialDeliv
         assert.ok(calls.every(call => call.viaProxy === true), 'no call may go direct to the provider origin');
         const postCall = calls.find(call => call.options?.method === 'POST');
         assert.ok(postCall, 'the paid POST must be dispatched through the proxy');
-        assert.ok(String(postCall.url).includes('closeai.example'), 'POST must target the provider via the proxy');
+        assert.ok(String(postCall.url).includes('no-cors.example'), 'POST must target the provider via the proxy');
     } finally { restore(); }
 });
 
@@ -351,7 +351,7 @@ test('fetchImageRoute proxy-first never falls back to direct on proxy failure (n
     });
     try {
         await assert.rejects(
-            () => fetchImageRoute('https://closeai.example/v1/images/generations', { method: 'POST' }, route({ initialDelivery: 'proxy' })),
+            () => fetchImageRoute('https://no-cors.example/v1/images/generations', { method: 'POST' }, route({ initialDelivery: 'proxy' })),
             // The proxy failure propagates as-is; no MULTIPART_CORS_REQUIRED and
             // no IMAGE_DELIVERY_AMBIGUOUS (those are direct-path codes). The
             // point is: one attempt only.
@@ -377,7 +377,7 @@ test('fetchImageRoute allows proxy-first on a catalog-style proxyEligible:false 
     // catalog.js marks every route proxyEligible:false to block the automatic
     // direct->proxy fallback. Proxy-first is an explicit user choice for the
     // first attempt and must NOT be gated by that flag - otherwise providers
-    // that send no CORS headers (CloseAI) stay unreachable even with the
+    // that send no CORS headers (providers without CORS headers) stay unreachable even with the
     // useCorsProxy checkbox ticked.
     const calls = [];
     const restore = mockFetch((url, options, viaProxy) => {
@@ -385,7 +385,7 @@ test('fetchImageRoute allows proxy-first on a catalog-style proxyEligible:false 
         return { ok: true, status: 200, json: async () => ({ data: [{ b64_json: 'aGk=' }] }) };
     });
     try {
-        const response = await fetchImageRoute('https://closeai.example/v1/images/generations', {
+        const response = await fetchImageRoute('https://no-cors.example/v1/images/generations', {
             method: 'POST', body: '{"prompt":"cat"}',
         }, route({ proxyEligible: false, initialDelivery: 'proxy' }));
         assert.equal(response.status, 200);

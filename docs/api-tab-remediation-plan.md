@@ -23,14 +23,14 @@ SillyTavern ветки `release` (`src/endpoints/images.js`, `src/constants.js`,
 
 | Файл | Изменение |
 |---|---|
-| `src/providers/image-openai.js` | `response_format` больше не отправляется никуда — именно он вызывал `Unknown parameter: 'response_format'` на LinkAPI. Диалект `/images/edits` берётся из `connection.editProtocol`, а не из регекса по имени модели. |
+| `src/providers/image-openai.js` | `response_format` больше не отправляется никуда — именно он вызывал `Unknown parameter: 'response_format'` на строгих шлюзах. Диалект `/images/edits` берётся из `connection.editProtocol`, а не из регекса по имени модели. |
 | `src/image-connection-schema.js` | `editProtocol` валидируется и нормализуется, дефолт — консервативный `multipart`. |
 | `src/capability-observer.js` | Классификация операции идёт по тому же полю подключения, поэтому диагностика совпадает с тем, что реально уходит в сеть. |
 | `src/references.js` | Удалённые референсы один раз локализуются через `/api/images/upload`. Закрывает CORS-отказы до платного POST. |
 | `src/native-image-storage.js`, `src/image-transport.js` | URL-результат материализуется через `autoFetch`, а не прямым браузерным `fetch`. Закрывает вторую границу CORS — ту, где картинка терялась уже после оплаты. |
 
 Ключевое различие, зафиксированное в коде: **ID модели не является описателем
-протокола.** `gpt-image-2` на CloseAI хочет JSON, на LinkAPI — multipart.
+протокола.** одни шлюзы для `gpt-image-2` хотят JSON, другие — multipart.
 При этом `input_fidelity` — законный параметр GPT Image на `/images/edits`,
 поэтому регекс по имени модели для выбора *параметра* остаётся уместным; для
 выбора *протокола* — нет.

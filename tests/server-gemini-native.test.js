@@ -86,12 +86,12 @@ describe('Gemini Native probe', () => {
   it('uses Bearer auth and parses OpenAI-format Gemini catalogs on proxy endpoints', async () => {
     const fake = createFakeSafeFetch([{ status: 200, body: openAiGeminiModelsFixture }]);
     const result = await geminiNativeAdapter.probe(makeContext(fake, {
-      endpoint: 'https://linkapi.ai/v1',
+      endpoint: 'https://relay.example/v1',
     }));
 
     assert.equal(result.status, 'ok');
     assert.equal(fake.calls.length, 1);
-    assert.equal(fake.calls[0].url, 'https://linkapi.ai/v1/models');
+    assert.equal(fake.calls[0].url, 'https://relay.example/v1/models');
     assert.equal(fake.calls[0].headers.authorization, 'Bearer gemini-test-secret');
     assert.deepEqual(result.routes.map(route => route.modelId), [
       'gemini-2.5-flash-image',
@@ -101,44 +101,44 @@ describe('Gemini Native probe', () => {
     assert.ok(result.routes.every(route => route.remoteMetadata.authStrategy === 'bearer'));
   });
 
-  it('uses query key only on api.linkapi.ai after Bearer and header authentication rejection', async () => {
+  it('uses query key only on api.relay.example after Bearer and header authentication rejection', async () => {
     const fake = createFakeSafeFetch([
       { status: 401, body: {} },
       { status: 401, body: {} },
       { status: 200, body: geminiModelsFixture },
     ]);
     const result = await geminiNativeAdapter.probe(makeContext(fake, {
-      endpoint: 'https://api.linkapi.ai/v1beta',
+      endpoint: 'https://api.relay.example/v1beta',
     }));
 
     assert.equal(result.status, 'ok');
     assert.equal(fake.calls.length, 3);
-    assert.equal(fake.calls[0].url, 'https://api.linkapi.ai/v1beta/models');
+    assert.equal(fake.calls[0].url, 'https://api.relay.example/v1beta/models');
     assert.equal(fake.calls[0].headers.authorization, 'Bearer gemini-test-secret');
     assert.equal(fake.calls[1].headers['x-goog-api-key'], 'gemini-test-secret');
-    assert.equal(fake.calls[2].url, 'https://api.linkapi.ai/v1beta/models?key=gemini-test-secret');
+    assert.equal(fake.calls[2].url, 'https://api.relay.example/v1beta/models?key=gemini-test-secret');
     assert.equal('x-goog-api-key' in fake.calls[2].headers, false);
     assert.equal('authorization' in fake.calls[2].headers, false);
     assert.ok(result.routes.every(route => route.remoteMetadata.authStrategy === 'query-key'));
   });
 
-  it('tries each configured auth strategy on LinkAPI non-auth failures without leaking credentials cross-host', async () => {
+  it('tries each configured auth strategy on Relay non-auth failures without leaking credentials cross-host', async () => {
     const fake = createFakeSafeFetch([
       { status: 404, body: {} }, { status: 404, body: {} }, { status: 404, body: {} },
       { status: 404, body: {} }, { status: 404, body: {} }, { status: 404, body: {} },
     ]);
     const result = await geminiNativeAdapter.probe(makeContext(fake, {
-      endpoint: 'https://api.linkapi.ai',
+      endpoint: 'https://api.relay.example',
     }));
 
     assert.equal(result.status, 'unavailable');
     assert.equal(fake.calls.length, 6);
     const queryCalls = fake.calls.filter(call => new URL(call.url).searchParams.has('key'));
     assert.equal(queryCalls.length, 2);
-    assert.ok(queryCalls.every(call => new URL(call.url).hostname === 'api.linkapi.ai'));
+    assert.ok(queryCalls.every(call => new URL(call.url).hostname === 'api.relay.example'));
   });
 
-  it('returns unauthorized when all LinkAPI auth strategies fail or reject', async () => {
+  it('returns unauthorized when all Relay auth strategies fail or reject', async () => {
     const fake = createFakeSafeFetch([
       { status: 401, body: {} },
       new ServerImageError({ code: 'OUTBOUND_REQUEST_FAILED', message: 'failed' }),
@@ -149,7 +149,7 @@ describe('Gemini Native probe', () => {
     ]);
 
     const result = await geminiNativeAdapter.probe(makeContext(fake, {
-      endpoint: 'https://api.linkapi.ai/v1beta',
+      endpoint: 'https://api.relay.example/v1beta',
     }));
 
     assert.deepEqual(result, {
@@ -176,12 +176,12 @@ describe('Gemini Native probe', () => {
     assert.ok(fake.calls.every(call => !new URL(call.url).searchParams.has('key')));
   });
 
-  it('requires the exact LinkAPI host rather than a suffix lookalike', async () => {
+  it('requires the exact Relay host rather than a suffix lookalike', async () => {
     const fake = createFakeSafeFetch([
       { status: 401, body: {} },
       { status: 401, body: {} },
     ]);
-    await geminiNativeAdapter.probe(makeContext(fake, { endpoint: 'https://api.linkapi.ai.attacker.example' }));
+    await geminiNativeAdapter.probe(makeContext(fake, { endpoint: 'https://api.relay.example.attacker.example' }));
     assert.ok(fake.calls.every(call => !new URL(call.url).searchParams.has('key')));
   });
 
@@ -327,7 +327,7 @@ describe('Gemini Native generation', () => {
         ...route.remoteMetadata,
         authStrategy: 'bearer',
         geminiApiVersion: 'v1',
-        versionedBase: 'https://linkapi.ai/v1',
+        versionedBase: 'https://relay.example/v1',
       },
     };
     await geminiNativeAdapter.generate(makeContext(fake), bearerRoute, { ...request, references: [] });
@@ -371,7 +371,7 @@ describe('Gemini Native generation', () => {
     assert.equal(JSON.stringify(JSON.parse(call.body)).includes('quality'), false);
   });
 
-  it('uses persisted query auth only for a LinkAPI route and omits invalid config', async () => {
+  it('uses persisted query auth only for a Relay route and omits invalid config', async () => {
     const fake = createFakeSafeFetch([{ status: 200, body: {
       candidates: [{ content: { parts: [{ inline_data: { mime_type: 'image/webp', data: 'eA==' } }] } }],
     } }]);
@@ -381,7 +381,7 @@ describe('Gemini Native generation', () => {
       remoteMetadata: {
         geminiApiVersion: 'v1',
         authStrategy: 'query-key',
-        versionedBase: 'https://api.linkapi.ai/v1',
+        versionedBase: 'https://api.relay.example/v1',
       },
     };
 
@@ -390,7 +390,7 @@ describe('Gemini Native generation', () => {
     });
 
     assert.deepEqual(result, { kind: 'base64', value: 'eA==', mimeType: 'image/webp', warnings: [] });
-    assert.equal(fake.calls[0].url, 'https://api.linkapi.ai/v1/models/gemini-2.5-flash-image:generateContent?key=gemini-test-secret');
+    assert.equal(fake.calls[0].url, 'https://api.relay.example/v1/models/gemini-2.5-flash-image:generateContent?key=gemini-test-secret');
     assert.equal('x-goog-api-key' in fake.calls[0].headers, false);
     assert.deepEqual(JSON.parse(fake.calls[0].body).generationConfig, {
       responseModalities: ['TEXT', 'IMAGE'],

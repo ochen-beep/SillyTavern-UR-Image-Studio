@@ -47,17 +47,22 @@ function zVar(name) {
 }
 
 test('слои URIS: строгий порядок, ниже хрома и легаси-диалогов SillyTavern', () => {
-    // Договорённость см. :root в style.css. Ориентиры ST: nav-drawer 3000,
-    // топ-бар 3005, легаси-диалоги #dialogue_popup 9999 (<dialog>-попапы —
-    // top layer, выше любого z-index, их не учитываем).
+    // Договорённость см. :root в style.css. Ориентиры ST (public/style.css):
+    // дроверы #left-nav-panel/.fillRight 3000, #nav-toggle/#bg_menu 3001,
+    // топ-бар и шелл настроек 3005, легаси-диалоги #dialogue_popup 9999
+    // (<dialog>-попапы — top layer, выше любого z-index, их не учитываем).
+    // Чужие панели и FAB (Glosses / DS Comments) живут на 2998–2999.
     const fab = zVar('fab');
     const win = zVar('window');
     const ghost = zVar('ghost');
     const modal = zVar('modal');
     const lightbox = zVar('lightbox');
     const modalTop = zVar('modal-top');
+    assert.ok(win < ghost, 'drag-ghost выше окна — иначе клон не виден при перетаскивании');
+    assert.ok(ghost < fab, 'FAB остаётся верхним из «постоянных» слоёв URIS');
     assert.ok(win < fab, 'FAB над окном (как в DSC): остаётся тогглом поверх открытого окна');
-    assert.ok(fab < ghost, 'drag-ghost виден и над FAB');
+    assert.ok(fab > 2998, 'FAB ВЫШЕ панелей чужих расширений (2998 у Glosses/DS Comments) — иначе кнопка исчезает, когда панель накрывает её точку');
+    assert.ok(fab < 3000, 'FAB НИЖЕ nav-drawer ST (3000): кнопка не может перекрыть настройки таверны');
     assert.ok(ghost < modal, 'модальные оверлеи (пикеры) выше ghost');
     assert.ok(modal < lightbox, 'лайтбокс выше модалок (строго, не полагаемся на DOM-порядок)');
     assert.ok(lightbox < modalTop, 'кроп/копи-меню должны открываться поверх лайтбокса');

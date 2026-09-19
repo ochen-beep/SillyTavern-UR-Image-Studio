@@ -524,7 +524,7 @@ In a supported SillyTavern checkout:
 3. restart SillyTavern;
 4. verify `/api/plugins/ur-image-studio/v1/status` while logged in;
 5. create a keyless invalid test connection and verify safe error;
-6. with authorized API keys, verify LinkAPI GPT and Gemini merged discovery;
+6. with authorized API keys, verify relay gateway GPT and Gemini merged discovery;
 7. verify OpenRouter image catalog;
 8. verify one generation per family;
 9. interrupt browser response after server result and verify recovery;

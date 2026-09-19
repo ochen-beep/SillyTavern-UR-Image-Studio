@@ -3,6 +3,7 @@ import { trace } from '../core.js';
 import { summarizeReference } from '../references.js';
 import { endpointBase, imageResultFromValue, providerError, readJsonResponse, referencesFor, requireInvocation, assertEncodedReferenceCount, diagnosticRequestOptions } from './image-base.js';
 import { promptAspectConflicts } from '../aspect-ratio.js';
+import { unsupportedImageSizeReason } from '../image-model-capabilities.js';
 
 function chatUrl(endpoint) { return `${endpointBase(endpoint)}/chat/completions`; }
 
@@ -107,7 +108,7 @@ function parse(payload) {
 // Chat Completions has no standard image-geometry members, so the aspect ratio
 // either rides a gateway-specific dialect or it does not travel at all. Prompt
 // text is deliberately NOT used as a fallback channel: it was tested live
-// against a new-api gateway (ddtnew, 2026-09-16) and the model ignored the
+// against a new-api relay gateway (2026-09-16) and the model ignored the
 // ratio sentence in every placement, returning its default canvas. Relying on
 // it would recreate the silent failure this warnings channel exists to expose.
 // When no dialect is selected the user gets a warning pointing at the
@@ -159,7 +160,7 @@ function mergeExtraBody(body, extraBody) {
  * one, the "dropped" warning below already covers the outcome.
  * @returns {Array<{feature: string, details: string}>}
  */
-function paramWarnings({ mode, aspectRatio, imageSize, quality, prompt }) {
+function paramWarnings({ mode, aspectRatio, imageSize, quality, prompt, unsupportedSize }) {
   const warnings = [];
   if (!mode) {
     if (aspectRatio) {
@@ -174,6 +175,12 @@ function paramWarnings({ mode, aspectRatio, imageSize, quality, prompt }) {
         details: `размер ${imageSize} не передаётся: у Chat Completions без типа шлюза нет параметра размера.`,
       });
     }
+  }
+  // Model-level rejection beats dialect-level silence: an unsupported tier can
+  // fail the whole request (taking the aspect ratio with it), so it is dropped
+  // even when a dialect channel is active.
+  if (unsupportedSize) {
+    warnings.push({ feature: 'Размер', details: `размер ${unsupportedSize.size} не поддерживается: ${unsupportedSize.reason} — параметр опущен.` });
   }
   if (quality && quality !== 'auto') {
     warnings.push({ feature: 'Quality', details: `значение «${quality}» не передаётся: у контракта Chat Completions нет параметра quality.` });
@@ -209,9 +216,14 @@ export async function generateChatCompletionImage(input) {
   const mode = route?.capabilities?.chatCompletionsImageConfig === 'openrouter' || route?.capabilities?.chatCompletionsImageConfig === 'new-api'
     ? route.capabilities.chatCompletionsImageConfig
     : null;
+  const requestedSize = typeof request?.imageSize === 'string' && request.imageSize.trim() ? request.imageSize.trim() : null;
+  const sizeReason = requestedSize ? unsupportedImageSizeReason(route.modelId, requestedSize) : null;
   const geometry = Object.fromEntries([
     ['aspect_ratio', typeof request?.aspectRatio === 'string' && request.aspectRatio.trim() ? request.aspectRatio.trim() : null],
-    ['image_size', typeof request?.imageSize === 'string' && request.imageSize.trim() ? request.imageSize.trim() : null],
+    // A tier the model does not own is dropped before it reaches the wire: the
+    // upstream may reject the whole request over it, which would cost the user
+    // the aspect ratio too (new-api clears imageSize for exactly this reason).
+    ['image_size', sizeReason ? null : requestedSize],
   ].filter(([, value]) => value));
   // OpenRouter returns image output on chat/completions only when the request
   // explicitly opts in via `modalities` — without it the model answers
@@ -252,9 +264,10 @@ export async function generateChatCompletionImage(input) {
   const warnings = paramWarnings({
     mode,
     aspectRatio: typeof request?.aspectRatio === 'string' && request.aspectRatio.trim() ? request.aspectRatio.trim() : null,
-    imageSize: typeof request?.imageSize === 'string' && request.imageSize.trim() ? request.imageSize.trim() : null,
+    imageSize: requestedSize,
     quality: typeof request?.quality === 'string' && request.quality.trim() ? request.quality.trim() : null,
     prompt,
+    ...(sizeReason ? { unsupportedSize: { size: requestedSize, reason: sizeReason } } : {}),
   });
   // Same shape as the openai-images payload log: per-ref metadata only
   // (name/MIME/KB), never the dataUrl itself.

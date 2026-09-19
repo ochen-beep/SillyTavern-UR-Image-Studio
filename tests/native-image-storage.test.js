@@ -123,7 +123,18 @@ test('materializing an external URL applies timeoutMs to download and native upl
         globalThis.setTimeout = originalSetTimeout;
     }
 
-    assert.deepEqual(timeouts, [4321, 4321]);
+    // Бюджет общий и он дедлайнный: fetchWithTimeout (core.js) считает deadlineAt
+    // один раз и планирует таймер на ОСТАТОК (deadlineAt - Date.now()), поэтому
+    // вторая нога получает 4321 или 4321 − 1 мс — как повезёт с тиком часов между
+    // расчётом дедлайна и setTimeout. Точное равенство [4321, 4321] делало тест
+    // флапающим (≈1 прогон из 5), при этом поведение кода корректно.
+    assert.equal(timeouts.length, 2, 'ожидались ровно два таймера: скачивание и загрузка на сервер');
+    for (const delay of timeouts) {
+        assert.ok(
+            delay <= 4321 && delay >= 4321 * 0.9,
+            `таймаут ${delay} мс должен быть остатком бюджета 4321 мс — иначе нога ушла не с тем таймаутом`,
+        );
+    }
 });
 
 test('materializes a direct data URL result through the same native upload boundary', async () => {

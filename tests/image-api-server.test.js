@@ -128,7 +128,18 @@ test('browser generation passes the resolved connection timeout to result materi
         globalThis.setTimeout = originalSetTimeout;
     }
 
-    assert.deepEqual(timeouts, [16789, 16789]);
+    // Таймаут дедлайнный: fetchWithTimeout (core.js) планирует таймер на остаток
+    // бюджета (deadlineAt - Date.now()), поэтому ноги получают 16789 или на
+    // несколько миллисекунд меньше — тем меньше, чем сильнее загружена машина
+    // (полный набор идёт параллельными процессами). Точное равенство делало тест
+    // флапающим; проверяем, что каждая нога ушла именно с этим бюджетом.
+    assert.equal(timeouts.length, 2, 'ожидались ровно два таймера: скачивание и загрузка на сервер');
+    for (const delay of timeouts) {
+        assert.ok(
+            delay <= 16789 && delay >= 16789 * 0.9,
+            `таймаут ${delay} мс должен быть остатком бюджета 16789 мс — иначе нога ушла не с тем таймаутом`,
+        );
+    }
 });
 
 test('resultReceived remains pending when native upload fails without provider redispatch', async () => {
@@ -229,7 +240,7 @@ test('browser dispatch preserves a captured route through normalization and does
 // When the connection card has `useCorsProxy: true` and the route is
 // JSON-eligible, the paid POST must be dispatched through the ST /proxy/ on
 // the first attempt - no direct try. This is the safe path for providers
-// that send no CORS headers (CloseAI): the browser preflight would kill the
+// that send no CORS headers (providers without CORS headers): the browser preflight would kill the
 // direct POST before it reaches the provider, and IMAGE_DELIVERY_AMBIGUOUS
 // would otherwise block the only working route.
 
@@ -257,7 +268,7 @@ test('browser dispatch routes a JSON generation through the ST proxy when useCor
         transport: { bodyKind: 'json', proxyEligible: true, directCors: 'preferred' },
     };
     await createConnection({
-        id: 'browser-proxy', kind: 'image', name: 'Proxy', endpoint: 'https://closeai.example/v1',
+        id: 'browser-proxy', kind: 'image', name: 'Proxy', endpoint: 'https://no-cors.example/v1',
         useCorsProxy: true, selectedRoute: proxyRoute,
     });
     await setConnectionApiKey('browser-proxy', 'proxy-key');
