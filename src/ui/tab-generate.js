@@ -1086,7 +1086,6 @@ export async function submitCurrentGeneration(root, deps = {}) {
             toastr?.warning('Промпт пуст — постройте или напишите промпт');
             return;
         }
-        const wasBusy = state.queueRunning || state.queue.length > 0;
         const item = await createQueueItem({
             chatId: input.chatId,
             msgId: input.msgId,
@@ -1095,6 +1094,9 @@ export async function submitCurrentGeneration(root, deps = {}) {
             templateId: input.templateId,
             submission: input.submission,
         });
+        // Read after the await so the busy check reflects the queue state at
+        // enqueue time, not before the submission snapshot was resolved.
+        const wasBusy = state.queueRunning || state.queue.length > 0;
         const queued = enqueueFn(item);
         if (_generateRoot) updateQueueStatus(_generateRoot);
         toastr?.info(wasBusy ? 'Добавлено в очередь' : 'Генерация началась');
@@ -1110,8 +1112,9 @@ export async function submitCurrentGeneration(root, deps = {}) {
             if (getActiveTab() === 'gallery') refreshActive();
         }).catch(e => {
             if (e?.name === 'AbortError') {
-                // A whole-queue stop rejects every waiting item at once — one
-                // quiet path instead of N «отменена» toasts.
+                // Items not yet started when the queue stops reject as
+                // 'Queue stopped' (silent here; see processQueue's finally);
+                // the in-flight item rejects as 'Aborted by user' and toasts once.
                 if (e?.message !== 'Queue stopped') toastr?.info('Генерация отменена');
             } else {
                 error('Generate action:', e?.message || e);

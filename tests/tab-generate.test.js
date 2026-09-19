@@ -688,6 +688,111 @@ test('submitCurrentGeneration warns instead of enqueuing an empty prompt', async
     assert.match(warnings[0], /Промпт пуст/);
 });
 
+test('submitCurrentGeneration stays silent for items rejected by a whole-queue stop', async () => {
+    const originalCtx = globalThis.SillyTavern.getContext;
+    const infos = [];
+    const errors = [];
+    globalThis.toastr = { info: m => infos.push(m), success: () => {}, error: m => errors.push(m), warning: () => {} };
+    globalThis.SillyTavern.getContext = () => ({
+        chatId: 'c1',
+        chat: [{ mes: 'hello' }],
+        chatMetadata: {},
+        extensionSettings: {},
+        saveSettingsDebounced: () => {},
+        getRequestHeaders: () => ({}),
+    });
+    state.currentMsgId = 0;
+    state.queue = [];
+    const promptEl = { value: 'draw a cat' };
+    const fakeRoot = { querySelector: sel => (sel === '#urisPrompt' ? promptEl : null) };
+    let rejectQueued;
+    try {
+        await tabGenerate.submitCurrentGeneration(fakeRoot, {
+            enqueue: () => new Promise((_, reject) => { rejectQueued = reject; }),
+        });
+    } finally {
+        globalThis.SillyTavern.getContext = originalCtx;
+    }
+    // toastr stays installed until the deferred continuation has run.
+    const infosBefore = infos.length;
+    rejectQueued(new DOMException('Queue stopped', 'AbortError'));
+    await new Promise(r => setImmediate(r));
+    globalThis.toastr = undefined;
+    assert.equal(infos.length, infosBefore, 'no cancel toast for queue-stop rejections');
+    assert.equal(errors.length, 0);
+});
+
+test('submitCurrentGeneration toasts once for an in-flight item aborted by the user', async () => {
+    const originalCtx = globalThis.SillyTavern.getContext;
+    const infos = [];
+    const errors = [];
+    globalThis.toastr = { info: m => infos.push(m), success: () => {}, error: m => errors.push(m), warning: () => {} };
+    globalThis.SillyTavern.getContext = () => ({
+        chatId: 'c1',
+        chat: [{ mes: 'hello' }],
+        chatMetadata: {},
+        extensionSettings: {},
+        saveSettingsDebounced: () => {},
+        getRequestHeaders: () => ({}),
+    });
+    state.currentMsgId = 0;
+    state.queue = [];
+    const promptEl = { value: 'draw a cat' };
+    const fakeRoot = { querySelector: sel => (sel === '#urisPrompt' ? promptEl : null) };
+    let rejectQueued;
+    try {
+        await tabGenerate.submitCurrentGeneration(fakeRoot, {
+            enqueue: () => new Promise((_, reject) => { rejectQueued = reject; }),
+        });
+    } finally {
+        globalThis.SillyTavern.getContext = originalCtx;
+    }
+    // toastr stays installed until the deferred continuation has run.
+    rejectQueued(new DOMException('Aborted by user', 'AbortError'));
+    await new Promise(r => setImmediate(r));
+    globalThis.toastr = undefined;
+    assert.equal(infos.filter(m => /Генерация отменена/.test(m)).length, 1, 'exactly one cancel toast');
+    assert.equal(errors.length, 0);
+});
+
+test('submitCurrentGeneration toasts success and provider warnings on resolve', async () => {
+    const originalCtx = globalThis.SillyTavern.getContext;
+    const successes = [];
+    const warnings = [];
+    const errors = [];
+    globalThis.toastr = {
+        info: () => {},
+        success: m => successes.push(m),
+        warning: m => warnings.push(m),
+        error: m => errors.push(m),
+    };
+    globalThis.SillyTavern.getContext = () => ({
+        chatId: 'c1',
+        chat: [{ mes: 'hello' }],
+        chatMetadata: {},
+        extensionSettings: {},
+        saveSettingsDebounced: () => {},
+        getRequestHeaders: () => ({}),
+    });
+    state.currentMsgId = 0;
+    state.queue = [];
+    const promptEl = { value: 'draw a cat' };
+    const fakeRoot = { querySelector: sel => (sel === '#urisPrompt' ? promptEl : null) };
+    try {
+        await tabGenerate.submitCurrentGeneration(fakeRoot, {
+            enqueue: () => Promise.resolve({ warnings: [{ feature: 'Стороны', details: 'модель вернула другое' }] }),
+        });
+    } finally {
+        globalThis.SillyTavern.getContext = originalCtx;
+    }
+    // toastr stays installed until the deferred continuation has run.
+    await new Promise(r => setImmediate(r));
+    globalThis.toastr = undefined;
+    assert.equal(successes.length, 1, 'success toast fired');
+    assert.equal(warnings.filter(m => /Стороны/.test(m)).length, 1, 'provider warning surfaced');
+    assert.equal(errors.length, 0);
+});
+
 // ── Message-scoped reference corrections ──
 
 test('updateReferenceCorrections include removes exclusion and increments revision', () => {
