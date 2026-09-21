@@ -5,7 +5,6 @@ import assert from 'node:assert/strict';
 import { invokeImageProvider } from '../src/image-provider-registry.js';
 import { CONTRACTS, normalizeRouteContract } from '../src/image-connection-schema.js';
 import { resolveDispatchPlan } from '../src/dispatch-plan.js';
-import { discoverCatalog } from '../src/catalog.js';
 import { probeConnection } from '../src/connect-probe.js';
 import { classifyUrl, scrubUrl } from '../src/netdump.js';
 import { validatePollinationsToken } from '../src/providers/image-pollinations.js';
@@ -97,29 +96,6 @@ test('Pollinations contract normalizes and dispatch plan selects it by endpoint'
     const plan = resolveDispatchPlan({ endpoint: 'https://gen.pollinations.ai', model: { id: 'flux' } });
     assert.equal(plan.dialect, CONTRACTS.POLLINATIONS_IMAGES);
     assert.equal(plan.route.capabilities.references, 'unsupported');
-});
-
-test('Pollinations catalog reads a top-level array and keeps image models only', async () => {
-    const requests = [];
-    const result = await discoverCatalog({
-        endpoint: 'https://gen.pollinations.ai',
-        contract: CONTRACTS.POLLINATIONS_IMAGES,
-        fetch: async (url, options) => {
-            requests.push({ url: String(url), options });
-            return response([
-                { name: 'flux', category: 'image', output_modalities: ['image'], capabilities: ['quality', 'resolution'], resolutions: ['1K', '2K'], quality: ['auto', 'high'] },
-                { name: 'text-model', category: 'text', output_modalities: ['text'] },
-            ]);
-        },
-        proxiedFetch: async () => { throw new Error('proxy must not be called'); },
-    });
-
-    assert.deepEqual(requests.map(item => item.url), ['https://gen.pollinations.ai/image/models']);
-    assert.equal(requests[0].options.headers.Authorization, undefined);
-    assert.deepEqual(result.models.map(model => model.modelId), ['flux']);
-    assert.equal(result.routes[0].generationContract, CONTRACTS.POLLINATIONS_IMAGES);
-    assert.equal(result.routes[0].remoteMetadata.generationUnverified, true);
-    assert.deepEqual(result.routes[0].capabilities.imageSizes, ['1k', '2k']);
 });
 
 test('Pollinations probe uses the public catalog without a generation request', async () => {

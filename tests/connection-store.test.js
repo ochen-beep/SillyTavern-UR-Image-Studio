@@ -76,14 +76,13 @@ test('does not persist nested Google API key header aliases', async () => {
 
 test('persists catalog-discovered connection metadata without header-style API secrets', async () => {
     reset();
-    const catalog = await import('../src/catalog.js');
-    const discovered = await catalog.discoverCatalog({
-        endpoint: 'https://api.example.test',
-        contract: 'openai-images',
-        fetch: async () => ({ ok: true, async json() {
-            return { data: [{ id: 'gpt-image-1', 'x-api-key': 'leak', X_Api_Token: 'leak', apiKeyInstructions: 'safe prose' }] };
-        } }),
-    });
+    // Catalog-shaped payload as it could arrive from a discovered catalog,
+    // leaky header-style keys included: the store must strip them on persist.
+    const discovered = {
+        fetchedAt: '2026-09-22T00:00:00.000Z',
+        models: [{ modelId: 'gpt-image-1', label: 'gpt-image-1', 'x-api-key': 'leak', X_Api_Token: 'leak', apiKeyInstructions: 'safe prose' }],
+        routes: [{ modelId: 'gpt-image-1', label: 'gpt-image-1', 'x-api-key': 'leak', X_Api_Token: 'leak' }],
+    };
 
     const created = await store.createConnection({
         id: 'primary', catalogs: { latest: discovered }, selectedRoute: discovered.routes[0],

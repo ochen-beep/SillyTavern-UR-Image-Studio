@@ -7,154 +7,23 @@ import { __resetZstdProbe } from '../src/core.js';
 
 const catalog = await import('../src/catalog.js');
 
-test('generic discovery normalizes once and retains every catalog model', async () => {
-    const requests = [];
-    const result = await catalog.discoverCatalog({
-        endpoint: 'https://api.example.test/custom/',
-        apiKey: 'browser-key',
-        contract: 'openai-images',
-        fetch: async (url, options) => {
-            requests.push([String(url), options]);
-            return {
-                ok: true,
-                async json() {
-                    return { data: [
-                        { id: 'gpt-image-1' },
-                        { id: 'text-only-model' },
-                    ] };
-                },
-            };
-        },
-    });
+// catalogRequest(url, apiKey, fetcher, proxiedFetcher, headers, timeoutMs, signal, mode)
+// is the live catalog machinery — connect-probe.js layers auth-strategy and
+// body-shape detection on top of it. These tests exercise it directly.
+const MODELS_URL = 'https://api.example.test/v1/models';
+const PROXY_NOT_EXPECTED = async () => { throw new TypeError('proxy must not be called'); };
 
-    assert.equal(requests.length, 1);
-    assert.equal(requests[0][0], 'https://api.example.test/custom/v1/models');
-    assert.equal(requests[0][1].method, 'GET');
-    assert.deepEqual(result.models.map(model => model.modelId), ['gpt-image-1', 'text-only-model']);
-    assert.equal(result.models[0].likelyImage, true);
-    assert.equal(result.models[1].likelyImage, false);
-    assert.deepEqual(result.routes.map(route => route.capabilities), [
-        { generate: 'unknown', references: 'unknown', edit: 'unknown' },
-        { generate: 'unknown', references: 'unknown', edit: 'unknown' },
-    ]);
-});
+function catalogFetch(overrides = {}) {
+    const {
+        url = MODELS_URL, apiKey = '', mode = 'auto', timeoutMs = 120000,
+        signal, fetch, proxiedFetch = PROXY_NOT_EXPECTED,
+    } = overrides;
+    return catalog.catalogRequest(url, apiKey, fetch, proxiedFetch, {}, timeoutMs, signal, mode);
+}
 
-test('generic discovery retains safe provider descriptor metadata on catalog models', async () => {
-    const result = await catalog.discoverCatalog({
-        endpoint: 'https://api.example.test',
-        apiKey: 'browser-key',
-        contract: 'openai-images',
-        fetch: async () => ({
-            ok: true,
-            async json() {
-                return { data: [{
-                    id: 'gpt-image-1',
-                    object: 'model',
-                    owned_by: 'provider',
-                    created: 1_700_000_000,
-                    capabilities: { generate: true },
-                    api_key: 'must-not-persist',
-                }] };
-            },
-        }),
-    });
-
-    assert.deepEqual(result.models, [{
-        id: 'gpt-image-1',
-        object: 'model',
-        owned_by: 'provider',
-        created: 1_700_000_000,
-        capabilities: { generate: true },
-        modelId: 'gpt-image-1',
-        label: 'gpt-image-1',
-        likelyImage: true,
-    }]);
-});
-
-test('catalog discovery removes header-style secret aliases before descriptors become routes', async () => {
-    const result = await catalog.discoverCatalog({
-        endpoint: 'https://api.example.test',
-        contract: 'openai-images',
-        fetch: async () => ({
-            ok: true,
-            async json() {
-                return { data: [{
-                    id: 'gpt-image-1',
-                    'x-api-key': 'leak',
-                    X_API_TOKEN: 'leak',
-                    apiKeyInstructions: 'safe prose',
-                }] };
-            },
-        }),
-    });
-
-    assert.equal(result.models[0]['x-api-key'], undefined);
-    assert.equal(result.models[0].X_API_TOKEN, undefined);
-    assert.equal(result.models[0].apiKeyInstructions, 'safe prose');
-    assert.equal(result.routes[0]['x-api-key'], undefined);
-    assert.equal(result.routes[0].X_API_TOKEN, undefined);
-});
-
-test('generic discovery never probes OpenRouter-only paths', async () => {
-    const requests = [];
-    await catalog.discoverCatalog({
-        endpoint: 'https://openrouter.ai/api/v1',
-        apiKey: 'browser-key',
-        contract: 'openai-images',
-        fetch: async (url) => {
-            requests.push(String(url));
-            return { ok: true, async json() { return { data: [] }; } };
-        },
-    });
-
-    assert.deepEqual(requests, ['https://openrouter.ai/api/v1/models']);
-    assert.equal(requests.some(url => /\/images\/(models|endpoints)/.test(url)), false);
-});
-
-test('OpenRouter discovery uses image paths only when its contract is explicit', async () => {
-    const requests = [];
-    const result = await catalog.discoverCatalog({
-        endpoint: 'https://openrouter.ai',
-        apiKey: 'browser-key',
-        contract: 'openrouter-images',
-        fetch: async (url) => {
-            requests.push(String(url));
-            return { ok: true, async json() { return { data: [{ id: 'acme/image-v1' }] }; } };
-        },
-    });
-
-    assert.deepEqual(requests, ['https://openrouter.ai/api/v1/images/models']);
-    assert.equal(result.routes[0].generationContract, 'openrouter-images');
-});
-
-test('Gemini-native listing uses its native model endpoint', async () => {
-    const requests = [];
-    const result = await catalog.discoverCatalog({
-        endpoint: 'https://generativelanguage.googleapis.com',
-        apiKey: 'browser-key',
-        contract: 'gemini-native',
-        fetch: async (url, options) => {
-            requests.push([String(url), options]);
-            return {
-                ok: true,
-                async json() {
-                    return { models: [{ name: 'models/gemini-2.5-flash-image', displayName: 'Flash Image' }] };
-                },
-            };
-        },
-    });
-
-    assert.equal(requests[0][0], 'https://generativelanguage.googleapis.com/v1/models');
-    assert.equal(requests[0][1].headers['x-goog-api-key'], 'browser-key');
-    assert.equal(result.routes[0].modelId, 'gemini-2.5-flash-image');
-    assert.equal(result.routes[0].likelyImage, true);
-});
-
-test('catalog discovery aborts a stalled injected fetch at timeout', async () => {
+test('catalog request aborts a stalled injected fetch at timeout', async () => {
     await assert.rejects(
-        catalog.discoverCatalog({
-            endpoint: 'https://api.example.test',
-            contract: 'openai-images',
+        catalogFetch({
             timeoutMs: 10,
             fetch: (_url, options) => new Promise((_resolve, reject) => {
                 options.signal.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError')), { once: true });
@@ -164,11 +33,9 @@ test('catalog discovery aborts a stalled injected fetch at timeout', async () =>
     );
 });
 
-test('catalog discovery propagates an external abort from an injected fetch', async () => {
+test('catalog request propagates an external abort from an injected fetch', async () => {
     const controller = new AbortController();
-    const pending = catalog.discoverCatalog({
-        endpoint: 'https://api.example.test',
-        contract: 'openai-images',
+    const pending = catalogFetch({
         signal: controller.signal,
         fetch: (_url, options) => new Promise((_resolve, reject) => {
             options.signal.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError')), { once: true });
@@ -179,13 +46,11 @@ test('catalog discovery propagates an external abort from an injected fetch', as
     await assert.rejects(pending, { name: 'AbortError' });
 });
 
-test('catalog discovery retries a direct network failure through the proxy with identical GET authentication', async () => {
+test('catalog request retries a direct network failure through the proxy with identical GET authentication', async () => {
     const direct = [];
     const proxied = [];
-    const result = await catalog.discoverCatalog({
-        endpoint: 'https://api.example.test/v1',
+    const payload = await catalogFetch({
         apiKey: 'browser-key',
-        contract: 'openai-images',
         fetch: async (url, options) => {
             direct.push([String(url), options]);
             throw new TypeError('Failed to fetch');
@@ -198,33 +63,30 @@ test('catalog discovery retries a direct network failure through the proxy with 
 
     assert.equal(direct.length, 1);
     assert.equal(proxied.length, 1);
-    assert.equal(proxied[0][0], 'https://api.example.test/v1/models');
+    assert.equal(proxied[0][0], MODELS_URL);
     assert.equal(proxied[0][1].method, 'GET');
     assert.equal(proxied[0][1].headers.Authorization, 'Bearer browser-key');
     assert.equal(proxied[0][2], 120000);
-    assert.deepEqual(result.models.map(model => model.modelId), ['gpt-image-1']);
+    assert.deepEqual(payload.data.map(model => model.id), ['gpt-image-1']);
 });
 
-test('catalog discovery does not proxy HTTP errors, timeouts, or caller aborts', async () => {
+test('catalog request does not proxy HTTP errors, timeouts, or caller aborts', async () => {
     let proxyCalls = 0;
     const proxiedFetch = async () => { proxyCalls++; };
     await assert.rejects(
-        catalog.discoverCatalog({
-            endpoint: 'https://api.example.test', contract: 'openai-images', proxiedFetch,
-            fetch: async () => ({ ok: false, status: 401 }),
-        }),
+        catalogFetch({ proxiedFetch, fetch: async () => ({ ok: false, status: 401 }) }),
         /HTTP 401/,
     );
     await assert.rejects(
-        catalog.discoverCatalog({
-            endpoint: 'https://api.example.test', contract: 'openai-images', timeoutMs: 10, proxiedFetch,
+        catalogFetch({
+            proxiedFetch, timeoutMs: 10,
             fetch: (_url, options) => new Promise((_resolve, reject) => options.signal.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError')), { once: true })),
         }),
         /Таймаут/,
     );
     const controller = new AbortController();
-    const pending = catalog.discoverCatalog({
-        endpoint: 'https://api.example.test', contract: 'openai-images', signal: controller.signal, proxiedFetch,
+    const pending = catalogFetch({
+        proxiedFetch, signal: controller.signal,
         fetch: (_url, options) => new Promise((_resolve, reject) => options.signal.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError')), { once: true })),
     });
     controller.abort();
@@ -232,15 +94,14 @@ test('catalog discovery does not proxy HTTP errors, timeouts, or caller aborts',
     assert.equal(proxyCalls, 0);
 });
 
-// ── corsMode: explicit opt-in/out paths ──
+// ── mode: explicit opt-in/out paths ──
 
-test('corsMode "direct" never falls back to the proxy on a CORS block, throwing a CATALOG_CORS_BLOCK error', async () => {
+test('mode "direct" never falls back to the proxy on a CORS block, throwing a CATALOG_CORS_BLOCK error', async () => {
     const proxyCalls = [];
     const proxiedFetch = async (...args) => { proxyCalls.push(args); return { ok: true, async json() { return { data: [] }; } }; };
     await assert.rejects(
-        catalog.discoverCatalog({
-            endpoint: 'https://api.example.test', contract: 'openai-images',
-            apiKey: 'k', corsMode: 'direct', proxiedFetch,
+        catalogFetch({
+            apiKey: 'k', mode: 'direct', proxiedFetch,
             fetch: async () => { throw new TypeError('Failed to fetch'); },
         }),
         err => err.code === 'CATALOG_CORS_BLOCK' && /CORS/.test(err.message),
@@ -248,12 +109,11 @@ test('corsMode "direct" never falls back to the proxy on a CORS block, throwing 
     assert.equal(proxyCalls.length, 0, 'direct mode must not call the proxy');
 });
 
-test('corsMode "proxy" skips the direct fetch entirely and reads through /proxy/ immediately', async () => {
+test('mode "proxy" skips the direct fetch entirely and reads through /proxy/ immediately', async () => {
     const directCalls = [];
     const proxyCalls = [];
-    await catalog.discoverCatalog({
-        endpoint: 'https://api.example.test/v1', contract: 'openai-images',
-        apiKey: 'k', corsMode: 'proxy',
+    await catalogFetch({
+        apiKey: 'k', mode: 'proxy',
         fetch: async (...args) => { directCalls.push(args); throw new TypeError('should not be reached'); },
         proxiedFetch: async (...args) => {
             proxyCalls.push(args);
@@ -262,22 +122,8 @@ test('corsMode "proxy" skips the direct fetch entirely and reads through /proxy/
     });
     assert.equal(directCalls.length, 0, 'proxy mode must bypass the direct fetch');
     assert.equal(proxyCalls.length, 1);
-    assert.equal(String(proxyCalls[0][0]), 'https://api.example.test/v1/models');
+    assert.equal(String(proxyCalls[0][0]), MODELS_URL);
     assert.equal(proxyCalls[0][1].headers.Authorization, 'Bearer k');
-});
-
-test('corsMode invalid value falls back to default "auto" behaviour (proxy on CORS failure)', async () => {
-    const proxyCalls = [];
-    await catalog.discoverCatalog({
-        endpoint: 'https://api.example.test/v1', contract: 'openai-images',
-        apiKey: 'k', corsMode: 'banana',
-        fetch: async () => { throw new TypeError('Failed to fetch'); },
-        proxiedFetch: async (...args) => {
-            proxyCalls.push(args);
-            return { ok: true, async json() { return { data: [{ id: 'gpt-image-1' }] }; } };
-        },
-    });
-    assert.equal(proxyCalls.length, 1, 'invalid corsMode should behave like "auto"');
 });
 
 // ── non-JSON 2xx body: ST /proxy/ login/404 HTML fallback ──
@@ -293,8 +139,8 @@ test('corsMode invalid value falls back to default "auto" behaviour (proxy on CO
 test('request wraps a non-JSON 2xx body as CATALOG_PARSE_FAILURE with the body first line', async () => {
     const htmlBody = '<!doctype html><html><body>Please log in.</body></html>';
     await assert.rejects(
-        catalog.discoverCatalog({
-            endpoint: 'https://api.example.test', contract: 'openai-images', apiKey: 'k',
+        catalogFetch({
+            apiKey: 'k',
             fetch: async () => ({
                 ok: true, status: 200,
                 headers: { get: () => 'text/html; charset=utf-8' },
@@ -312,8 +158,8 @@ test('request wraps a non-JSON 2xx body as CATALOG_PARSE_FAILURE with the body f
 
 test('request wraps an empty 2xx non-JSON body as CATALOG_PARSE_FAILURE', async () => {
     await assert.rejects(
-        catalog.discoverCatalog({
-            endpoint: 'https://api.example.test', contract: 'openai-images', apiKey: 'k',
+        catalogFetch({
+            apiKey: 'k',
             fetch: async () => ({
                 ok: true, status: 204,
                 headers: { get: () => null },
@@ -344,8 +190,8 @@ test('request decompresses a gzip-magic 2xx body via DecompressionStream before 
     // Convert the Buffer into a Uint8Array body for the mock fetch.
     const bodyBytes = new Uint8Array(gz);
     let arrayBufferCalls = 0;
-    const result = await catalog.discoverCatalog({
-        endpoint: 'https://api.example.test', contract: 'openai-images', apiKey: 'k',
+    const payload = await catalogFetch({
+        apiKey: 'k',
         fetch: async () => ({
             ok: true, status: 200,
             headers: { get: () => 'application/json; charset=utf-8' },
@@ -360,9 +206,7 @@ test('request decompresses a gzip-magic 2xx body via DecompressionStream before 
     });
     // The gzip body MUST have been transparently decompressed and parsed.
     assert.equal(arrayBufferCalls, 1, 'arrayBuffer should be read once for gzip detection');
-    assert.deepEqual(result.models.map(m => m.modelId), ['gpt-image-1', 'text-only']);
-    assert.equal(result.models[0].likelyImage, true);
-    assert.equal(result.models[1].likelyImage, false);
+    assert.deepEqual(payload.data.map(m => m.id), ['gpt-image-1', 'text-only']);
 });
 
 test('request falls back to PARSE_FAILURE when DecompressionStream is unavailable for a gzip body', async () => {
@@ -374,8 +218,8 @@ test('request falls back to PARSE_FAILURE when DecompressionStream is unavailabl
         const gz = gzipSync(Buffer.from(JSON.stringify({ data: [{ id: 'gpt-image-1' }] })));
         const bodyBytes = new Uint8Array(gz);
         await assert.rejects(
-            catalog.discoverCatalog({
-                endpoint: 'https://api.example.test', contract: 'openai-images', apiKey: 'k',
+            catalogFetch({
+                apiKey: 'k',
                 fetch: async () => ({
                     ok: true, status: 200,
                     headers: { get: () => 'application/json; charset=utf-8' },
@@ -400,8 +244,8 @@ test('request decompresses a deflate-magic 2xx body via DecompressionStream befo
     const jsonText = JSON.stringify({ data: [{ id: 'gpt-image-1' }, { id: 'text-only' }] });
     const deflated = deflateSync(Buffer.from(jsonText));
     const bodyBytes = new Uint8Array(deflated);
-    const result = await catalog.discoverCatalog({
-        endpoint: 'https://api.example.test', contract: 'openai-images', apiKey: 'k',
+    const payload = await catalogFetch({
+        apiKey: 'k',
         fetch: async () => ({
             ok: true, status: 200,
             headers: { get: () => 'application/json; charset=utf-8' },
@@ -411,7 +255,7 @@ test('request decompresses a deflate-magic 2xx body via DecompressionStream befo
             async text() { return new TextDecoder('utf-8', { fatal: false }).decode(bodyBytes); },
         }),
     });
-    assert.deepEqual(result.models.map(m => m.modelId), ['gpt-image-1', 'text-only']);
+    assert.deepEqual(payload.data.map(m => m.id), ['gpt-image-1', 'text-only']);
 });
 
 // zstd: fuzhan.magicv4.ltd serves catalog responses as zstd frames (magic
@@ -453,8 +297,8 @@ test('request decompresses a zstd-magic catalog body via native DecompressionStr
     globalThis.DecompressionStream = makeZstdStub(decodedBytes);
     __resetZstdProbe();
     try {
-        const result = await catalog.discoverCatalog({
-            endpoint: 'https://api.example.test', contract: 'openai-images', apiKey: 'k',
+        const payload = await catalogFetch({
+            apiKey: 'k',
             fetch: async () => ({
                 ok: true, status: 200,
                 headers: { get: () => 'application/json; charset=utf-8' },
@@ -464,7 +308,7 @@ test('request decompresses a zstd-magic catalog body via native DecompressionStr
                 async text() { return new TextDecoder('utf-8', { fatal: false }).decode(onWire); },
             }),
         });
-        assert.deepEqual(result.models.map(m => m.modelId), ['gpt-image-1', 'text-only']);
+        assert.deepEqual(payload.data.map(m => m.id), ['gpt-image-1', 'text-only']);
     } finally {
         if (saved !== undefined) globalThis.DecompressionStream = saved;
         __resetZstdProbe();
@@ -480,8 +324,8 @@ test('request decompresses a real zstd catalog body via the fzstd polyfill', asy
     const onWire = new Uint8Array(zstdCompressSync(Buffer.from(jsonText)));
     __resetZstdProbe();
     try {
-        const result = await catalog.discoverCatalog({
-            endpoint: 'https://api.example.test', contract: 'openai-images', apiKey: 'k',
+        const payload = await catalogFetch({
+            apiKey: 'k',
             fetch: async () => ({
                 ok: true, status: 200,
                 headers: { get: () => 'application/json; charset=utf-8' },
@@ -491,7 +335,7 @@ test('request decompresses a real zstd catalog body via the fzstd polyfill', asy
                 async text() { return new TextDecoder('utf-8', { fatal: false }).decode(onWire); },
             }),
         });
-        assert.deepEqual(result.models.map(m => m.modelId), ['gpt-image-1']);
+        assert.deepEqual(payload.data.map(m => m.id), ['gpt-image-1']);
     } finally {
         __resetZstdProbe();
     }

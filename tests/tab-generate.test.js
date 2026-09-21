@@ -23,9 +23,8 @@ const { state } = await import('../src/core.js');
 const { POST_FILTER } = await import('../src/post-navigator.js');
 const { hashMessage } = await import('../src/generation-drafts.js');
 const { MAX_REFS } = await import('../src/refs-library.js');
-const { MAX_REFERENCE_CAPABILITY } = await import('../src/reference-limits.js');
 const tabGenerate = await import('../src/ui/tab-generate.js');
-const { decidePromptActions, buildGenerateViewModel, renderGenerateMarkup, readGenerationParams, submitCurrentGeneration, updateReferenceCorrections, refreshReferencePanel, buildReferencePanelState, resolveServerOwnedReferencePolicy, resolveConnectionReferencePolicy, getSnapshotReferencePolicy } = tabGenerate;
+const { decidePromptActions, buildGenerateViewModel, renderGenerateMarkup, readGenerationParams, submitCurrentGeneration, updateReferenceCorrections, refreshReferencePanel, buildReferencePanelState, resolveConnectionReferencePolicy, getSnapshotReferencePolicy } = tabGenerate;
 
 beforeEach(() => {
     state.settings = {
@@ -921,51 +920,6 @@ test('reference library source has aliases editor but no role or keywords editor
 });
 
 // ── Shared reference policy panel state ──
-
-test('resolveServerOwnedReferencePolicy preserves unknown and absent route capabilities as null', () => {
-    assert.deepEqual(resolveServerOwnedReferencePolicy({ selectedRoute: { capabilities: { references: 'unknown' } } }), {
-        supported: true,
-        status: 'unknown',
-        protocol: null,
-        maxRefs: null,
-        reason: '',
-        source: 'server-route',
-    });
-    assert.deepEqual(resolveServerOwnedReferencePolicy({ selectedRoute: { capabilities: null } }), {
-        supported: true,
-        status: 'unknown',
-        protocol: null,
-        maxRefs: null,
-        reason: '',
-        source: 'server-route',
-    });
-    assert.deepEqual(resolveServerOwnedReferencePolicy({}), {
-        supported: true,
-        status: 'unknown',
-        protocol: null,
-        maxRefs: null,
-        reason: '',
-        source: 'server-route',
-    });
-});
-
-test('resolveServerOwnedReferencePolicy bounds positive route reference caps', () => {
-    assert.equal(resolveServerOwnedReferencePolicy({ selectedRoute: { capabilities: { maxReferences: 2 } } }).maxRefs, 2);
-    assert.equal(resolveServerOwnedReferencePolicy({ selectedRoute: { capabilities: { maxReferences: MAX_REFERENCE_CAPABILITY + 1 } } }).maxRefs, MAX_REFERENCE_CAPABILITY);
-});
-
-test('resolveServerOwnedReferencePolicy returns the unsupported route policy exactly', () => {
-    const expected = {
-        supported: false,
-        status: 'unsupported',
-        protocol: null,
-        maxRefs: 0,
-        reason: 'Выбранный маршрут не принимает референсы.',
-        source: 'server-route',
-    };
-    assert.deepEqual(resolveServerOwnedReferencePolicy({ selectedRoute: { capabilities: { references: 'unsupported' } } }), expected);
-    assert.deepEqual(resolveServerOwnedReferencePolicy({ selectedRoute: { capabilities: { maxReferences: 0 } } }), expected);
-});
 
 test('buildReferencePanelState reports effective max and over-limit delivery', () => {
     const state = buildReferencePanelState(

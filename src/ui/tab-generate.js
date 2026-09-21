@@ -33,7 +33,6 @@ import {
     getVisibleModelChoices,
     classifyModelCapability,
 } from '../dispatch-plan.js';
-import { resolveServerOwnedReferencePolicy as resolveServerOwnedRouteReferencePolicy } from '../reference-policy.js';
 import { recordUrisError } from '../error-pool.js';
 import { isStudioActive, STUDIO_CHAT_ID, STUDIO_MSG_ID } from '../studio-scope.js';
 
@@ -184,11 +183,6 @@ export function buildReferencePanelState(refs, policy) {
         overLimit,
         message: overLimit ? `Выбрано ${count} референсов, но маршрут поддерживает только ${policy.maxRefs}. Удалите лишние референсы перед генерацией.` : '',
     };
-}
-
-/** Resolve Stage 2 reference support advertised by a server-owned route. */
-export function resolveServerOwnedReferencePolicy(conn) {
-    return resolveServerOwnedRouteReferencePolicy(conn);
 }
 
 /** Resolve reference delivery from the saved route for either connection owner. */

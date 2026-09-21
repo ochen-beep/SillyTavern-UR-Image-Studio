@@ -104,7 +104,7 @@ npm test              # node --test across tests/!(server-*)*.test.js
 npm run test:server   # server-line tests; expected red until the server plugin ships
 ```
 
-The test runtime needs no jsdom: `tests/fake-dom.js` stubs the minimum DOM surface for the pure modules. The server line (`src/server-*.js`, `src/store-*.js`, `src/image-recovery.js`, `src/reference-check.js`) is an isolated island that nothing in the extension imports yet — its consumers are its own tests; `docs/runbooks/2026-09-14-dev-deploy-workflow.md` describes the two-tree dev/deploy workflow.
+The test runtime needs no jsdom: `tests/fake-dom.js` stubs the minimum DOM surface for the pure modules. A server-plugin variant (generation executed by a SillyTavern server plugin) was explored early on but abandoned — the CORS problem it targeted is solved cheaper by direct browser routes with an ST CORS-proxy fallback, so no server-side code ships with the extension. `docs/runbooks/2026-09-14-dev-deploy-workflow.md` describes the two-tree dev/deploy workflow.
 
 #### Project structure
 

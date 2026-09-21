@@ -8,7 +8,6 @@ import { dirname, join } from 'node:path';
 import { invokeImageProvider } from '../src/image-provider-registry.js';
 import { CONTRACTS, normalizeRouteContract } from '../src/image-connection-schema.js';
 import { resolveDispatchPlan } from '../src/dispatch-plan.js';
-import { discoverCatalog } from '../src/catalog.js';
 import { probeConnection } from '../src/connect-probe.js';
 import { classifyUrl } from '../src/netdump.js';
 import { validateNaisteraToken } from '../src/providers/image-naistera.js';
@@ -230,29 +229,6 @@ test('Naistera dispatch plan selects the contract by endpoint and blocks edits',
     assert.equal(plan.route.transport.providerId, 'naistera');
 });
 
-test('Naistera catalog reads the token-scoped array, keeps image models, and maps capabilities', async () => {
-    const requests = [];
-    const result = await discoverCatalog({
-        endpoint: 'https://naistera.org',
-        contract: CONTRACTS.NAISTERA,
-        apiKey: 'tg-token',
-        fetch: async (url, options) => {
-            requests.push({ url: String(url), options });
-            return response(fixture('api-models.json'));
-        },
-        proxiedFetch: async () => { throw new Error('proxy must not be called'); },
-    });
-    assert.deepEqual(requests.map(item => item.url), ['https://naistera.org/api/models']);
-    assert.equal(requests[0].options.headers.Authorization, 'Bearer tg-token');
-    // grok-video declares media_kind: video → filtered out of image routes.
-    assert.deepEqual(result.models.map(model => model.modelId), ['nano-banana', 'grok-pro', 'novelai']);
-    assert.equal(result.routes[0].generationContract, CONTRACTS.NAISTERA);
-    assert.equal(result.routes[0].capabilities.maxReferences, 4);
-    assert.equal(result.routes[2].capabilities.references, 'unsupported');
-    assert.equal(result.routes[2].capabilities.maxReferences, 0);
-    assert.equal(result.routes[0].remoteMetadata.providerName, 'Naistera');
-});
-
 test('Naistera probe reads the token-scoped catalog and reports a verified connection', async () => {
     const calls = [];
     const outcome = await probeConnection({
@@ -266,11 +242,18 @@ test('Naistera probe reads the token-scoped catalog and reports a verified conne
     });
     assert.equal(outcome.apiShape, 'naistera');
     assert.equal(outcome.auth, 'naistera-bearer');
+    // grok-video declares media_kind: video → filtered out of image models.
     assert.deepEqual(outcome.modelIds, ['nano-banana', 'grok-pro', 'novelai']);
+    // Per-model reference capability mapping (boundedNaisteraModel) survives.
+    const byId = Object.fromEntries(outcome.modelMetadata.map(item => [item.modelId, item]));
+    assert.equal(byId['nano-banana'].maxReferences, 4);
+    assert.equal(byId['novelai'].references, 'unsupported');
+    assert.equal(byId['novelai'].maxReferences, 0);
     assert.equal(outcome.generationUnverified, undefined);  // catalog proves the token
     assert.equal(calls.length, 1);
     assert.equal(calls[0].url, 'https://naistera.org/api/models');
     assert.equal(calls[0].options.method, 'GET');
+    assert.equal(calls[0].options.headers.Authorization, 'Bearer tg-token');
 });
 
 test('Naistera probe rejects an unexpected catalog shape', async () => {

@@ -1,11 +1,9 @@
 // @ts-check
-import { CONTRACTS, normalizeRouteContract, stripSecrets } from './image-connection-schema.js';
+import { stripSecrets } from './image-connection-schema.js';
 import { normalizeReferenceCap } from './reference-limits.js';
-import { proxiedFetch as defaultProxiedFetch, isCorsOrNetworkError } from './proxy.js';
+import { isCorsOrNetworkError } from './proxy.js';
 import { tunnelBypassHeaders } from './tunnel-bypass.js';
 import { trace, warn, decodeZstdBytes } from './core.js'
-
-const IMAGE_MODEL = /(?:^|[\/_-])(?:gpt-image|dall-e|imagen|gemini[^/]*image|image)(?:[\/_-]|$)/i;
 
 function text(value) {
     return typeof value === 'string' ? value.trim() : '';
@@ -21,13 +19,6 @@ function versionedUrl(endpoint, version = 'v1') {
 /** Versioned base URL for an endpoint (adds /v1 when absent). Test/probe seam. */
 export function buildVersionedUrl(endpoint, version = 'v1') {
     return versionedUrl(endpoint, version);
-}
-
-function openRouterUrl(endpoint) {
-    const url = new URL(text(endpoint));
-    const path = url.pathname.replace(/\/+$/, '');
-    url.pathname = path === '' ? '/api/v1' : path;
-    return url;
 }
 
 function pollinationsUrl(endpoint, suffix) {
@@ -75,21 +66,6 @@ export function buildNaisteraModelsUrl(endpoint) {
     return naisteraUrl(endpoint, '/api/models');
 }
 
-function routeFor({ modelId, label, source, generationContract, likelyImage, capabilities, remoteMetadata }) {
-    return normalizeRouteContract({
-        source,
-        modelId,
-        label: label || modelId,
-        generationContract,
-        capabilities: capabilities || { generate: 'unknown', references: 'unknown', edit: 'unknown' },
-        ...(remoteMetadata ? { remoteMetadata } : {}),
-        bodyKind: 'json',
-        proxyEligible: false,
-        directCors: 'required',
-        likelyImage,
-    });
-}
-
 const MODEL_METADATA_KEYS = new Set([
     'id', 'name', 'displayName', 'title', 'category', 'output_modalities',
     'capabilities', 'resolutions', 'quality', 'supported_parameters',
@@ -111,95 +87,6 @@ function boundedModelMetadata(item) {
         else if (Array.isArray(value)) output[key] = value.slice(0, 64).filter(item => typeof item === 'string').map(item => item.slice(0, 128));
     }
     return output;
-}
-
-function readModels(payload, key, bounded = false) {
-    const values = key === '__array'
-        ? (Array.isArray(payload) ? payload : (Array.isArray(payload?.models) ? payload.models : []))
-        : (Array.isArray(payload?.[key]) ? payload[key] : []);
-    return values.map(item => {
-        const descriptor = bounded ? boundedModelMetadata(item) : stripSecrets(item && typeof item === 'object' && !Array.isArray(item) ? item : {});
-        const raw = text(descriptor.id || descriptor.name);
-        const modelId = raw.replace(/^models\//, '');
-        return modelId ? {
-            ...descriptor,
-            modelId,
-            label: text(descriptor.displayName || descriptor.title) || modelId,
-        } : null;
-    }).filter(Boolean);
-}
-
-function pollinationsImageModel(model) {
-    const category = text(model?.category).toLowerCase();
-    const outputs = Array.isArray(model?.output_modalities) ? model.output_modalities.map(value => text(value).toLowerCase()) : [];
-    return category === 'image' || outputs.includes('image') || outputs.includes('images');
-}
-
-function pollinationsRouteData(model) {
-    const supportedParameters = Array.isArray(model?.capabilities)
-        ? model.capabilities.filter(value => typeof value === 'string' && /^[A-Za-z][A-Za-z0-9_]{0,63}$/.test(value)).slice(0, 64)
-        : (Array.isArray(model?.supported_parameters)
-            ? model.supported_parameters.filter(value => typeof value === 'string' && /^[A-Za-z][A-Za-z0-9_]{0,63}$/.test(value)).slice(0, 64)
-            : null);
-    const rawMax = model?.max_reference_images ?? model?.maxReferences;
-    const maxReferences = Number.isSafeInteger(rawMax) && rawMax >= 0 ? normalizeReferenceCap(rawMax) : null;
-    const resolutions = Array.isArray(model?.resolutions)
-        ? model.resolutions.filter(value => typeof value === 'string' && /^(1k|2k|480p|720p|768p|1080p)$/i.test(value)).map(value => value.toLowerCase()).slice(0, 16)
-        : null;
-    const qualityValues = Array.isArray(model?.quality)
-        ? model.quality.filter(value => typeof value === 'string' && /^(standard|hd|low|medium|high)$/i.test(value)).map(value => value.toLowerCase()).slice(0, 8)
-        : null;
-    return {
-        capabilities: {
-            generate: 'unknown',
-            references: 'unsupported',
-            edit: 'unsupported',
-            ...(supportedParameters ? { supportedParameters } : {}),
-            ...(resolutions?.length ? { imageSizes: resolutions } : {}),
-            ...(qualityValues?.length ? { qualityValues } : {}),
-            ...(maxReferences !== null ? { maxReferences } : {}),
-        },
-        remoteMetadata: {
-            providerName: 'Pollinations',
-            catalogSource: '/image/models',
-            generationUnverified: true,
-        },
-    };
-}
-
-/**
- * Map a Naistera /api/models record onto route capability data.
- *
- * Reference support is per-model (NovelAI-style models run without
- * references), and video models are marked via their media kind. The exact
- * field names come from the API response; several spellings are accepted
- * because the provider's public docs only describe shapes at marketing level.
- */
-function naisteraRouteData(model) {
-    const referenceCapability = modelReferenceCapability(model);
-    const mediaKind = modelMediaKind(model);
-    return {
-        capabilities: {
-            generate: 'unknown',
-            references: referenceCapability.references,
-            edit: 'unsupported',
-            ...(referenceCapability.maxReferences !== undefined && referenceCapability.maxReferences !== null
-                ? { maxReferences: referenceCapability.maxReferences } : {}),
-        },
-        remoteMetadata: {
-            providerName: 'Naistera',
-            catalogSource: '/api/models',
-            ...(mediaKind ? { mediaKind } : {}),
-            generationUnverified: true,
-        },
-    };
-}
-
-/** Keep only image models (video generation is out of scope for URIS routes). */
-function naisteraImageModel(model) {
-    const kind = text(model?.media_kind ?? model?.mediaKind ?? model?.kind).toLowerCase();
-    if (kind) return kind === 'image';
-    return true;  // no declared media kind → assume image; video models declare themselves
 }
 
 function modelMediaKind(model) {
@@ -705,79 +592,4 @@ async function tryGunzipIfMagic(clone) {
     trace('gunzip: no compression magic — emitting lossy preview');
     try { return { decoded: null, preview: new TextDecoder('utf-8', { fatal: false }).decode(bytes), codec: null }; }
     catch { return { decoded: null, preview: '', codec: null }; }
-}
-
-/** Discover models without making generation or provider-specific capability probes. */
-export async function discoverCatalog({ endpoint, apiKey = '', contract, timeoutMs = 120000, signal, fetch: fetcher = globalThis.fetch, proxiedFetch = defaultProxiedFetch, corsMode = 'auto' } = {}) {
-    if (typeof fetcher !== 'function') throw new TypeError('fetch is required for catalog discovery');
-    if (typeof proxiedFetch !== 'function') throw new TypeError('proxiedFetch is required for catalog discovery');
-    if (!Object.values(CONTRACTS).includes(contract)) throw new TypeError('An explicit route contract is required');
-    const mode = corsMode === 'proxy' || corsMode === 'direct' ? corsMode : 'auto';
-
-    let url;
-    let source;
-    let models;
-    if (contract === CONTRACTS.POLLINATIONS_IMAGES) {
-        url = buildPollinationsModelsUrl(endpoint);
-        const payload = await request(url, '', fetcher, proxiedFetch, {}, timeoutMs, signal, mode);
-        source = 'pollinations-image-models';
-        models = readModels(payload, '__array', true).filter(pollinationsImageModel);
-    } else if (contract === CONTRACTS.NAISTERA) {
-        url = buildNaisteraModelsUrl(endpoint);
-        // The catalog is token-scoped (unlike Pollinations' public one): a
-        // successful read also proves the bearer token itself, so the probe
-        // can report the connection as verified rather than unverified.
-        const payload = await request(url, apiKey, fetcher, proxiedFetch, {}, timeoutMs, signal, mode);
-        source = 'naistera-models';
-        models = readModels(payload, '__array', true).filter(naisteraImageModel);
-    } else if (contract === CONTRACTS.GEMINI_NATIVE) {
-        url = versionedUrl(endpoint);
-        url.pathname += '/models';
-        // Auth must mirror the generation path (providers/image-gemini.js
-        // headers()): Google's own endpoint takes x-goog-api-key, while
-        // OpenAI-compatible gateways fronting gemini models (new-api family)
-        // expect Authorization: Bearer even on the
-        // native-looking /models path. Sending x-goog-api-key there produced
-        // HTTP 400 "Invalid token" while generation with Bearer worked.
-        const isGoogleHost = /generativelanguage\.googleapis\.com/i.test(url.hostname);
-        const payload = isGoogleHost
-            ? await request(url, '', fetcher, proxiedFetch, apiKey ? { 'x-goog-api-key': apiKey } : {}, timeoutMs, signal, mode)
-            : await request(url, apiKey, fetcher, proxiedFetch, {}, timeoutMs, signal, mode);
-        source = 'gemini-models';
-        models = readModels(payload, 'models');
-    } else if (contract === CONTRACTS.OPENROUTER_IMAGES) {
-        url = openRouterUrl(endpoint);
-        url.pathname += '/images/models';
-        const payload = await request(url, apiKey, fetcher, proxiedFetch, {}, timeoutMs, signal, mode);
-        source = 'openrouter-image-models';
-        models = readModels(payload, 'data');
-    } else {
-        url = versionedUrl(endpoint);
-        url.pathname += '/models';
-        const payload = await request(url, apiKey, fetcher, proxiedFetch, {}, timeoutMs, signal, mode);
-        source = 'openai-models';
-        models = readModels(payload, 'data');
-    }
-
-    const catalogModels = models.map(model => ({ ...model, likelyImage: (contract === CONTRACTS.POLLINATIONS_IMAGES || contract === CONTRACTS.NAISTERA) ? true : IMAGE_MODEL.test(model.modelId) }));
-    return {
-        fetchedAt: new Date().toISOString(),
-        models: catalogModels,
-        routes: catalogModels.map(model => {
-            const pollinations = contract === CONTRACTS.POLLINATIONS_IMAGES ? pollinationsRouteData(model) : {};
-            const naistera = contract === CONTRACTS.NAISTERA ? naisteraRouteData(model) : {};
-            return {
-                ...routeFor({
-                    modelId: model.modelId,
-                    label: model.label,
-                    source,
-                    generationContract: contract,
-                    likelyImage: model.likelyImage,
-                    ...pollinations,
-                    ...naistera,
-                }),
-                likelyImage: model.likelyImage,
-            };
-        }),
-    };
 }

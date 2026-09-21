@@ -12,7 +12,7 @@
 //   1. хелпер tunnelBypassHeaders(url) — таблица хостов → заголовки;
 //   2. инъекция в core.fetchWithTimeout — покрывает прямой dispatch генерации,
 //      proxiedFetch/autoFetch и всё, что ходит через core;
-//   3. инъекция в catalog.request — покрывает «Проверить» (connect-probe
+//   3. инъекция в catalog.catalogRequest — покрывает «Проверить» (connect-probe
 //      фетчит сырым globalThis.fetch в обход core).
 import { test, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
@@ -172,37 +172,33 @@ test('fetchWithTimeout: same-origin запрос (relative URL) — без ис�
     }
 });
 
-// ── 3. инъекция в catalog.request (путь «Проверить», сырой fetch + ST-прокси) ──
+// ── 3. инъекция в catalog.catalogRequest (путь «Проверить», сырой fetch + ST-прокси) ──
 
 test('discovery: direct-попытка к туннельному хосту несёт bypass-заголовок', async () => {
-    const catalog = await import('../src/catalog.js');
+    const { catalogRequest } = await import('../src/catalog.js');
     const requests = [];
-    await catalog.discoverCatalog({
-        endpoint: 'https://y.loca.lt/v1',
-        apiKey: 'browser-key',
-        contract: 'openai-images',
-        fetch: async (url, options) => {
+    await catalogRequest('https://y.loca.lt/v1/models', 'browser-key',
+        async (url, options) => {
             requests.push([String(url), options]);
             return { ok: true, async json() { return { data: [] }; } };
         },
-    });
+        async () => { throw new Error('proxy must not be called'); },
+        {}, 120000);
     assert.equal(requests.length, 1);
     assert.equal(requests[0][1].headers['bypass-tunnel-reminder'], '1');
     assert.equal(requests[0][1].headers.Authorization, 'Bearer browser-key');
 });
 
 test('discovery: на обычном хосте служебных заголовков нет', async () => {
-    const catalog = await import('../src/catalog.js');
+    const { catalogRequest } = await import('../src/catalog.js');
     const requests = [];
-    await catalog.discoverCatalog({
-        endpoint: 'https://api.example.test',
-        apiKey: 'browser-key',
-        contract: 'openai-images',
-        fetch: async (url, options) => {
+    await catalogRequest('https://api.example.test/v1/models', 'browser-key',
+        async (url, options) => {
             requests.push([String(url), options]);
             return { ok: true, async json() { return { data: [] }; } };
         },
-    });
+        async () => { throw new Error('proxy must not be called'); },
+        {}, 120000);
     assert.equal(requests[0][1].headers['bypass-tunnel-reminder'], undefined);
     assert.equal(requests[0][1].headers['ngrok-skip-browser-warning'], undefined);
 });
@@ -218,12 +214,9 @@ test('discovery: bypass сохраняется при fallback на ST-прок�
         return { ok: true, status: 200, async json() { return { data: [] }; } };
     });
     try {
-        const catalog = await import('../src/catalog.js');
-        await catalog.discoverCatalog({
-            endpoint: 'https://y.loca.lt/v1',
-            apiKey: 'browser-key',
-            contract: 'openai-images',
-        });
+        const { catalogRequest } = await import('../src/catalog.js');
+        const { proxiedFetch } = await import('../src/proxy.js');
+        await catalogRequest('https://y.loca.lt/v1/models', 'browser-key', globalThis.fetch, proxiedFetch, {}, 120000);
         const proxied = legs.find(leg => leg.viaProxy && /loca\.lt/.test(leg.url));
         assert.ok(proxied, 'ожидается leg через /proxy/ к туннельному хосту');
         assert.equal(proxied.headers['bypass-tunnel-reminder'], '1');

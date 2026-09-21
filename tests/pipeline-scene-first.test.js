@@ -6,7 +6,7 @@ import {
     createRef, resetRefStoreForTests, saveChatRefs, setRefStoreForTests,
 } from '../src/refs-library.js';
 import { resolvePromptReferenceContext } from '../src/scene-context.js';
-import { resolveServerOwnedReferencePolicy } from '../src/reference-policy.js';
+import { resolveConnectionReferencePolicy } from '../src/ui/tab-generate.js';
 
 function makeInMemoryLFA() {
     const store = new Map();
@@ -1111,7 +1111,7 @@ test('reference delivery policy does not mutate Stage 2 logical references', asy
         corrections: { includedIds: [], excludedIds: [], revision: 0 },
     });
     const before = structuredClone(resolution.stage2Refs);
-    const policy = resolveServerOwnedReferencePolicy({
+    const policy = resolveConnectionReferencePolicy({
         selectedRoute: { capabilities: { references: 'supported', maxReferences: 1 } },
     });
     assert.equal(policy.maxRefs, 1);
