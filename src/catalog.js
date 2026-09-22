@@ -1,6 +1,4 @@
 // @ts-check
-import { stripSecrets } from './image-connection-schema.js';
-import { normalizeReferenceCap } from './reference-limits.js';
 import { isCorsOrNetworkError } from './proxy.js';
 import { tunnelBypassHeaders } from './tunnel-bypass.js';
 import { trace, warn, decodeZstdBytes } from './core.js'
@@ -64,61 +62,6 @@ function naisteraUrl(endpoint, suffix) {
 /** Token-scoped Naistera model catalog URL. */
 export function buildNaisteraModelsUrl(endpoint) {
     return naisteraUrl(endpoint, '/api/models');
-}
-
-const MODEL_METADATA_KEYS = new Set([
-    'id', 'name', 'displayName', 'title', 'category', 'output_modalities',
-    'capabilities', 'resolutions', 'quality', 'supported_parameters',
-    'supportedParameters', 'max_reference_images', 'maxReferences',
-    'supports_references', 'supportsReferences', 'reference_images_supported',
-    'referenceImagesSupported', 'references_supported', 'referencesSupported', 'references',
-    'media_kind', 'mediaKind', 'kind',
-]);
-
-function boundedModelMetadata(item) {
-    const source = stripSecrets(item && typeof item === 'object' && !Array.isArray(item) ? item : {});
-    const output = {};
-    for (const key of MODEL_METADATA_KEYS) {
-        if (!(key in source)) continue;
-        const value = source[key];
-        if (typeof value === 'string') output[key] = value.slice(0, 256);
-        else if (typeof value === 'boolean') output[key] = value;
-        else if (typeof value === 'number' && Number.isFinite(value)) output[key] = value;
-        else if (Array.isArray(value)) output[key] = value.slice(0, 64).filter(item => typeof item === 'string').map(item => item.slice(0, 128));
-    }
-    return output;
-}
-
-function modelMediaKind(model) {
-    const kind = text(model?.media_kind ?? model?.mediaKind ?? model?.kind).toLowerCase();
-    return kind === 'video' ? 'video' : kind === 'image' ? 'image' : null;
-}
-
-function modelReferenceCapability(model) {
-    const rawMax = model?.max_reference_images ?? model?.maxReferences;
-    if (Number.isSafeInteger(rawMax) && rawMax >= 0) {
-        const maxReferences = normalizeReferenceCap(rawMax);
-        return { references: maxReferences === 0 ? 'unsupported' : 'supported', maxReferences };
-    }
-    const explicit = model?.supports_references ?? model?.supportsReferences
-        ?? model?.reference_images_supported ?? model?.referenceImagesSupported
-        ?? model?.references_supported ?? model?.referencesSupported
-        ?? (typeof model?.references === 'boolean' ? model.references : undefined);
-    if (typeof explicit === 'boolean') return { references: explicit ? 'supported' : 'unsupported' };
-    return { references: 'unknown' };
-}
-
-/** Safe per-model metadata used by the authenticated Naistera probe. */
-export function boundedNaisteraModel(item) {
-    const metadata = boundedModelMetadata(item);
-    const modelId = text(metadata.id || metadata.name).replace(/^models\//, '');
-    if (!modelId) return null;
-    return {
-        modelId,
-        label: text(metadata.displayName || metadata.title) || modelId,
-        ...modelReferenceCapability(metadata),
-        ...(modelMediaKind(metadata) ? { mediaKind: modelMediaKind(metadata) } : {}),
-    };
 }
 
 /**
@@ -309,7 +252,7 @@ function* completeJsonObjects(body) {
     }
 }
 
-// Matches the probe's catalog cap (connect-probe MAX_MODEL_IDS).
+// Matches the catalog cap (model-catalog MAX_MODELS).
 const SALVAGE_ENTRY_LIMIT = 500;
 
 /** Salvage a usable payload (openai/gemini/array shape) from a truncated JSON text. */

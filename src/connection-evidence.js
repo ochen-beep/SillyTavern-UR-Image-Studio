@@ -14,16 +14,10 @@
  */
 import { getConnection, saveConnection } from './connections.js';
 import { referenceRejectionReason } from './capability-observer.js';
-
-const locks = new Map();
+import { serialize } from './serialize.js';
 
 function withLock(key, fn) {
-    const next = (locks.get(key) || Promise.resolve()).then(fn, fn);
-    const queued = next.catch(() => {});
-    locks.set(key, queued);
-    return next.finally(() => {
-        if (locks.get(key) === queued) locks.delete(key);
-    });
+    return serialize(key, fn);
 }
 
 /**

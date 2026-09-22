@@ -1,5 +1,6 @@
 // @ts-check
 /** Browser-local pending generation records. These never resume provider requests. */
+import { serialize } from './serialize.js';
 
 const KEY = 'uris_pending_images';
 const BROWSER_KIND = 'browserRequest';
@@ -36,17 +37,15 @@ async function persistRecords(records) {
 
 // Save/update/discard/clear all use one read-modify-write queue. Multiple
 // generations can finish close together; without this mutex, the last writer
-// could silently discard another request's recovery record.
-let writeChain = Promise.resolve();
+// could silently discard another request's recovery record. list() joins the
+// same queue, so a read never lands between a write's read and write phases.
+const WRITE_KEY = 'uris-pending-images';
 function enqueueWrite(task) {
-    const operation = writeChain.then(task);
-    writeChain = operation.catch(() => {});
-    return operation;
+    return serialize(WRITE_KEY, task);
 }
 
 async function list() {
-    await writeChain;
-    return readRecords();
+    return serialize(WRITE_KEY, async () => readRecords());
 }
 
 function isRetainedPending(item, now = Date.now()) {

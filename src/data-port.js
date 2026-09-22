@@ -766,13 +766,18 @@ export async function importUrisData(data, options = {}) {
         try { invalidatePoolCache(); } catch (e) { warn('importUrisData: refs pool cache invalidation failed', e?.message); }
 
         log('Imported keys:', Object.keys(incomingLf).length, 'chat bindings:', importedChatBindings);
+        // "Records" = legacy localforage keys + shared collections (connections,
+        // templates, presets, refs, folders) — a modern backup usually carries
+        // everything in `shared` and zero legacy keys.
+        const sharedRecords = ['connections', 'templates', 'presets', 'refs', 'folders']
+            .reduce((sum, key) => sum + (Array.isArray(incomingShared[key]) ? incomingShared[key].length : 0), 0);
         recordDiagnosticEvent({
             event: 'import-run', stage: 'data', outcome: 'ok',
             durationMs: Date.now() - startedAt,
-            details: { mode, importedKeys: Object.keys(incomingLf).length, importedChatBindings },
+            details: { mode, importedKeys: Object.keys(incomingLf).length + sharedRecords, importedChatBindings },
         });
         return {
-            importedKeys: Object.keys(incomingLf).length,
+            importedKeys: Object.keys(incomingLf).length + sharedRecords,
             importedChatBindings,
             summary: summarizeBackup(normalized),
         };
@@ -794,21 +799,25 @@ export async function importUrisData(data, options = {}) {
 
 /**
  * Build a backup summary for the UI.
+ * Current backups carry the collections in `shared`; pre-v8 backups kept them
+ * in localforage keys — count whichever section actually holds the data.
  * @param {Object} data
  * @returns {Object}
  */
 export function summarizeBackup(data) {
     const localforage = data?.data?.localforage || {};
     const chatMetadata = data?.data?.chatMetadata || {};
-    const refs = Array.isArray(localforage[LF_REFS_POOL]) ? localforage[LF_REFS_POOL] : [];
-    const folders = Array.isArray(localforage[LF_REFS_FOLDERS]) ? localforage[LF_REFS_FOLDERS] : [];
-    const templates = Array.isArray(localforage[LF_TEMPLATES]) ? localforage[LF_TEMPLATES] : [];
+    const shared = data?.shared || {};
+    const count = (sharedArr, lfKey) => {
+        if (Array.isArray(sharedArr)) return sharedArr.length;
+        return Array.isArray(localforage[lfKey]) ? localforage[lfKey].length : 0;
+    };
     const chatMetaEntries = Object.values(chatMetadata);
     const chatConfigs = chatMetaEntries.filter(m => m && typeof m === 'object' && m.schemaVersion >= 4).length;
     return {
-        refs: refs.length,
-        folders: folders.length,
-        templates: templates.length,
+        refs: count(shared.refs, LF_REFS_POOL),
+        folders: count(shared.folders, LF_REFS_FOLDERS),
+        templates: count(shared.templates, LF_TEMPLATES),
         chatConfigs,
         galleryIncluded: false,
         secretsIncluded: false,
@@ -867,7 +876,10 @@ export async function runExport() {
         const data = await exportUrisData();
         const filename = `uris-backup-${new Date().toISOString().replace(/[:.]/g, '-')}.json`;
         downloadJson(data, filename);
-        toastr?.success(`Экспортировано ${Object.keys(data.data.localforage).length} записей и текущая конфигурация чата`, DISPLAY_NAME);
+        const sharedRecords = ['connections', 'templates', 'presets', 'refs', 'folders']
+            .reduce((sum, key) => sum + (Array.isArray(data.shared?.[key]) ? data.shared[key].length : 0), 0);
+        const total = Object.keys(data.data.localforage).length + sharedRecords;
+        toastr?.success(`Экспортировано ${total} записей и текущая конфигурация чата`, DISPLAY_NAME);
     } catch (e) {
         error('runExport:', e);
         recordUrisError({ scope: 'Импорт/экспорт', message: 'Ошибка экспорта: ' + (e?.message || e) });

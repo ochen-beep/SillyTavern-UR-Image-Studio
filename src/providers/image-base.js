@@ -4,6 +4,20 @@ import { assertReferenceByteBudget } from '../reference-limits.js';
 
 const DATA_URL = /^data:(image\/[a-z0-9.+-]+);base64,([a-z0-9+/]+={0,2})$/i;
 
+// Shared aspect-ratio → size table for the OpenAI-compatible size taxonomy
+// (1024/1536 slots). Used verbatim by gpt-image-* and by Pollinations (which
+// proxies the same size vocabulary). dall-e-3 has its own taxonomy and keeps
+// a per-adapter table (image-openai.js).
+export const ASPECT_SIZES = new Map([
+    ['1:1', '1024x1024'],
+    // Portrait
+    ['2:3', '1024x1536'], ['3:4', '1024x1536'], ['4:5', '1024x1536'], ['9:16', '1024x1536'],
+    // Landscape
+    ['3:2', '1536x1024'], ['4:3', '1536x1024'], ['5:4', '1536x1024'], ['16:9', '1536x1024'],
+    // Ultrawide landscape - closest 2K landscape slot.
+    ['21:9', '1536x1024'],
+]);
+
 // ── Transparent response decompression for /proxy/-forwarded bodies ──
 //
 // SillyTavern's /proxy/<url> middleware copies upstream headers verbatim.

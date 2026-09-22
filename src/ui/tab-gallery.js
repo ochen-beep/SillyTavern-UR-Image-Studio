@@ -5,6 +5,7 @@
  */
 import { getCtx, escapeHtml, showConfirmModal } from '../core.js';
 import { getGallery, clearGallery } from '../storage.js';
+import { reconcileCards } from '../gallery-index.js';
 import { isStudioActive, resolveActiveChatId } from '../studio-scope.js';
 import { showLightbox } from './lightbox.js';
 
@@ -32,6 +33,7 @@ export async function render(root) {
             <div class="uris-gallery-toolbar">
                 ${studio ? '<span class="uris-gallery-scope" title="Генерации без открытого чата">Студия</span>' : ''}
                 <span id="urisGalleryCount">${items.length}</span>
+                <button class="uris-btn uris-btn-outline uris-gallery-refresh" id="urisGalleryRefresh" title="Пересканировать папки на сервере: подхватить внешние добавления и пометить внешние удаления"><i class="fa-solid fa-rotate"></i> Обновить</button>
                 <button class="uris-btn uris-btn-danger uris-gallery-clear" id="urisGalleryClear"><i class="fa-solid fa-trash"></i> Очистить</button>
             </div>
             <div class="uris-gallery-grid" id="urisGalleryGrid"></div>
@@ -44,6 +46,13 @@ export async function render(root) {
         await mountChunkLoader(root, grid, items, chatId);
     }
     if (root.__urisTabId && root.__urisTabId !== 'gallery') return;
+    // Reconcile is explicit: the render itself never scans the server (v0.9.4).
+    root.querySelector('#urisGalleryRefresh').addEventListener('click', async () => {
+        try { await reconcileCards(); }
+        catch (error) { toastr?.error('Обновление галереи: ' + (error?.message || error)); }
+        if (root.__urisTabId && root.__urisTabId !== 'gallery') return;
+        render(root);
+    });
     root.querySelector('#urisGalleryClear').addEventListener('click', async () => {
         if (await showConfirmModal(studio ? 'Очистить галерею студии?' : 'Очистить галерею этого чата?')) {
             await clearGallery(chatId);

@@ -1,6 +1,6 @@
 {
     "name": "ur-image-studio",
-    "version": "0.9.3",
+    "version": "0.9.4",
     "private": true,
     "type": "module",
     "description": "SillyTavern extension: scene-first prompt building (Stage 1) and image generation (Stage 2) from chat posts.",

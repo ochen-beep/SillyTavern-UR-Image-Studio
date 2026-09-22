@@ -193,6 +193,20 @@ function collectionStore() {
             records[index] = payload;
             return payload;
         }),
+        // Patch every matching record in ONE mutate (one server round-trip):
+        // per-reference update loops re-read and re-upload the whole file N times.
+        updateWhere: async (collection, predicate, makeNext) => {
+            let affected = 0;
+            await refsStore.mutate(data => {
+                const records = bucket(data, collection);
+                for (let i = 0; i < records.length; i++) {
+                    if (!predicate(records[i])) continue;
+                    records[i] = makeNext(records[i]);
+                    affected += 1;
+                }
+            });
+            return affected;
+        },
         delete: async (collection, id) => refsStore.mutate(data => {
             const records = bucket(data, collection);
             const index = records.findIndex(record => record.id === id);
@@ -441,14 +455,14 @@ export async function renameFolder(id, name) {
 export async function deleteFolder(id) {
     const folders = await listFolders();
     if (!folders.some(folder => folder.id === id)) return;
-    const refs = await listRefs();
     const store = await requireSharedStore();
     await store.delete('ref-folders', id);
-    for (const ref of refs) {
-        if (!Array.isArray(ref.folders) || !ref.folders.includes(id)) continue;
-        const next = normalizePoolReference({ ...ref, folders: ref.folders.filter(folderId => folderId !== id) });
-        await store.update('refs', ref.id, next);
-    }
+    // One batch mutate: a per-reference update loop re-read and re-uploaded
+    // the whole refs file once per record (2N+2 round-trips for N refs).
+    await store.updateWhere('refs',
+        ref => Array.isArray(ref.folders) && ref.folders.includes(id),
+        ref => normalizePoolReference({ ...ref, folders: ref.folders.filter(folderId => folderId !== id) }),
+    );
     const prefs = getFolderPrefs();
     if (prefs.pinned.includes(id)) saveFolderPrefs({ pinned: prefs.pinned.filter(pinnedId => pinnedId !== id) });
     await refreshPoolCache();
@@ -464,15 +478,12 @@ export async function mergeFolders(sourceId, targetId) {
     if (!sourceId || !targetId || sourceId === targetId) return 0;
     const folders = await listFolders();
     if (!folders.some(folder => folder.id === sourceId) || !folders.some(folder => folder.id === targetId)) return 0;
-    const refs = await listRefs();
     const store = await requireSharedStore();
-    let affected = 0;
-    for (const ref of refs) {
-        if (!Array.isArray(ref.folders) || !ref.folders.includes(sourceId)) continue;
-        const next = uniqueStrings([...ref.folders.filter(folderId => folderId !== sourceId), targetId]);
-        await store.update('refs', ref.id, normalizePoolReference({ ...ref, folders: next }));
-        affected += 1;
-    }
+    // One batch mutate for every moved reference (see deleteFolder).
+    const affected = await store.updateWhere('refs',
+        ref => Array.isArray(ref.folders) && ref.folders.includes(sourceId),
+        ref => normalizePoolReference({ ...ref, folders: uniqueStrings([...ref.folders.filter(folderId => folderId !== sourceId), targetId]) }),
+    );
     await store.delete('ref-folders', sourceId);
     const prefs = getFolderPrefs();
     if (prefs.pinned.includes(sourceId)) {

@@ -1,12 +1,7 @@
 // @ts-check
-import { imageResultFromValue, providerError, readJsonResponse, referencesFor, requireInvocation, diagnosticRequestOptions } from './image-base.js';
+import { imageResultFromValue, providerError, readJsonResponse, referencesFor, requireInvocation, diagnosticRequestOptions, ASPECT_SIZES } from './image-base.js';
 import { getProviderDescriptor } from '../provider-descriptors.js';
 
-const ASPECT_SIZES = new Map([
-    ['1:1', '1024x1024'],
-    ['2:3', '1024x1536'], ['3:4', '1024x1536'], ['4:5', '1024x1536'], ['9:16', '1024x1536'],
-    ['3:2', '1536x1024'], ['4:3', '1536x1024'], ['5:4', '1536x1024'], ['16:9', '1536x1024'], ['21:9', '1536x1024'],
-]);
 const POLLINATIONS_DESCRIPTOR = getProviderDescriptor('pollinations-images');
 const QUALITY_VALUES = new Set(POLLINATIONS_DESCRIPTOR?.parameters?.quality || []);
 const RESOLUTION_VALUES = new Set(POLLINATIONS_DESCRIPTOR?.parameters?.resolution || []);

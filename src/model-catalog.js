@@ -75,6 +75,10 @@ function referenceState(item) {
         ?? item.references_supported ?? item.referencesSupported;
     if (value === true || value === 'supported') return 'supported';
     if (value === false || value === 'unsupported' || imageToImage === false) return 'unsupported';
+    // A declared ceiling of 0 means the model cannot take references at all —
+    // same contract the connection card and reference policy treat as
+    // 'unsupported' downstream.
+    if (maxReferences(item) === 0) return 'unsupported';
     if (Number.isSafeInteger(parameters.max_input_images) && parameters.max_input_images > 0) return 'supported';
     return 'unknown';
 }

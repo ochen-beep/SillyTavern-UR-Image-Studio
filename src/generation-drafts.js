@@ -9,12 +9,7 @@
 
 import { LF_GENERATION_DRAFT_PREFIX } from './core.js';
 import { STUDIO_CHAT_ID } from './studio-scope.js';
-
-/**
- * Per-draft-key promise chain used to serialize read-modify-write operations
- * (in particular `startStage1Run`) without blocking unrelated drafts.
- */
-const draftLocks = new Map();
+import { serialize } from './serialize.js';
 
 /**
  * Run `fn` serialized by draft key. Concurrent calls for the same key queue
@@ -27,12 +22,7 @@ const draftLocks = new Map();
  * @template T
  */
 function withDraftLock(chatId, msgId, fn) {
-    const key = generationDraftKey(chatId, msgId);
-    const next = (draftLocks.get(key) || Promise.resolve()).then(fn, fn);
-    draftLocks.set(key, next);
-    return next.finally(() => {
-        if (draftLocks.get(key) === next) draftLocks.delete(key);
-    });
+    return serialize(`draft:${generationDraftKey(chatId, msgId)}`, fn);
 }
 
 /**

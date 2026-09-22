@@ -8,6 +8,7 @@ import { decompress as fzstdDecompress } from './vendor/fzstd.esm.js';
 // only at runtime (inside fetchWithTimeout), not at module load time.
 import { recordFromFetch, recordFromFetchError } from './netdump.js';
 import { tunnelBypassHeaders } from './tunnel-bypass.js';
+import { serialize } from './serialize.js';
 // Inline trigger registry: pure module (no core import) — no cycle. Used by
 // loadSettings to normalize settings.inlineTriggers (see defaultSettings).
 import { sanitizeTriggerList, DEFAULT_TRIGGERS } from './inline/triggers.js';

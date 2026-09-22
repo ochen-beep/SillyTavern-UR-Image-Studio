@@ -4,8 +4,9 @@
  * инлайн-задачи чата + все мостовые вызовы. Один платный POST автоматики
  * за раз; ручная генерация и пачечная очередь живут в своих лейнах как раньше.
  */
+import { serialize } from './serialize.js';
 
-let _chain = Promise.resolve();
+const AUTOLANE_KEY = 'uris-autolane';
 
 /**
  * Поставить задачу в автолейн. Задача стартует по завершении предыдущей
@@ -15,7 +16,5 @@ let _chain = Promise.resolve();
  * @returns {Promise<T>}
  */
 export function enqueueAutoLane(fn) {
-    const pending = _chain.then(fn, fn);
-    _chain = pending.catch(() => {});
-    return pending;
+    return serialize(AUTOLANE_KEY, fn);
 }

@@ -15,14 +15,12 @@
  * Never throws for unreachable-but-classified outcomes; throws one aggregated
  * error only when every candidate × auth attempt failed.
  */
-import { catalogRequest, buildVersionedUrl, buildPollinationsModelsUrl, buildNaisteraModelsUrl, buildNanoGptImageModelsUrl, boundedNaisteraModel } from './catalog.js';
+import { catalogRequest, buildVersionedUrl, buildPollinationsModelsUrl, buildNaisteraModelsUrl, buildNanoGptImageModelsUrl } from './catalog.js';
 import { proxiedFetch as defaultProxiedFetch } from './proxy.js';
 import { validatePollinationsToken } from './providers/image-pollinations.js';
 import { validateNaisteraToken } from './providers/image-naistera.js';
 import { normalizeModelCatalog } from './model-catalog.js';
 import { recordDiagnosticEvent } from './diagnostic-events.js';
-
-const MAX_MODEL_IDS = 500;
 
 function nativeModelsUrl(endpoint) {
     const base = String(endpoint || '').trim().replace(/\/+$/, '');
@@ -63,6 +61,36 @@ function isAuthShapedFailure(error) {
     const message = String(error?.message || '');
     return /HTTP 40[13]/.test(message)
         || /invalid token|api[ _-]?key|unauthorized|forbidden|auth/i.test(message);
+}
+
+/**
+ * One catalog fetch shared by the Naistera/Pollinations/NanoGPT branches:
+ * explicit delivery mode for the first try, the single safe CORS retry
+ * (a preflight refusal means nothing was sent), and the same user-facing
+ * error wrapping. Returns { payload, delivery }.
+ */
+async function fetchCatalogPayload({ url, apiKey = '', headers = {}, timeoutMs, signal, corsMode, fetcher, proxiedFetch, errorPrefix, keepReauth = true }) {
+    let payload;
+    let delivery = 'direct';
+    try {
+        const attempt = mode => catalogRequest(url, apiKey, fetcher, proxiedFetch, headers, timeoutMs, signal, mode);
+        try {
+            payload = corsMode === 'proxy' ? await attempt('proxy') : await attempt('direct');
+            if (corsMode === 'proxy') delivery = 'proxy';
+        } catch (error) {
+            if (corsMode !== 'direct' && error?.code === 'CATALOG_CORS_BLOCK') {
+                payload = await attempt('proxy');
+                delivery = 'proxy';
+            } else throw error;
+        }
+    } catch (error) {
+        const wrapped = new Error(`${errorPrefix}: ${error?.message || error}`);
+        if (error?.code) wrapped.code = error.code;
+        if (Number.isSafeInteger(error?.httpStatus)) wrapped.httpStatus = error.httpStatus;
+        if (keepReauth && error?.reauthRequired === true) wrapped.reauthRequired = true;
+        throw wrapped;
+    }
+    return { payload, delivery };
 }
 
 function extractModels(payload, allowPollinations = false) {
@@ -109,42 +137,19 @@ async function runProbeConnection(input = {}) {
         const token = String(apiKey || '').trim();
         validateNaisteraToken(token);
         const url = buildNaisteraModelsUrl(endpointText);
-        let payload;
-        let delivery = 'direct';
-        try {
-            const attempt = deliveryMode => catalogRequest(url, token, fetcher, proxiedFetch, {}, timeoutMs, signal, deliveryMode);
-            try {
-                payload = corsMode === 'proxy' ? await attempt('proxy') : await attempt('direct');
-                if (corsMode === 'proxy') delivery = 'proxy';
-            } catch (error) {
-                if (corsMode !== 'direct' && error?.code === 'CATALOG_CORS_BLOCK') {
-                    payload = await attempt('proxy');
-                    delivery = 'proxy';
-                } else throw error;
-            }
-        } catch (error) {
-            const wrapped = new Error(`Не удалось получить каталог моделей Naistera: ${error?.message || error}`);
-            if (error?.code) wrapped.code = error.code;
-            if (Number.isSafeInteger(error?.httpStatus)) wrapped.httpStatus = error.httpStatus;
-            if (error?.reauthRequired === true) wrapped.reauthRequired = true;
-            throw wrapped;
-        }
+        const { payload, delivery } = await fetchCatalogPayload({
+            url, apiKey: token, timeoutMs, signal, corsMode, fetcher, proxiedFetch,
+            errorPrefix: 'Не удалось получить каталог моделей Naistera',
+        });
         const list = Array.isArray(payload) ? payload : (Array.isArray(payload?.models) ? payload.models : Array.isArray(payload?.data) ? payload.data : null);
         if (!list) throw new Error('Naistera returned an unexpected /api/models shape (expected a JSON array).');
-        const modelMetadata = [];
-        const seen = new Set();
-        for (const item of list) {
-            const metadata = boundedNaisteraModel(item);
-            if (!metadata || metadata.mediaKind === 'video' || seen.has(metadata.modelId)) continue;
-            seen.add(metadata.modelId);
-            modelMetadata.push({
-                ...metadata,
-                ...(metadata.mediaKind ? {} : { imageGeneration: true }),
-                source: 'naistera-models',
-                provider: 'naistera',
-            });
-            if (modelMetadata.length >= MAX_MODEL_IDS) break;
-        }
+        // normalizeModelCatalog is the persistence boundary (bounded, secret-
+        // stripped) — the same normalizer the Pollinations branch persists.
+        const { entries } = normalizeModelCatalog(payload, { source: 'naistera-models', provider: 'naistera', excludeVideo: true });
+        const modelMetadata = entries.map(entry => ({
+            ...entry,
+            ...(entry.mediaKind ? {} : { imageGeneration: true }),
+        }));
         if (!modelMetadata.length) throw new Error('Naistera returned an empty model catalog.');
         return {
             apiShape: 'naistera',
@@ -162,26 +167,10 @@ async function runProbeConnection(input = {}) {
         const token = String(apiKey || '').trim();
         if (token) validatePollinationsToken(token);
         const url = buildPollinationsModelsUrl(endpointText);
-        let payload;
-        let delivery = 'direct';
-        try {
-            const attempt = deliveryMode => catalogRequest(url, '', fetcher, proxiedFetch, {}, timeoutMs, signal, deliveryMode);
-            try {
-                payload = corsMode === 'proxy' ? await attempt('proxy') : await attempt('direct');
-                if (corsMode === 'proxy') delivery = 'proxy';
-            } catch (error) {
-                if (corsMode !== 'direct' && error?.code === 'CATALOG_CORS_BLOCK') {
-                    payload = await attempt('proxy');
-                    delivery = 'proxy';
-                } else throw error;
-            }
-        } catch (error) {
-            const wrapped = new Error(`Не удалось получить публичный каталог Pollinations: ${error?.message || error}`);
-            if (error?.code) wrapped.code = error.code;
-            if (Number.isSafeInteger(error?.httpStatus)) wrapped.httpStatus = error.httpStatus;
-            if (error?.reauthRequired === true) wrapped.reauthRequired = true;
-            throw wrapped;
-        }
+        const { payload, delivery } = await fetchCatalogPayload({
+            url, timeoutMs, signal, corsMode, fetcher, proxiedFetch,
+            errorPrefix: 'Не удалось получить публичный каталог Pollinations',
+        });
         const { shape, ids, modelMetadata } = extractModels(payload, true);
         if (shape !== 'pollinations' || !ids.length) throw new Error('Pollinations returned an empty or invalid image model catalog.');
         return {
@@ -199,26 +188,12 @@ async function runProbeConnection(input = {}) {
     }
     if (isNanoGptEndpoint(endpointText)) {
         const url = buildNanoGptImageModelsUrl(endpointText);
-        let payload;
-        let delivery = 'direct';
-        try {
-            const headers = apiKey ? { Authorization: `Bearer ${apiKey}` } : {};
-            const attempt = mode => catalogRequest(url, apiKey, fetcher, proxiedFetch, headers, timeoutMs, signal, mode);
-            try {
-                payload = corsMode === 'proxy' ? await attempt('proxy') : await attempt('direct');
-                if (corsMode === 'proxy') delivery = 'proxy';
-            } catch (error) {
-                if (corsMode !== 'direct' && error?.code === 'CATALOG_CORS_BLOCK') {
-                    payload = await attempt('proxy');
-                    delivery = 'proxy';
-                } else throw error;
-            }
-        } catch (error) {
-            const wrapped = new Error(`Не удалось получить image-каталог NanoGPT: ${error?.message || error}`);
-            if (error?.code) wrapped.code = error.code;
-            if (Number.isSafeInteger(error?.httpStatus)) wrapped.httpStatus = error.httpStatus;
-            throw wrapped;
-        }
+        // NanoGPT wrap never sets reauthRequired (historical contract).
+        const { payload, delivery } = await fetchCatalogPayload({
+            url, apiKey, timeoutMs, signal, corsMode, fetcher, proxiedFetch,
+            headers: apiKey ? { Authorization: `Bearer ${apiKey}` } : {},
+            errorPrefix: 'Не удалось получить image-каталог NanoGPT', keepReauth: false,
+        });
         const result = normalizeModelCatalog(payload, { source: 'nanogpt-image-models', provider: 'nanogpt' });
         if (!result.entries.length) throw new Error('NanoGPT returned an empty image model catalog.');
         return {

@@ -127,6 +127,21 @@ export function makeReferenceStore() {
             collections.set(name, records.map(record => record.id === id ? persisted : record));
             return structuredClone(persisted);
         },
+        async updateWhere(name, predicate, makeNext) {
+            const records = (collections.get(name) || []).map(record => structuredClone(record));
+            const next = [];
+            let affected = 0;
+            for (const record of records) {
+                let item = record;
+                if (predicate(item)) {
+                    item = { ...structuredClone(makeNext(item)), updatedAt: 'server-time' };
+                    affected += 1;
+                }
+                next.push(item);
+            }
+            collections.set(name, next);
+            return affected;
+        },
         async delete(name, id) {
             collections.set(name, (collections.get(name) || []).filter(record => record.id !== id));
         },

@@ -1,9 +1,10 @@
 // @ts-check
 import { trace } from '../core.js';
 import { summarizeReference } from '../references.js';
-import { endpointBase, imageResultFromValue, providerError, readJsonResponse, referencesFor, requireInvocation, assertEncodedReferenceCount, diagnosticRequestOptions } from './image-base.js';
+import { endpointBase, imageResultFromValue, providerError, readJsonResponse, referencesFor, requireInvocation, assertEncodedReferenceCount, diagnosticRequestOptions, ASPECT_SIZES } from './image-base.js';
 
 // Map all VALID_ASPECT_RATIOS (core.js) to OpenAI-compatible image sizes. The
+// shared table lives in image-base.js (same vocabulary as Pollinations). The
 // previous table only covered 5 ratios; selecting 3:4, 4:3, 4:5, 5:4 or 21:9
 // used to omit `size` entirely, so the provider picked an aspect freely
 // (often 9:16) and the user's choice was silently ignored.
@@ -16,15 +17,6 @@ import { endpointBase, imageResultFromValue, providerError, readJsonResponse, re
 // The family is derived from the model id; unknown families use the
 // gpt-image table (the current gateway mainstream). Unmapped ratios still
 // omit `size` and surface a paramWarning.
-const ASPECT_SIZES = new Map([
-  ['1:1', '1024x1024'],
-  // Portrait
-  ['2:3', '1024x1536'], ['3:4', '1024x1536'], ['4:5', '1024x1536'], ['9:16', '1024x1536'],
-  // Landscape
-  ['3:2', '1536x1024'], ['4:3', '1536x1024'], ['5:4', '1536x1024'], ['16:9', '1536x1024'],
-  // Ultrawide landscape - closest 2K landscape slot.
-  ['21:9', '1536x1024'],
-]);
 const ASPECT_SIZES_DALLE = new Map([
   ['1:1', '1024x1024'],
   // Landscape (dall-e-3's only wide slot)

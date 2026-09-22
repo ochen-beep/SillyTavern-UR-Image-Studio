@@ -33,10 +33,14 @@ function belongsToChat(card, chatId) {
     return card?.provenance?.chatId === chatId;
 }
 
-/** List this chat's shared cards; localforage is migration input only. */
-export async function getGallery(chatId) {
+/**
+ * List this chat's shared cards; localforage is migration input only.
+ * Reconcile (a server-side scan of every folder) is opt-in — it is a
+ * toolbar button in the gallery, not a per-render cost (v0.9.4).
+ */
+export async function getGallery(chatId, { reconcile = false } = {}) {
     let cards = [];
-    try { cards = await listCards(); }
+    try { cards = await listCards({ reconcile }); }
     catch (error) { log('Native gallery unavailable:', error.message); }
     return cards
         .filter(card => belongsToChat(card, chatId) && card.hidden !== true)

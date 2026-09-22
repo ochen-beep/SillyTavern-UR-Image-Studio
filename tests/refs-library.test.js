@@ -107,7 +107,10 @@ test('folder deletion patches only injected shared refs that contain the deleted
         ['aria', ['heroes']], ['bob', ['heroes']],
     ]);
     assert.ok(store.calls.some(call => call[0] === 'delete' && call[1] === 'ref-folders'));
-    assert.ok(store.calls.some(call => call[0] === 'update' && call[1] === 'refs' && call[2] === 'aria'));
+    // Batch contract: one updateWhere pass over refs — a per-reference update
+    // loop re-read and re-uploaded the whole file N times (2N+2 round-trips).
+    const refsPatches = store.calls.filter(call => call[0] === 'updateWhere' && call[1] === 'refs');
+    assert.equal(refsPatches.length, 1, 'refs patch must be a single batch mutate');
     assert.ok(!store.calls.some(call => call[0] === 'update' && call[1] === 'refs' && call[2] === 'bob'));
 });
 
@@ -363,6 +366,22 @@ function makeRefStore(initial = {}) {
             const persisted = { ...structuredClone(payload), updatedAt: 'server-time' };
             collections.set(name, records.map(record => record.id === id ? persisted : record));
             return structuredClone(persisted);
+        },
+        async updateWhere(name, predicate, makeNext) {
+            calls.push(['updateWhere', name]);
+            const records = (collections.get(name) || []).map(record => structuredClone(record));
+            const next = [];
+            let affected = 0;
+            for (const record of records) {
+                let item = record;
+                if (predicate(item)) {
+                    item = { ...structuredClone(makeNext(item)), updatedAt: 'server-time' };
+                    affected += 1;
+                }
+                next.push(item);
+            }
+            collections.set(name, next);
+            return affected;
         },
         async delete(name, id) {
             calls.push(['delete', name, id]);

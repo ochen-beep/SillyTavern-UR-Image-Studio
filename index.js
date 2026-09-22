@@ -110,15 +110,15 @@ async function init() {
 
     if (state.settings.collapsed === undefined) state.settings.collapsed = true;
 
-    // Populate the browser-local reference cache before UI consumers read it.
-    await refreshPoolCache();
-
     // Resolve the file-backed stores before the first render: their contents
     // live on the server now, and the first read must see the migrated/persisted
     // data rather than an empty mirror. This is also what performs the one-time
     // migration out of extensionSettings (and drops the settings copy, which is
-    // what keeps settings.json small).
+    // what keeps settings.json small). refreshPoolCache joins the same batch —
+    // it only reads the refs store, so running it first serialized the whole
+    // startup behind an extra verify+GET round-trip.
     await Promise.all([
+        refreshPoolCache(),
         ensureGalleryStoreReady(),
         ensureRefsStoreReady(),
         ensureParamPresetStoreReady(),

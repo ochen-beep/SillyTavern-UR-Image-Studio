@@ -255,6 +255,37 @@ test('summary ignores legacy server connection templates', () => {
     assert.equal(summary.secretsIncluded, false);
 });
 
+// Регрессия v0.9.4: summarizeBackup читал только legacy localforage-ключи,
+// хотя актуальные бэкапы несут коллекции в `shared` — диалог импорта показывал
+// «Референсы: 0» для бэкапа, который их содержит.
+test('summary counts shared collections and falls back to legacy localforage keys', () => {
+    const modern = summarizeBackup({
+        shared: {
+            refs: [{ id: 'r1' }, { id: 'r2' }],
+            folders: [{ id: 'f1' }],
+            templates: [{ id: 't1' }, { id: 't2' }, { id: 't3' }],
+            presets: [{ id: 'p1' }],
+        },
+        data: { localforage: {}, chatMetadata: {} },
+    });
+    assert.deepEqual(
+        { refs: modern.refs, folders: modern.folders, templates: modern.templates },
+        { refs: 2, folders: 1, templates: 3 },
+    );
+
+    const legacy = summarizeBackup({
+        shared: {},
+        data: {
+            localforage: { [LF_REFS_POOL]: [{ id: 'r1' }], [LF_REFS_FOLDERS]: [{ id: 'f1' }], [LF_TEMPLATES]: [{ id: 't1' }] },
+            chatMetadata: {},
+        },
+    });
+    assert.deepEqual(
+        { refs: legacy.refs, folders: legacy.folders, templates: legacy.templates },
+        { refs: 1, folders: 1, templates: 1 },
+    );
+});
+
 test('export includes the active chat binding only', async () => {
     chatId = 'chat-1';
     chatMetadata = {
