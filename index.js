@@ -403,7 +403,7 @@ function createSettingsPanel() {
             <div class="flex-row"><div id="uris_export_diagnostic" class="menu_button uris-w-full"><i class="fa-solid fa-stethoscope"></i> Экспорт диагностики</div></div>
             <div class="flex-row"><div id="uris_export_network" class="menu_button uris-w-full"><i class="fa-solid fa-network-wired"></i> Экспорт сетевого дампа</div></div>
             <div class="flex-row"><div id="uris_clear_diagnostic" class="menu_button uris-w-full"><i class="fa-solid fa-eraser"></i> Очистить всю диагностику</div></div>
-            <small class="uris_hint">Диагностика содержит технические события и ошибки текущей сессии. Сетевой дамп выгружается отдельно и может содержать ограниченные prompt/ответы модели; API-ключи и полные бинарные изображения не экспортируются. Очистка удаляет журналы и локальные recovery-записи.</small>
+            <small class="uris_hint">Диагностика содержит технические события и ошибки текущей сессии. Сетевой дамп выгружается отдельно и содержит только метаданные (адреса, статусы, длительность, имена заголовков, размеры тел) — промпты и тела запросов/ответов не записываются. Очистка удаляет журналы и локальные recovery-записи.</small>
         </div>`;
     container.appendChild(div);
     bindSettingsPanel(div);

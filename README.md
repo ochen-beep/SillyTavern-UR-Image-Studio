@@ -95,7 +95,7 @@ Image metadata, templates, parameter presets, references and the studio config l
 
 #### Diagnostics
 
-The network dump records the last 200 extension requests (metadata, not bodies) and is exported separately. The event log survives reloads and contains only metadata: timestamps, stages, generations, errors. The diagnostic export never includes scene text, prompts, API keys, or raw responses.
+The network dump records the last 50 extension requests — metadata only (scrubbed URLs, statuses, timings, header names, body sizes; no prompts or bodies) — and is exported separately. The event log survives reloads and contains only metadata: timestamps, stages, generations, errors. The diagnostic export never includes scene text, prompts, API keys, or raw responses.
 
 #### Development
 

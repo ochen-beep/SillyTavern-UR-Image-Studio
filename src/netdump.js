@@ -1,39 +1,29 @@
 // @ts-check
 /**
- * UR Image Studio — network dumper: records image-API and Stage1 text-LLM
- * requests/responses in IndexedDB (via ST localforage) for later export as a
- * separate network-evidence file and debugging of "no response / no image" bugs.
+ * UR Image Studio — network dumper: records transport-level METADATA of
+ * image-API and Stage1 text-LLM requests/responses in IndexedDB (via ST
+ * localforage) for later export as a separate network-evidence file.
  *
- * Purpose: on generation failure (Gemini responds 200 OK without inlineData,
- * ERR_CONNECTION_CLOSED, etc.) the full response structure is preserved
- * (candidates, finishReason, safetyRatings, model text) — the very signal
- * that is currently lost. The proxy is stable; the bug is almost always on
- * the upstream API side, and without the response body the cause is invisible.
+ * Metadata only (dump format v2): scrubbed URLs, method, status, timing,
+ * response content-type/length, header NAMES, body kind/size. Request and
+ * response BODIES are never written — no prompts, no model text, no upstream
+ * error payloads. Upstream failure reasons still reach the user through the
+ * error pool and the diagnostic journal (both metadata-sanitized); this dump
+ * answers "did the request leave, where, and what came back on the wire",
+ * not "what exactly did the model say".
  *
  * Privacy:
- *   - Authorization / x-goog-api-key are always stripped (replaced with '<redacted>').
- *   - base64 references (inlineData.data / inline_data.data) are collapsed to
- *     { mimeType, _bytes } to avoid dragging megabytes of images into the dump.
- *   - Image in response (detected by magic bytes) is not written as a blob — only
- *     metadata { mime, _bytes, _skipped: true } (it ends up in the gallery anyway).
- *   - The profile path Stage1 (ConnectionManagerRequestService) goes through the ST
- *     server — apiKey is unavailable here (server-side), only profile id/model
- *     and message window are written.
- *
- * Not recorded (kept out on purpose — the unified dump was growing megabytes of
- * duplicates and public data):
- *   - Model-catalog requests (/v1/models, /image/models, /api/models,
- *     /images/models): public bodies, the largest JSON in the journal, re-fetched
- *     on every catalog refresh — and they evicted useful generation evidence
- *     from the MAX_NET_ENTRIES rotation.
- *   - Structured dispatch metadata (route/conn/model/operation/delivery/...):
- *     the diagnostic journal (diagnostic-events.js) already stores it per
- *     requestId; entries here carry only that requestId for correlation.
- *   - Derived response facts (envelope/jsonMeta): recomputable from resp.body,
- *     which sits in the same entry.
- *   - Request bodies are capped in total (head+tail preview beyond 32 KB): the
- *     message history duplicates across entries, but the system prompt (head
- *     of `messages`) and the current prompt (last message, tail) survive.
+ *   - Only header NAMES are stored (values dropped entirely — auth, CSRF
+ *     tokens and everything else can not leak through a name).
+ *   - URL query credentials (key/token/api_key/…) are replaced with '<redacted>'.
+ *   - Body content is never stored: only the byte size and the kind
+ *     (json/text/form + form field names and blob types/sizes).
+ *   - Not recorded at all: model-catalog requests (/v1/models, /image/models,
+ *     /api/models, /images/models), ST-internal routes (/api/secrets, …), the
+ *     proxy availability probe (example.com).
+ *   - Entries written by dump format v1 (which stored capped bodies) are
+ *     purged from storage on first read after the upgrade — an export under
+ *     the v2 "metadata only" banner can not carry pre-upgrade bodies.
  *
  * Architecture: non-blocking writes. fetchWithTimeout/proxy are wrapped so that
  * dumper errors NEVER break generation — all recorder functions are called
@@ -43,24 +33,15 @@
  * Rotation when exceeding MAX_NET_ENTRIES (old entries are discarded).
  */
 
-import { DISPLAY_NAME, extractTextFromResponse, readResponseBody } from './core.js';
+import { DISPLAY_NAME } from './core.js';
 import { recordDiagnosticEvent } from './diagnostic-events.js';
 
 export const LF_NETDUMP = 'uris_netdump';
-// 2–3 entries per generation (paid POST, occasional image download, Stage1);
-// 500 holds a working day of evidence. Eviction prefers successes: entries with
-// an error are the whole point of the dump and outlive the routine 200s.
-export const MAX_NET_ENTRIES = 500;
-const DUMP_VERSION = 1;
-const MAX_JSON_BYTES = 65536;   // 64 KB — limit on full response JSON
-const MAX_TEXT_BYTES = 8192;     // 8 KB — on non-JSON/text response
-const MAX_STR_IN_MESSAGES = 2000;
-// Total cap on a compacted request body. Responses already had MAX_JSON_BYTES;
-// requests had no total limit, so a text-LLM message window (tens of KB that
-// duplicate across consecutive entries) was stored in full every time.
-const MAX_REQ_JSON_BYTES = 32768;
-const REQ_HEAD_BYTES = 24576;
-const REQ_TAIL_BYTES = 8192;
+// ~15 generations of evidence (2–3 entries per generation: paid POST, occasional
+// image download, Stage1). Eviction prefers successes: entries with an error are
+// the whole point of the dump and outlive the routine 200s.
+export const MAX_NET_ENTRIES = 50;
+const DUMP_VERSION = 2;
 
 // Hosts/patterns NOT written to the dump (internal ST routes, probe).
 const SKIP_HOSTS = new Set(['example.com']);
@@ -77,7 +58,9 @@ async function _readEntries() {
     if (!lf) return [];
     try {
         const v = await lf.getItem(LF_NETDUMP);
-        return Array.isArray(v) ? v : [];
+        // v1 entries carried capped request/response bodies; drop them so a
+        // metadata-only export can never carry pre-upgrade prompt text.
+        return (Array.isArray(v) ? v : []).filter((e) => e && e.v === DUMP_VERSION);
     } catch { return []; }
 }
 
@@ -156,75 +139,45 @@ export async function clearNetDumps() {
 
 // ─── Filtering ───
 
-const AUTH_HEADERS = new Set(['authorization', 'x-goog-api-key', 'api-key', 'x-api-key', 'proxy-authorization']);
-
-// String fields we do NOT collapse — their content is needed for analysis
-// (model prompts/text-LLM responses). Other long strings (thoughtSignature,
-// signature, embedding, any blobs) are collapsed to { _kind, _bytes }.
-const KEEP_LONG_STRING_KEYS = new Set([
-    'text', 'content', 'prompt', 'message', 'reply', 'answer',
-    'role', 'finishReason', 'finish_reason', 'model', 'modelVersion',
-    'mimeType', 'mime_type', 'reasoning', 'summary', 'thought',
-    // system_instruction/system text needed for prompt analysis.
-    'system_instruction', 'system',
-]);
-// String length threshold above which non-keep keys are collapsed. Text
-// (keep-set) fields are preserved up to MAX_TEXT_BYTES — so one prompt
-// doesn't inflate the dump, but model content remains visible.
-const LONG_STRING_THRESHOLD = 1024;
-
 /**
- * Recursively collapse base64 blobs (inlineData.data / inline_data.data) and
- * long string fields (thoughtSignature/signature/embedding/any blob)
- * to { mimeType, _bytes } / { _kind:'long-string-dropped', _bytes, _key }.
- * Preserves text parts and keep-set fields (prompt needed for analysis).
- * Returns a NEW object (does not mutate the original) — safe for dump.
+ * Header metadata: NAMES only, in their original order. Values are dropped
+ * entirely — a name can not leak a credential, and the name list still shows
+ * what was sent (auth present? content-type?).
+ * @returns {string[]|null|undefined}
  */
-export function compactBase64Blobs(node, depth = 0) {
-    if (depth > 16 || node == null) return node;
-    if (Array.isArray(node)) return node.map((x) => compactBase64Blobs(x, depth + 1));
-    if (typeof node !== 'object') {
-        // Long string outside an object (never on the main path: objects go
-        // through the branch below with a keep-check; a string becomes an
-        // argument only on recursion from a non-keep key value — collapsing
-        // is acceptable there, but for safety we just return as-is; the
-        // decisive keep-test is performed at the parent level).
-        return node;
-    }
-    // Inline photo — camelCase and snake_case.
-    if (typeof node.data === 'string' && typeof node.mimeType === 'string' && node.data.length > 128) {
-        return { mimeType: node.mimeType, _bytes: node.data.length, _kind: 'inlineData-dropped' };
-    }
-    if (typeof node.data === 'string' && typeof node.mime_type === 'string' && node.data.length > 128) {
-        return { mime_type: node.mime_type, _bytes: node.data.length, _kind: 'inline_data-dropped' };
-    }
-    const out = {};
-    for (const k of Object.keys(node)) {
-        const v = node[k];
-        // Long string of a non-keep key (thoughtSignature/signature/embedding/...)
-        // is collapsed. Keep keys (text/prompt/...) are preserved in full —
-        // this is the content the dump is meant to capture.
-        if (typeof v === 'string' && v.length > LONG_STRING_THRESHOLD && !KEEP_LONG_STRING_KEYS.has(k)) {
-            out[k] = { _kind: 'long-string-dropped', _bytes: v.length, _key: k };
-        } else if (typeof v === 'string' && v.length > MAX_TEXT_BYTES) {
-            // Keep key but string is abnormally long (>8 KB) — limit it,
-            // otherwise one prompt could occupy tens of KB in the dump.
-            out[k] = v.slice(0, MAX_TEXT_BYTES) + '\n[truncated]';
-        } else {
-            out[k] = compactBase64Blobs(v, depth + 1);
-        }
-    }
-    return out;
-}
-
-/** Filter headers: strip auth. */
 export function filterHeaders(headers) {
     if (!headers) return headers;
-    const out = {};
-    for (const [k, v] of Object.entries(headers)) {
-        out[k] = AUTH_HEADERS.has(String(k).toLowerCase()) ? '<redacted>' : v;
+    return Object.keys(headers);
+}
+
+/**
+ * Request-body metadata: kind and size, never content. FormData contributes
+ * field NAMES and blob types/sizes (names are structure, not payload).
+ */
+export function filterRequestBody(body) {
+    if (body == null) return null;
+    if (typeof FormData !== 'undefined' && body instanceof FormData) {
+        const fields = [];
+        try {
+            for (const [k, v] of body.entries()) {
+                fields.push(typeof v === 'string'
+                    ? { field: k, kind: 'text' }
+                    : { field: k, kind: 'blob', type: v.type || null, size: v.size });
+            }
+        } catch { /* non-critical */ }
+        return { _kind: 'form', fields };
     }
-    return out;
+    if (typeof body === 'string') {
+        let kind = 'text';
+        try { const obj = JSON.parse(body); if (obj && typeof obj === 'object') kind = 'json'; } catch { /* not JSON */ }
+        return { _kind: kind, _bytes: body.length };
+    }
+    if (typeof body === 'object') {
+        let bytes = null;
+        try { bytes = JSON.stringify(body).length; } catch { /* unserializable */ }
+        return { _kind: 'json', _bytes: bytes };
+    }
+    return { _kind: 'other', _bytes: String(body).length };
 }
 
 /**
@@ -268,82 +221,27 @@ function responseCorrelationId(response) {
 }
 
 /**
- * Cap a compacted request body at MAX_REQ_JSON_BYTES. Head+tail split, not the
- * start-only slice the response preview uses: a text-LLM request puts the
- * system prompt at the head of `messages` and the current prompt in the LAST
- * message, so a start-only preview would cut off exactly the prompt the entry
- * exists to capture. Small bodies pass through unchanged (bare object).
+ * Response-body METADATA: kind from the content-type header and the declared
+ * size — the body itself is never read for the dump.
  */
-function capRequestBody(compacted, originalBytes) {
-    let str;
-    try { str = JSON.stringify(compacted); } catch { return compacted; }
-    if (str.length <= MAX_REQ_JSON_BYTES) return compacted;
-    const head = str.slice(0, REQ_HEAD_BYTES);
-    const tail = str.slice(-REQ_TAIL_BYTES);
+function responseMeta(response) {
+    let contentType = '';
+    try { contentType = response?.headers?.get?.('content-type') || ''; } catch { /* diagnostic only */ }
+    let contentLength = null;
+    try {
+        const raw = response?.headers?.get?.('content-length');
+        const n = raw != null && raw !== '' ? Number(raw) : NaN;
+        if (Number.isFinite(n)) contentLength = n;
+    } catch { /* diagnostic only */ }
+    const kind = /json/i.test(contentType) ? 'json'
+        : /image\//i.test(contentType) ? 'image'
+            : /^text\//i.test(contentType) ? 'text'
+                : (contentType ? 'other' : 'unknown');
     return {
-        _kind: 'json',
-        _truncated: true,
-        preview: `${head}\n…[${str.length - head.length - tail.length} chars truncated]…\n${tail}`,
-        _bytes: originalBytes ?? str.length,
-        _previewBytes: head.length + tail.length,
+        _kind: kind,
+        ...(contentType ? { contentType } : {}),
+        ...(contentLength != null ? { _bytes: contentLength } : {}),
     };
-}
-
-export function filterRequestBody(body) {
-    if (body == null) return null;
-    if (typeof body === 'string') {
-        // Attempt to parse JSON and collapse base64 blobs.
-        try {
-            const obj = JSON.parse(body);
-            if (obj && typeof obj === 'object') return capRequestBody(compactBase64Blobs(obj), body.length);
-        } catch { /* not JSON — return truncated string */ }
-        return body.length > MAX_TEXT_BYTES ? body.slice(0, MAX_TEXT_BYTES) + '\n[truncated]' : body;
-    }
-    if (typeof FormData !== 'undefined' && body instanceof FormData) {
-        const out = { _form: [] };
-        try {
-            for (const [k, v] of body.entries()) {
-                if (v instanceof Blob) out._form.push({ field: k, _blobType: v.type, _blobSize: v.size });
-                else out._form.push({ field: k, value: String(v) });
-            }
-        } catch { /* non-critical */ }
-        return out;
-    }
-    if (typeof body === 'object') return capRequestBody(compactBase64Blobs(body), null);
-    return String(body);
-}
-
-/**
- * Filter response body previously read as { bytes, text, mime }.
- * Images — skip (metadata only). JSON — full object (with truncation). Text — short.
- */
-export function filterResponseBody({ bytes, text, mime }) {
-    if (mime) {
-        // Image — don't write blob, only metadata (it's already in the gallery).
-        return { _kind: 'image', mime, _bytes: bytes.length, _skipped: true };
-    }
-    if (text != null) {
-        // JSON path: candidates/finishReason/safetyRatings — this is the goal.
-        try {
-            const obj = JSON.parse(text);
-            if (obj && typeof obj === 'object') {
-                const compacted = compactBase64Blobs(obj);
-                let str = JSON.stringify(compacted);
-                if (str.length <= MAX_JSON_BYTES) return { _kind: 'json', json: compacted, _bytes: text.length };
-                // Compactor collapsed blobs (inlineData/thoughtSignature/...), but
-                // the remaining JSON is still > MAX_JSON_BYTES (e.g., a very long
-                // model text response). Actually truncate the string, not just flag it.
-                // Truncate at string/object boundary to preserve preview validity.
-                const preview = str.slice(0, MAX_JSON_BYTES);
-                return { _kind: 'json', _truncated: true, preview, _bytes: text.length, _previewBytes: preview.length };
-            }
-        } catch { /* not JSON */ }
-        // Text response (safety message, plain text).
-        return text.length > MAX_TEXT_BYTES
-            ? { _kind: 'text', text: text.slice(0, MAX_TEXT_BYTES) + '\n[truncated]', _bytes: text.length }
-            : { _kind: 'text', text, _bytes: text.length };
-    }
-    return { _kind: 'empty', _bytes: bytes?.length ?? 0 };
 }
 
 // ─── Entry classification by URL ───
@@ -352,9 +250,10 @@ export function filterResponseBody({ bytes, text, mime }) {
  * Determine request type ('image' | 'text-llm' | 'download' | 'models' | 'other')
  * and skip flag (internal ST routes / probe / model catalogs). Heuristic by URL/path.
  *
- * Catalog ('models') requests are classified but skipped: public bodies, the
- * largest JSON in the journal, and they evicted generation evidence from the
- * rotation. Catalog failures still surface through the error pool and the log.
+ * Catalog ('models') requests are classified but skipped: public data, the
+ * largest traffic in the journal, re-fetched on every catalog refresh — and
+ * they evicted useful generation evidence from the rotation. Catalog failures
+ * still surface through the error pool and the log.
  */
 export function scrubUrl(rawUrl) {
     try {
@@ -416,29 +315,19 @@ export function classifyUrl(rawUrl) {
 function _newId() {
     return Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
 }
-function _shortStr(s, n = MAX_STR_IN_MESSAGES) {
-    return typeof s === 'string' ? (s.length > n ? s.slice(0, n) + '…' : s) : String(s ?? '');
-}
 
 // ─── Recorders (used from core.js / text-connection.js) ───
 
 /**
- * Record a successful fetch-response (clone for re-reading the body).
- * The options object is saved collapsed. Does NOT throw.
+ * Record a successful fetch-response as METADATA. The body is never read or
+ * cloned. Does NOT throw.
  */
 export async function recordFromFetch(url, options, resp, durationMs) {
     return trackRecorder(async () => {
         const cls = classifyUrl(url);
         if (cls.skip) return;
-        let respBody = null;
-        try {
-            const clone = resp.clone();
-            const { bytes, text, mime } = await readResponseBody(clone);
-            respBody = filterResponseBody({ bytes, text, mime });
-        } catch (e) {
-            respBody = { _kind: 'read-error', error: String(e?.message || e) };
-        }
         const entry = {
+            v: DUMP_VERSION,
             id: _newId(),
             ts: new Date().toISOString(),
             kind: cls.kind,
@@ -457,7 +346,7 @@ export async function recordFromFetch(url, options, resp, durationMs) {
                 contentType: (() => { try { return resp.headers.get('content-type') || ''; } catch { return ''; } })(),
                 headers: responseHeaders(resp),
                 upstreamRequestId: responseCorrelationId(resp),
-                body: respBody,
+                body: responseMeta(resp),
             },
             error: null,
         };
@@ -471,6 +360,7 @@ export async function recordFromFetchError(url, options, err, durationMs) {
         const cls = classifyUrl(url);
         if (cls.skip) return;
         const entry = {
+            v: DUMP_VERSION,
             id: _newId(),
             ts: new Date().toISOString(),
             kind: cls.kind,
@@ -496,11 +386,14 @@ export async function recordFromFetchError(url, options, err, durationMs) {
 }
 
 /**
- * Record a successful profile-path Stage1 response
- * (ConnectionManagerRequestService.sendRequest — ST server route).
+ * Record a profile-path Stage1 attempt (ConnectionManagerRequestService — ST
+ * server route) as METADATA: profile/model identity, message ROLES (not
+ * contents), response top-level keys. No prompts, no extracted text.
  */
 export async function recordFromProfile(profile, messages, response, durationMs, diagnostic = null) {
+    const list = Array.isArray(messages) ? messages : [];
     const entry = {
+        v: DUMP_VERSION,
         id: _newId(),
         ts: new Date().toISOString(),
         kind: 'text-llm-profile',
@@ -512,17 +405,11 @@ export async function recordFromProfile(profile, messages, response, durationMs,
         req: {
             profile: { id: profile?.id, name: profile?.name },
             model: profile?.model || profile?.presetName || null,
-            messages: (Array.isArray(messages) ? messages : []).map((m) => ({
-                role: m?.role,
-                content: _shortStr(typeof m?.content === 'string' ? m.content : JSON.stringify(m?.content ?? '')),
-            })),
+            messages: { count: list.length, roles: list.map((m) => m?.role ?? null) },
         },
         resp: {
-            // Save top-level service fields + extracted text.
             ok: true,
-            extracted: _shortStr(extractTextFromResponse(response), MAX_STR_IN_MESSAGES),
             keys: response && typeof response === 'object' ? Object.keys(response).slice(0, 20) : null,
-            body: _snapshotShallow(response),
         },
         error: null,
     };
@@ -531,7 +418,9 @@ export async function recordFromProfile(profile, messages, response, durationMs,
 
 /** Record a profile-path Stage1 error. */
 export async function recordFromProfileError(profile, messages, err, durationMs, diagnostic = null) {
+    const list = Array.isArray(messages) ? messages : [];
     const entry = {
+        v: DUMP_VERSION,
         id: _newId(),
         ts: new Date().toISOString(),
         kind: 'text-llm-profile',
@@ -543,10 +432,7 @@ export async function recordFromProfileError(profile, messages, err, durationMs,
         req: {
             profile: { id: profile?.id, name: profile?.name },
             model: profile?.model || profile?.presetName || null,
-            messages: (Array.isArray(messages) ? messages : []).map((m) => ({
-                role: m?.role,
-                content: _shortStr(typeof m?.content === 'string' ? m.content : JSON.stringify(m?.content ?? '')),
-            })),
+            messages: { count: list.length, roles: list.map((m) => m?.role ?? null) },
         },
         resp: null,
         error: String(err?.message || err),
@@ -555,34 +441,13 @@ export async function recordFromProfileError(profile, messages, err, durationMs,
     await recordNetEntry(entry);
 }
 
-/** Shallow snapshot of top-level response object fields (for dev analysis); no large blobs. */
-function _snapshotShallow(obj, depth = 0) {
-    if (depth > 3 || obj == null) return obj;
-    if (Array.isArray(obj)) return obj.slice(0, 5).map((x) => _snapshotShallow(x, depth + 1));
-    if (typeof obj === 'object') {
-        const out = {};
-        for (const k of Object.keys(obj).slice(0, 15)) {
-            const v = obj[k];
-            if (typeof v === 'string') {
-                out[k] = v.length > MAX_STR_IN_MESSAGES ? _shortStr(v) : v;
-            } else if (v != null && typeof v === 'object') {
-                out[k] = _snapshotShallow(v, depth + 1);
-            } else {
-                out[k] = v;
-            }
-        }
-        return out;
-    }
-    return obj;
-}
-
 // ─── Export ───
 
 /**
- * Build the network-evidence payload: metadata + entries array.
- * Auth stripped, base64 collapsed. This is exported independently from the
- * metadata diagnostic file. Wait for fire-and-forget recorder writes first so
- * an export started immediately after a response cannot miss its entry.
+ * Build the network-evidence payload: metadata + entries array (v2).
+ * No bodies: prompts and model text are never written. Wait for fire-and-forget
+ * recorder writes first so an export started immediately after a response
+ * cannot miss its entry.
  */
 export async function buildNetDumpPayload() {
     await waitForRecorders();
@@ -593,7 +458,7 @@ export async function buildNetDumpPayload() {
             count: entries.length,
             version: DUMP_VERSION,
             app: DISPLAY_NAME,
-            note: 'Network evidence only. May include bounded prompt/model text previews. Known auth headers are redacted; binary image blobs are collapsed or skipped; model-catalog requests are not recorded; dispatch metadata lives in the diagnostic export keyed by requestId.',
+            note: 'Metadata only: scrubbed URLs, methods, statuses, timings, response content types, header NAMES, body kinds/sizes. No request or response bodies — prompts and model text are never written. Auth headers and query tokens are redacted; model-catalog and ST-internal requests are not recorded; dispatch details live in the diagnostic export keyed by requestId.',
         },
         entries,
     };

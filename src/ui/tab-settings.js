@@ -173,7 +173,7 @@ export function render(root) {
                     <button type="button" class="uris-btn uris-btn-outline" id="urisTabExportNet"><i class="fa-solid fa-network-wired"></i> Сетевой дамп</button>
                     <button type="button" class="uris-btn uris-btn-ghost" id="urisTabClearDiag"><i class="fa-solid fa-eraser"></i> Очистить</button>
                 </div>
-                <small class="uris-hint">Диагностика содержит технические события и ошибки текущей сессии. Сетевой дамп выгружается отдельно и может содержать ограниченные prompt/ответы модели; API-ключи и полные бинарные изображения не экспортируются.</small>
+                <small class="uris-hint">Диагностика содержит технические события и ошибки текущей сессии. Сетевой дамп выгружается отдельно и содержит только метаданные — без промптов и тел запросов/ответов; API-ключи и полные бинарные изображения не экспортируются.</small>
             </section>
             <section class="uris-settings-section">
                 <h3>Хранилище</h3>
