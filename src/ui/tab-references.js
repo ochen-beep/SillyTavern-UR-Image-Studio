@@ -327,34 +327,79 @@ function _renderToolbar(root, folders) {
 }
 
 // ── Grid ──
+/**
+ * Filter refs by search substring over name and aliases. Shared by the desktop
+ * grid and both mobile tile renderers (three former inline copies).
+ */
+function filterRefsBySearch(refs, query) {
+    const q = (query || '').toLowerCase().trim();
+    if (!q) return refs;
+    return refs.filter(r => (r.name || '').toLowerCase().includes(q)
+        || (r.aliases || []).some(a => a.toLowerCase().includes(q)));
+}
+
+/**
+ * Pool tile markup shared by the desktop grid and the mobile grid. The mobile
+ * variant caps folder dots at 3 (narrower tiles).
+ */
+function poolTileHtml(ref, foldersById, { maxDots = 4, selected = false } = {}) {
+    const dots = (ref.folders || []).map(fid => foldersById.get(fid)).filter(Boolean)
+        .slice(0, maxDots).map(f => `<span class="uris-pool-tile-dot" style="background:${escapeHtml(f.color)}"></span>`).join('');
+    const selectedClass = selected ? ' uris-pool-tile-selected' : '';
+    return `<button type="button" class="uris-pool-tile${selectedClass}" data-ref-id="${escapeHtml(ref.id)}" aria-label="${escapeHtml(ref.name)}" title="${escapeHtml(ref.name)}">
+        <img src="${escapeHtml(ref.imagePath)}" alt="${escapeHtml(ref.name)}" loading="lazy">
+        ${dots ? `<div class="uris-pool-tile-dots">${dots}</div>` : ''}
+        <div class="uris-pool-tile-name">${escapeHtml(ref.name)}</div>
+    </button>`;
+}
+
+/**
+ * Editor body markup shared by the desktop overlay and the mobile card screen.
+ * Only the delete-button label differs between the two layouts.
+ */
+function refEditorBodyHtml(ref, { deleteLabel = 'Удалить карточку' } = {}) {
+    const aliasesStr = (ref.aliases || []).join(', ');
+    return `
+        <div class="uris-editor-preview-wrap">
+            <button type="button" class="uris-editor-preview-btn" title="Открыть на весь экран" aria-label="Открыть на весь экран">
+                <img src="${escapeHtml(ref.imagePath)}" class="uris-editor-preview" alt="">
+            </button>
+            <div class="uris-editor-preview-actions">
+                <button class="uris-btn uris-btn-subtle uris-ed-crop"><i class="fa-solid fa-crop-simple"></i> Обрезать</button>
+                <button class="uris-btn uris-btn-subtle uris-ed-replace"><i class="fa-solid fa-image"></i> Заменить картинку</button>
+            </div>
+        </div>
+        <input type="file" class="uris-ed-file" accept="image/*" hidden>
+
+        <label class="uris-ed-label">Имя</label>
+        <input class="text_pole uris-ed-name" value="${escapeHtml(ref.name || '')}">
+        <label class="uris-ed-label">Aliases</label>
+        <input class="text_pole uris-ed-aliases" value="${escapeHtml(aliasesStr)}" placeholder="через запятую">
+        <small class="uris-hint">Сопоставление с промптом идёт по алиасам — перечислите имена и прозвища через запятую. Имя — только подпись. Поддерживаются {{char}}/{{user}}.</small>
+        <label class="uris-ed-label">Описание</label>
+        <textarea class="text_pole uris-ed-desc" rows="3" placeholder="Текст для Stage1">${escapeHtml(ref.description || '')}</textarea>
+        <label class="uris-ed-check"><input type="checkbox" class="uris-ed-binding-mode" ${ref.bindingMode === 'description' ? 'checked' : ''}> Только описание</label>
+        <small class="uris-hint">Без картинки в генерацию попадёт только это описание.</small>
+        <label class="uris-ed-label">Папки</label>
+        <div class="uris-fp-host"></div>
+        <div class="uris-ed-autosave" aria-live="polite">Автосохранение</div>
+        <button class="uris-btn uris-btn-ghost uris-ed-del"><i class="fa-solid fa-trash"></i> ${escapeHtml(deleteLabel)}</button>`;
+}
+
 async function _renderGrid(root, folders, refsOverride, searchQuery = '') {
     const host = root.querySelector('#urisRefsGrid');
     if (!host) return;
     const refs = refsOverride ?? await listRefs();
     const filtered = filterRefsByFolder(refs, _activeFolderFilter);
-    const q = (searchQuery || '').toLowerCase().trim();
-    const searched = q
-        ? filtered.filter(r => (r.name || '').toLowerCase().includes(q)
-            || (r.aliases || []).some(a => a.toLowerCase().includes(q)))
-        : filtered;
+    const searched = filterRefsBySearch(filtered, searchQuery);
     if (!searched.length) {
-        host.innerHTML = `<div class="uris-refs-empty">${q ? 'Не найдено' : 'Пусто. Добавьте референс кнопкой «+».'}</div>`;
+        host.innerHTML = `<div class="uris-refs-empty">${searchQuery ? 'Не найдено' : 'Пусто. Добавьте референс кнопкой «+».'}</div>`;
         return;
     }
     const foldersById = new Map(folders.map(f => [f.id, f]));
-    host.innerHTML = searched.map(r => {
-        const cardFolders = (r.folders || []).map(fid => foldersById.get(fid)).filter(Boolean);
-        const dots = cardFolders.slice(0, 4).map(f =>
-            `<span class="uris-pool-tile-dot" style="background:${escapeHtml(f.color)}"></span>`
-        ).join('');
-        return `
-        <button type="button" class="uris-pool-tile ${_editingRefId === r.id ? 'uris-pool-tile-selected' : ''}"
-             data-ref-id="${escapeHtml(r.id)}" aria-label="${escapeHtml(r.name)}" title="${escapeHtml(r.name)}">
-            <img src="${escapeHtml(r.imagePath)}" alt="${escapeHtml(r.name)}" loading="lazy">
-            ${dots ? `<div class="uris-pool-tile-dots">${dots}</div>` : ''}
-            <div class="uris-pool-tile-name">${escapeHtml(r.name)}</div>
-        </button>`;
-    }).join('');
+    host.innerHTML = searched.map(r =>
+        poolTileHtml(r, foldersById, { selected: _editingRefId === r.id })
+    ).join('');
     host.querySelectorAll('.uris-pool-tile').forEach(tile => {
         tile.addEventListener('click', () => {
             _editingRefId = tile.dataset.refId;
@@ -389,32 +434,7 @@ async function _renderOverlay(root, folders) {
                 <span class="uris-refs-overlay-title">${escapeHtml(ref.name || 'Без названия')}</span>
                 <button class="uris-refs-overlay-close" title="Закрыть" aria-label="Закрыть">✕</button>
             </div>
-                <div class="uris-refs-overlay-body">
-                <div class="uris-editor-preview-wrap">
-                    <button type="button" class="uris-editor-preview-btn" title="Открыть на весь экран" aria-label="Открыть на весь экран">
-                        <img src="${escapeHtml(ref.imagePath)}" class="uris-editor-preview" alt="">
-                    </button>
-                    <div class="uris-editor-preview-actions">
-                        <button class="uris-btn uris-btn-subtle uris-ed-crop"><i class="fa-solid fa-crop-simple"></i> Обрезать</button>
-                        <button class="uris-btn uris-btn-subtle uris-ed-replace"><i class="fa-solid fa-image"></i> Заменить картинку</button>
-                    </div>
-                </div>
-                <input type="file" class="uris-ed-file" accept="image/*" hidden>
-
-                <label class="uris-ed-label">Имя</label>
-                <input class="text_pole uris-ed-name" value="${escapeHtml(ref.name || '')}">
-                <label class="uris-ed-label">Aliases</label>
-                <input class="text_pole uris-ed-aliases" value="${escapeHtml(aliasesStr)}" placeholder="через запятую">
-                <small class="uris-hint">Сопоставление с промптом идёт по алиасам — перечислите имена и прозвища через запятую. Имя — только подпись. Поддерживаются {{char}}/{{user}}.</small>
-                <label class="uris-ed-label">Описание</label>
-                <textarea class="text_pole uris-ed-desc" rows="3" placeholder="Текст для Stage1">${escapeHtml(ref.description || '')}</textarea>
-                <label class="uris-ed-check"><input type="checkbox" class="uris-ed-binding-mode" ${ref.bindingMode === 'description' ? 'checked' : ''}> Только описание</label>
-                <small class="uris-hint">Без картинки в генерацию попадёт только это описание.</small>
-                <label class="uris-ed-label">Папки</label>
-                <div class="uris-fp-host"></div>
-                <div class="uris-ed-autosave" aria-live="polite">Автосохранение</div>
-                <button class="uris-btn uris-btn-ghost uris-ed-del"><i class="fa-solid fa-trash"></i> Удалить карточку</button>
-            </div>
+                <div class="uris-refs-overlay-body">${refEditorBodyHtml(ref)}</div>
         </div>`;
     _bindOverlay(root, host, ref, folders);
 }
@@ -544,11 +564,7 @@ async function _renderMobileGrid(root) {
     const [folders, refs] = await Promise.all([listFolders(), listRefs()]);
     const foldersById = new Map(folders.map(f => [f.id, f]));
     const filtered = filterRefsByFolder(refs, _activeFolderFilter);
-    const searchQuery = _mobileSearchQuery.trim().toLowerCase();
-    const searched = searchQuery
-        ? filtered.filter(r => (r.name || '').toLowerCase().includes(searchQuery)
-            || (r.aliases || []).some(alias => alias.toLowerCase().includes(searchQuery)))
-        : filtered;
+    const searched = filterRefsBySearch(filtered, _mobileSearchQuery);
     const activeFolder = folders.find(f => f.id === _activeFolderFilter);
     const title = _activeFolderFilter === 'all' ? 'Все карточки'
         : _activeFolderFilter === 'none' ? 'Без папки'
@@ -573,10 +589,7 @@ async function _renderMobileGrid(root) {
     // the card grid and the counter, preserving focus and caret position.
     const _renderTiles = () => {
         const q = _mobileSearchQuery.trim().toLowerCase();
-        const list = q
-            ? filtered.filter(r => (r.name || '').toLowerCase().includes(q)
-                || (r.aliases || []).some(a => a.toLowerCase().includes(q)))
-            : filtered;
+        const list = filterRefsBySearch(filtered, q);
         const count = host.querySelector('#urisMobileCount');
         if (count) count.textContent = String(list.length);
         const grid = host.querySelector('#urisMobileGrid');
@@ -585,15 +598,7 @@ async function _renderMobileGrid(root) {
             grid.innerHTML = `<div class="uris-refs-empty">${q ? 'Не найдено' : 'Нет карточек'}</div>`;
             return;
         }
-        grid.innerHTML = list.map(r => {
-            const dots = (r.folders || []).map(fid => foldersById.get(fid)).filter(Boolean)
-                .slice(0, 3).map(f => `<span class="uris-pool-tile-dot" style="background:${escapeHtml(f.color)}"></span>`).join('');
-            return `<button type="button" class="uris-pool-tile" data-ref-id="${escapeHtml(r.id)}" aria-label="${escapeHtml(r.name)}" title="${escapeHtml(r.name)}">
-                <img src="${escapeHtml(r.imagePath)}" alt="${escapeHtml(r.name)}" loading="lazy">
-                ${dots ? `<div class="uris-pool-tile-dots">${dots}</div>` : ''}
-                <div class="uris-pool-tile-name">${escapeHtml(r.name)}</div>
-            </button>`;
-        }).join('');
+        grid.innerHTML = list.map(r => poolTileHtml(r, foldersById, { maxDots: 3 })).join('');
         grid.querySelectorAll('.uris-pool-tile').forEach(tile => {
             tile.addEventListener('click', () => {
                 _editingRefId = tile.dataset.refId;
@@ -628,31 +633,7 @@ async function _renderMobileCard(root) {
         </div>
         <div class="uris-mobile-card-scroll" id="urisMobileCardBody"></div>`;
     const body = host.querySelector('#urisMobileCardBody');
-    const aliasesStr = (ref.aliases || []).join(', ');
-    body.innerHTML = `
-        <div class="uris-editor-preview-wrap">
-            <button type="button" class="uris-editor-preview-btn" title="Открыть на весь экран" aria-label="Открыть на весь экран">
-                <img src="${escapeHtml(ref.imagePath)}" class="uris-editor-preview" alt="">
-            </button>
-            <div class="uris-editor-preview-actions">
-                <button class="uris-btn uris-btn-subtle uris-ed-crop"><i class="fa-solid fa-crop-simple"></i> Обрезать</button>
-                <button class="uris-btn uris-btn-subtle uris-ed-replace"><i class="fa-solid fa-image"></i> Заменить картинку</button>
-            </div>
-        </div>
-        <input type="file" class="uris-ed-file" accept="image/*" hidden>
-        <label class="uris-ed-label">Имя</label>
-        <input class="text_pole uris-ed-name" value="${escapeHtml(ref.name || '')}">
-        <label class="uris-ed-label">Aliases</label>
-        <input class="text_pole uris-ed-aliases" value="${escapeHtml(aliasesStr)}" placeholder="через запятую">
-        <small class="uris-hint">Сопоставление с промптом идёт по алиасам — перечислите имена и прозвища через запятую. Имя — только подпись. Поддерживаются {{char}}/{{user}}.</small>
-        <label class="uris-ed-label">Описание</label>
-        <textarea class="text_pole uris-ed-desc" rows="3">${escapeHtml(ref.description || '')}</textarea>
-        <label class="uris-ed-check"><input type="checkbox" class="uris-ed-binding-mode" ${ref.bindingMode === 'description' ? 'checked' : ''}> Только описание</label>
-        <small class="uris-hint">Без картинки в генерацию попадёт только это описание.</small>
-        <label class="uris-ed-label">Папки</label>
-        <div class="uris-fp-host"></div>
-        <div class="uris-ed-autosave" aria-live="polite">Автосохранение</div>
-        <button class="uris-btn uris-btn-ghost uris-ed-del"><i class="fa-solid fa-trash"></i> Удалить</button>`;
+    body.innerHTML = refEditorBodyHtml(ref, { deleteLabel: 'Удалить' });
     _bindEditorBody(root, body, ref, folders, { onFolderChange: () => _renderMobileCard(root) });
     host.querySelector('.uris-mobile-back')?.addEventListener('click', () => {
         _mobileScreen = 'grid';
