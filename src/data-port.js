@@ -26,7 +26,7 @@ import { invalidatePoolCache, getRefsForExport, replaceRefsRecords } from './ref
 import { getParamPresetsForExport, replaceParamPresetRecords } from './param-presets.js';
 import { recordDiagnosticEvent } from './diagnostic-events.js';
 
-const BACKUP_VERSION = 8;
+const BACKUP_VERSION = 9;
 const BACKUP_MODULE = MODULE_NAME;
 
 /**
@@ -34,8 +34,8 @@ const BACKUP_MODULE = MODULE_NAME;
  * (see tests/data-port.test.js "rejects retired v2 through v5 backup formats").
  * v6 is structurally identical to v7 - that bump was a version-tag change only -
  * so a v6 backup (one release behind) migrates forward via an identity step
- * instead of being rejected. Add a real migrator when a future bump carries a
- * structural change.
+ * instead of being rejected. v9 is the single-format generation: the retired
+ * browser-local collection keys fold into `shared` on the way in.
  */
 const MIN_BACKUP_VERSION = 6;
 
@@ -102,6 +102,27 @@ const BACKUP_MIGRATORS = {
             ? { ...data.shared, connections: data.shared.connections.map(migrateConnectionV7) }
             : data.shared,
     }),
+    // v8 -> v9: the browser-local collection keys (uris_prompt_templates,
+    // uris_refs_pool, uris_refs_folders) fold into `shared` — the single backup
+    // format. A section the backup carries in `shared` wins (the server file
+    // was migrated FROM those localforage keys back in the day); the ancient
+    // param-preset keys (uris_image_params/uris_text_params) predate
+    // param-presets.js and have no reliable mapping — they are dropped.
+    8: data => {
+        const lf = data?.data?.localforage;
+        const shared = data.shared && typeof data.shared === 'object' ? { ...data.shared } : {};
+        const fold = (key, target) => {
+            if (!Array.isArray(lf?.[key]) || !lf[key].length) return;
+            if (!Array.isArray(shared[target])) shared[target] = lf[key];
+        };
+        fold(LF_TEMPLATES, 'templates');
+        fold(LF_REFS_POOL, 'refs');
+        fold(LF_REFS_FOLDERS, 'folders');
+        // Do not fabricate a data envelope for malformed backups: a v8 file
+        // without one must still fail the 'Invalid data section' validation.
+        if (!data.data) return { ...data, version: 9, shared };
+        return { ...data, version: 9, shared, data: { ...data.data, localforage: {} } };
+    },
 };
 
 /**
@@ -321,61 +342,15 @@ function mergeSharedSettings(current, incoming) {
     return out;
 }
 
-/** Global localforage keys allowed for export/import. */
-const ALLOWED_LF_KEYS = new Set([
-    LF_IMAGE_PARAMS,
-    LF_TEXT_PARAMS,
-    LF_TEMPLATES,
-    LF_REFS_POOL,
-    LF_REFS_FOLDERS,
-]);
-
-/** Prefixes of chat-scoped keys allowed for export/import. */
-const ALLOWED_LF_PREFIXES = [];
-
-/** Keys that must never appear in a backup (secrets). */
-const EXCLUDED_LF_KEYS = new Set([LF_API_KEY]);
-
-/** Prefixes of keys that must never appear in a backup (secrets). */
-const EXCLUDED_LF_PREFIXES = [LF_GALLERY_PREFIX, IMAGE_CONNECTION_KEY_PREFIX];
+/** Does this localforage key store a secret (API key)? Never exported/imported. */
+export function isSecretLfKey(key) {
+    return key === LF_API_KEY || (typeof key === 'string' && key.startsWith(IMAGE_CONNECTION_KEY_PREFIX));
+}
 
 /** Fields recursively stripped from any backup object. */
 const SECRET_FIELD_NAMES = new Set([
     'apiKey', 'api_key', 'token', 'password', 'secret', 'secretId',
 ]);
-
-/**
- * Whether a localforage key is exportable (safe and allowed).
- * @param {string} key
- * @returns {boolean}
- */
-export function isExportableLfKey(key) {
-    if (typeof key !== 'string' || !key.startsWith('uris_')) return false;
-    if (EXCLUDED_LF_KEYS.has(key)) return false;
-    if (EXCLUDED_LF_PREFIXES.some(prefix => key.startsWith(prefix))) return false;
-    return ALLOWED_LF_KEYS.has(key) || ALLOWED_LF_PREFIXES.some(prefix => key.startsWith(prefix));
-}
-
-/**
- * Does this localforage key store a secret (API key)? Such keys must NEVER
- * appear in export/import.
- * @param {string} key
- * @returns {boolean}
- */
-export function isSecretLfKey(key) {
-    return key === LF_API_KEY || (typeof key === 'string' && key.startsWith(IMAGE_CONNECTION_KEY_PREFIX));
-}
-
-/**
- * All localforage keys owned by URIS (prefix `uris_`), EXCEPT
- * secret-bearing (API keys) and gallery. Secrets are excluded here — this is the single
- * filter point for exportUrisData and for cleanup in replace mode.
- * @returns {Promise<string[]>}
- */
-export async function collectUrisKeys() {
-    const keys = await lf().keys();
-    return keys.filter(k => isExportableLfKey(k));
-}
 
 /**
  * Recursively copy a value, removing nested secret fields.
@@ -396,7 +371,6 @@ export function sanitizeBackupValue(value) {
 export async function exportUrisData(options = {}) {
     const startedAt = Date.now();
     const includeSettings = options.includeSettings !== false;
-    const keys = await collectUrisKeys();
     const data = {
         version: BACKUP_VERSION,
         module: BACKUP_MODULE,
@@ -412,10 +386,6 @@ export async function exportUrisData(options = {}) {
             excludedKeys: [LF_API_KEY],
         },
     };
-
-    for (const key of keys) {
-        data.data.localforage[key] = sanitizeBackupValue(await lf().getItem(key));
-    }
 
     if (includeSettings) {
         const settings = getCtx().extensionSettings[MODULE_NAME] || null;
@@ -449,14 +419,13 @@ export async function exportUrisData(options = {}) {
         data.data.chatMetadata[chatId] = sanitizeBackupValue(binding);
     }
 
-    log('Exported keys:', keys.length);
+    log('Exported: shared collections + current chat binding');
     // An export is the recovery instrument for everything else — the journal
     // must show when it ran and what it carried.
     recordDiagnosticEvent({
         event: 'export-run', stage: 'data', outcome: 'ok',
         durationMs: Date.now() - startedAt,
         details: {
-            keys: keys.length,
             includeSettings,
             refs: Array.isArray(data.shared?.refs) ? data.shared.refs.length : 0,
             presets: Array.isArray(data.shared?.presets) ? data.shared.presets.length : 0,
@@ -492,6 +461,9 @@ export function normalizeBackup(data) {
         throw new Error('Invalid chatMetadata section');
     }
 
+    // v9: the localforage section is retired. v8-and-older backups arrive here
+    // through the migrator ladder, which folds their collection keys into
+    // `shared` and empties this section; anything left is ignored.
     const normalized = {
         version: BACKUP_VERSION,
         module: BACKUP_MODULE,
@@ -514,12 +486,6 @@ export function normalizeBackup(data) {
         },
     };
 
-    for (const [key, value] of Object.entries(incomingLf || {})) {
-        if (isExportableLfKey(key)) {
-            normalized.data.localforage[key] = sanitizeBackupValue(value);
-        }
-    }
-
     return normalized;
 }
 
@@ -536,16 +502,6 @@ export class ImportRollbackError extends Error {
 }
 
 async function snapshotSafeData() {
-    const snapshot = new Map();
-    const existingKeys = await lf().keys();
-    for (const key of existingKeys) {
-        if (isExportableLfKey(key)) {
-            snapshot.set(key, { exists: true, value: await lf().getItem(key) });
-        }
-    }
-    for (const key of ALLOWED_LF_KEYS) {
-        if (!snapshot.has(key)) snapshot.set(key, { exists: false, value: null });
-    }
     const ctx = getCtx();
     const extensionSettings = ctx.extensionSettings?.[MODULE_NAME]
         ? cloneExact(ctx.extensionSettings[MODULE_NAME])
@@ -560,7 +516,6 @@ async function snapshotSafeData() {
     const refsRecords = await getRefsForExport();
     const presetRecords = await getParamPresetsForExport();
     return {
-        keys: snapshot,
         extensionSettings,
         templateRecords,
         refsRecords,
@@ -578,30 +533,6 @@ async function snapshotSafeData() {
 async function restoreSafeSnapshot(snapshot) {
     const rollbackErrors = [];
     const recordError = (source, cause, details = {}) => rollbackErrors.push({ source, cause, ...details });
-    const snapshotKeys = new Set(snapshot.keys.keys());
-    let currentKeys = [];
-    try {
-        currentKeys = await collectUrisKeys();
-    } catch (cause) {
-        recordError('localforage', cause, { operation: 'keys' });
-    }
-    for (const key of currentKeys) {
-        if (snapshotKeys.has(key)) continue;
-        try {
-            await lf().removeItem(key);
-        } catch (cause) {
-            recordError('localforage', cause, { key, operation: 'removeItem' });
-        }
-    }
-    for (const [key, entry] of snapshot.keys) {
-        const operation = entry.exists ? 'setItem' : 'removeItem';
-        try {
-            if (entry.exists) await lf().setItem(key, entry.value);
-            else await lf().removeItem(key);
-        } catch (cause) {
-            recordError('localforage', cause, { key, operation });
-        }
-    }
     const ctx = getCtx();
     if (ctx.extensionSettings) {
         try {
@@ -663,30 +594,15 @@ export async function importUrisData(data, options = {}) {
     const startedAt = Date.now();
     const normalized = normalizeBackup(data);
     const mode = options.mode === 'replace' ? 'replace' : 'merge';
-    const incomingLf = normalized.data.localforage || {};
     const incomingSettings = normalized.data.extensionSettings;
     const incomingShared = normalized.shared || {};
     const incomingChatMeta = normalized.data.chatMetadata || {};
 
-    log('importUrisData: mode=', mode, 'incoming keys=', Object.keys(incomingLf).length);
+    log('importUrisData: mode=', mode);
 
     const snapshot = await snapshotSafeData();
 
     try {
-        if (mode === 'replace') {
-            const existing = await collectUrisKeys();
-            for (const k of existing) await lf().removeItem(k);
-            log('Replace mode: cleared keys', existing.length);
-        }
-
-        for (const [key, value] of Object.entries(incomingLf)) {
-            if (!isExportableLfKey(key)) {
-                warn('importUrisData: skipped disallowed key', key);
-                continue;
-            }
-            await lf().setItem(key, value);
-        }
-
         // Settings: merge — merge, replace — full replace.
         const ctx = getCtx();
         if (incomingSettings && typeof incomingSettings === 'object') {
@@ -765,19 +681,16 @@ export async function importUrisData(data, options = {}) {
         try { invalidateTemplateCache(); } catch (e) { warn('importUrisData: template cache invalidation failed', e?.message); }
         try { invalidatePoolCache(); } catch (e) { warn('importUrisData: refs pool cache invalidation failed', e?.message); }
 
-        log('Imported keys:', Object.keys(incomingLf).length, 'chat bindings:', importedChatBindings);
-        // "Records" = legacy localforage keys + shared collections (connections,
-        // templates, presets, refs, folders) — a modern backup usually carries
-        // everything in `shared` and zero legacy keys.
-        const sharedRecords = ['connections', 'templates', 'presets', 'refs', 'folders']
+        const importedRecords = ['connections', 'templates', 'presets', 'refs', 'folders']
             .reduce((sum, key) => sum + (Array.isArray(incomingShared[key]) ? incomingShared[key].length : 0), 0);
+        log('Imported records:', importedRecords, 'chat bindings:', importedChatBindings);
         recordDiagnosticEvent({
             event: 'import-run', stage: 'data', outcome: 'ok',
             durationMs: Date.now() - startedAt,
-            details: { mode, importedKeys: Object.keys(incomingLf).length + sharedRecords, importedChatBindings },
+            details: { mode, importedRecords, importedChatBindings },
         });
         return {
-            importedKeys: Object.keys(incomingLf).length + sharedRecords,
+            importedRecords,
             importedChatBindings,
             summary: summarizeBackup(normalized),
         };
@@ -805,19 +718,16 @@ export async function importUrisData(data, options = {}) {
  * @returns {Object}
  */
 export function summarizeBackup(data) {
-    const localforage = data?.data?.localforage || {};
     const chatMetadata = data?.data?.chatMetadata || {};
     const shared = data?.shared || {};
-    const count = (sharedArr, lfKey) => {
-        if (Array.isArray(sharedArr)) return sharedArr.length;
-        return Array.isArray(localforage[lfKey]) ? localforage[lfKey].length : 0;
-    };
     const chatMetaEntries = Object.values(chatMetadata);
     const chatConfigs = chatMetaEntries.filter(m => m && typeof m === 'object' && m.schemaVersion >= 4).length;
+    // v9 carries the collections in `shared`; older versions are migrated there
+    // by the ladder before this runs.
     return {
-        refs: count(shared.refs, LF_REFS_POOL),
-        folders: count(shared.folders, LF_REFS_FOLDERS),
-        templates: count(shared.templates, LF_TEMPLATES),
+        refs: Array.isArray(shared.refs) ? shared.refs.length : 0,
+        folders: Array.isArray(shared.folders) ? shared.folders.length : 0,
+        templates: Array.isArray(shared.templates) ? shared.templates.length : 0,
         chatConfigs,
         galleryIncluded: false,
         secretsIncluded: false,

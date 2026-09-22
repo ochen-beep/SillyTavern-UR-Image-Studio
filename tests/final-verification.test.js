@@ -155,7 +155,7 @@ test('import/export round-trips a current chat config and refs', async () => {
     assert.equal(cfgBefore.refs.referenceIds[0], 'rt-ref');
 
 	    const exported = await exportUrisData();
-	    assert.equal(exported.version, 8);
+	    assert.equal(exported.version, 9);
 	    assert.equal(exported.module, 'ur_image_studio');
     assert.deepEqual(Object.keys(exported.data.chatMetadata), ['roundtrip-chat']);
     const exportedChat = exported.data.chatMetadata['roundtrip-chat'];
@@ -164,11 +164,11 @@ test('import/export round-trips a current chat config and refs', async () => {
     assert.equal(exportedChat.config.templateId, 'rt-template');
     assert.deepEqual(exportedChat.refs.referenceIds, ['rt-ref']);
 
-    // Secrets must be absent from the exported JSON.
+    // Secrets must be absent from the exported JSON; the retired localforage
+    // section is always empty in v9.
     const dump = JSON.stringify(exported);
     assert.equal(dump.includes('sk-secret'), false, 'export must not contain injected secrets');
-    assert.equal(exported.data.localforage[LF_API_KEY], undefined);
-    assert.equal(exported.data.localforage[LF_GALLERY_PREFIX + 'x'], undefined);
+    assert.deepEqual(exported.data.localforage, {});
 
     // Simulate importing into a clean or modified current chat.
     metadataByChat['roundtrip-chat'] = {};

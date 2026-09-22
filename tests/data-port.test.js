@@ -33,7 +33,7 @@ globalThis.SillyTavern = {
 };
 
 const {
-    collectUrisKeys, exportUrisData, importUrisData, isExportableLfKey,
+    exportUrisData, importUrisData,
     isSecretLfKey, normalizeBackup, sanitizeBackupValue, summarizeBackup,
 } = await import('../src/data-port.js');
 
@@ -43,14 +43,12 @@ function seed() {
     chatMetadata = {};
     extensionSettings = { enabled: true };
     settingsContainer = { [MODULE_NAME]: extensionSettings };
+    // Секреты и служебные ключи остаются в хранилище, но в бэкап не попадают;
+    // коллекции (templates/refs/presets) живут в серверных файлах и приходят
+    // в бэкап через `shared`.
     memoryStore.set(LF_API_KEY, 'custom-secret');
     memoryStore.set(IMAGE_CONNECTION_KEY_PREFIX + 'connection-1', 'image-connection-secret');
     memoryStore.set(LF_GALLERY_PREFIX + 'chat-1', [{ id: 'gallery-image' }]);
-    memoryStore.set(LF_IMAGE_PARAMS, [{ ratio: '1:1' }]);
-    memoryStore.set(LF_TEXT_PARAMS, [{ temperature: 0.5 }]);
-    memoryStore.set(LF_TEMPLATES, [{ id: 'template-1' }]);
-    memoryStore.set(LF_REFS_POOL, [{ id: 'ref-1' }]);
-    memoryStore.set(LF_REFS_FOLDERS, [{ id: 'folder-1' }]);
     memoryStore.set(LF_HISTORY_PREFIX + 'chat-1', [{ prompt: 'history' }]);
     memoryStore.set('uris_instruction_chat-1', { draft: 'existing instruction' });
     memoryStore.set(LF_GENERATION_DRAFT_PREFIX + 'chat-1:1', { prompt: 'draft' });
@@ -59,41 +57,30 @@ function seed() {
 
 beforeEach(seed);
 
-test('v8 exports only allowlisted browser-owned client records', async () => {
+test('v9 export carries no localforage section — collections live in shared', async () => {
     const backup = await exportUrisData();
 
-    assert.equal(backup.version, 8);
+    assert.equal(backup.version, 9);
     assert.deepEqual(backup.secrets, { excluded: true, excludedKeys: [LF_API_KEY] });
     assert.equal(Object.hasOwn(backup, 'imageConnections'), false);
-    assert.equal(Object.hasOwn(backup.data.localforage, 'uris_connections'), false);
-    assert.equal(Object.hasOwn(backup.data.localforage, 'uris_conn_key_legacy-image'), false);
-    assert.equal(Object.hasOwn(backup.data.localforage, LF_API_KEY), false);
-    assert.equal(Object.hasOwn(backup.data.localforage, IMAGE_CONNECTION_KEY_PREFIX + 'connection-1'), false);
-    assert.equal(Object.hasOwn(backup.data.localforage, LF_GALLERY_PREFIX + 'chat-1'), false);
-    assert.deepEqual(Object.keys(backup.data.localforage).sort(), [
-        LF_IMAGE_PARAMS, LF_REFS_FOLDERS, LF_REFS_POOL, LF_TEMPLATES, LF_TEXT_PARAMS,
-    ].sort());
+    // Никакие ключи браузерного хранилища (секреты, галерея, legacy-коллекции)
+    // не попадают в бэкап.
+    assert.deepEqual(backup.data.localforage, {});
 });
 
-test('only allowlisted client records are exportable and local API-key namespaces are secret', async () => {
+test('legacy API-key namespaces remain marked secret', async () => {
     assert.equal(isSecretLfKey(LF_API_KEY), true);
     assert.equal(isSecretLfKey(IMAGE_CONNECTION_KEY_PREFIX + 'connection-1'), true);
-    assert.equal(isSecretLfKey(LF_TEMPLATES), false);
-    assert.equal(isExportableLfKey(LF_GALLERY_PREFIX + 'chat'), false);
-    assert.equal(isExportableLfKey(LF_REFS_POOL), true);
-    assert.deepEqual(await collectUrisKeys(), [
-        LF_IMAGE_PARAMS, LF_TEXT_PARAMS, LF_TEMPLATES,
-        LF_REFS_POOL, LF_REFS_FOLDERS,
-    ]);
 });
 
-test('v8 normalization retains only supported client data and drops server templates', () => {
+test('v9 normalization folds legacy localforage collections into shared and drops the rest', () => {
     const normalized = normalizeBackup({
         version: 7,
         module: MODULE_NAME,
         data: {
             localforage: {
                 [LF_IMAGE_PARAMS]: [{ ratio: '2:3' }],
+                [LF_TEMPLATES]: [{ id: 'template-legacy' }],
                 unknown: [{ id: 'ignored' }],
             },
         },
@@ -102,8 +89,9 @@ test('v8 normalization retains only supported client data and drops server templ
         },
     });
 
-    assert.equal(normalized.version, 8);
-    assert.deepEqual(normalized.data.localforage, { [LF_IMAGE_PARAMS]: [{ ratio: '2:3' }] });
+    assert.equal(normalized.version, 9);
+    assert.deepEqual(normalized.data.localforage, {});
+    assert.deepEqual(normalized.shared.templates, [{ id: 'template-legacy' }]);
     assert.equal(Object.hasOwn(normalized, 'imageConnections'), false);
 });
 
@@ -112,33 +100,36 @@ test('normalization rejects retired v2 through v5 backup formats', () => {
         assert.throws(() => normalizeBackup({
             version,
             module: MODULE_NAME,
-            keys: { [LF_IMAGE_PARAMS]: [{ ratio: '2:3' }] },
-            data: { localforage: { [LF_IMAGE_PARAMS]: [{ ratio: '2:3' }] } },
+            data: { localforage: {}, chatMetadata: {} },
         }), /Unsupported backup version: /);
     }
 });
 
-test('normalization migrates a v6 backup (two releases behind) forward to v8', () => {
+test('normalization migrates a v6 backup (three releases behind) forward to v9', () => {
     const normalized = normalizeBackup({
         version: 6,
         module: MODULE_NAME,
         data: { localforage: {}, chatMetadata: {} },
     });
-    assert.equal(normalized.version, 8);
+    assert.equal(normalized.version, 9);
     assert.equal(normalized.module, MODULE_NAME);
 });
 
 test('normalization rejects a backup from a newer version', () => {
     assert.throws(() => normalizeBackup({
-        version: 9, module: MODULE_NAME, data: { localforage: {} },
+        version: 10, module: MODULE_NAME, data: { localforage: {} },
     }), /newer version/);
 });
 
-test('normalization rejects a v6 backup without the current data envelope', () => {
+test('normalization rejects a backup without the current data envelope', () => {
     assert.throws(() => normalizeBackup({
         version: 7,
         module: MODULE_NAME,
-        keys: { [LF_IMAGE_PARAMS]: [{ ratio: '2:3' }] },
+        keys: { anything: true },
+    }), /Invalid data section/);
+    assert.throws(() => normalizeBackup({
+        version: 9,
+        module: MODULE_NAME,
     }), /Invalid data section/);
 });
 
@@ -178,17 +169,14 @@ test('import ignores invalid chat metadata without writing it', async () => {
     assert.deepEqual(chatMetadata[META_KEY], { schemaVersion: 4, config: { imageProfileId: 'existing' }, refs: {} });
     assert.equal(result.importedChatBindings, 0);
 });
-test('import writes only allowlisted client records and excludes secrets', async () => {
+test('import ignores the retired localforage section and never imports secrets', async () => {
     chatId = 'chat-1';
     const forgedImageKey = IMAGE_CONNECTION_KEY_PREFIX + 'forged';
     const backup = {
-        version: 7,
+        version: 8,
         module: MODULE_NAME,
         data: {
             localforage: {
-                [LF_TEXT_PARAMS]: [{ temperature: 0.2 }],
-                'uris_instruction_chat-1': { draft: 'legacy instruction' },
-                unknown: [{ id: 'ignored' }],
                 [LF_API_KEY]: 'injected-custom-secret',
                 [forgedImageKey]: 'injected-image-connection-secret',
             },
@@ -200,28 +188,13 @@ test('import writes only allowlisted client records and excludes secrets', async
     };
 
     const normalized = normalizeBackup(backup);
+    // v8→v9 мигратор вычищает секцию — ключи не проходят ни в нормализацию, ни в импорт.
+    assert.deepEqual(normalized.data.localforage, {});
     const result = await importUrisData(backup);
 
-    assert.equal(Object.hasOwn(normalized.data.localforage, LF_API_KEY), false);
-    assert.equal(Object.hasOwn(normalized.data.localforage, forgedImageKey), false);
-    assert.deepEqual(await localforage.getItem(LF_TEXT_PARAMS), [{ temperature: 0.2 }]);
-    assert.deepEqual(await localforage.getItem('uris_instruction_chat-1'), { draft: 'existing instruction' });
-    assert.equal(memoryStore.has('unknown'), false);
-    assert.equal(await localforage.getItem(LF_API_KEY), 'custom-secret');
+    assert.equal(await localforage.getItem(LF_API_KEY), 'custom-secret', 'секрет не перезаписан');
     assert.equal(await localforage.getItem(forgedImageKey), null);
-    assert.equal(result.importedKeys, 1);
-});
-
-test('replace removes only currently exportable localforage records', async () => {
-    await importUrisData({
-        version: 7,
-        module: MODULE_NAME,
-        data: { localforage: { [LF_IMAGE_PARAMS]: [{ ratio: '16:9' }] } },
-        imageConnections: { server: [] },
-    }, { mode: 'replace' });
-
-    assert.deepEqual(await localforage.getItem(LF_IMAGE_PARAMS), [{ ratio: '16:9' }]);
-    assert.equal(await localforage.getItem(LF_TEXT_PARAMS), null);
+    assert.equal(result.importedRecords, 0);
 });
 
 test('sanitizeBackupValue removes schema-normalized credential fields without changing input', () => {
@@ -245,7 +218,8 @@ test('sanitizeBackupValue removes schema-normalized credential fields without ch
 
 test('summary ignores legacy server connection templates', () => {
     const summary = summarizeBackup({
-        data: { localforage: { [LF_REFS_POOL]: [{ id: 'r1' }], [LF_REFS_FOLDERS]: [{ id: 'f1' }] } },
+        shared: { refs: [{ id: 'r1' }], folders: [{ id: 'f1' }] },
+        data: { localforage: {}, chatMetadata: {} },
         imageConnections: { server: [{ id: 's1' }, { id: 's2' }] },
     });
     assert.equal(Object.hasOwn(summary, 'serverConnections'), false);
@@ -257,8 +231,9 @@ test('summary ignores legacy server connection templates', () => {
 
 // Регрессия v0.9.4: summarizeBackup читал только legacy localforage-ключи,
 // хотя актуальные бэкапы несут коллекции в `shared` — диалог импорта показывал
-// «Референсы: 0» для бэкапа, который их содержит.
-test('summary counts shared collections and falls back to legacy localforage keys', () => {
+// «Референсы: 0» для бэкапа, который их содержит. В v9 legacy-ключи попадают
+// в shared через мигратор v8→v9, поэтому сводка видит их по-настоящему.
+test('summary counts shared collections; a v8 backup migrates legacy keys into shared', () => {
     const modern = summarizeBackup({
         shared: {
             refs: [{ id: 'r1' }, { id: 'r2' }],
@@ -273,15 +248,16 @@ test('summary counts shared collections and falls back to legacy localforage key
         { refs: 2, folders: 1, templates: 3 },
     );
 
-    const legacy = summarizeBackup({
-        shared: {},
+    const migrated = summarizeBackup(normalizeBackup({
+        version: 8,
+        module: MODULE_NAME,
         data: {
             localforage: { [LF_REFS_POOL]: [{ id: 'r1' }], [LF_REFS_FOLDERS]: [{ id: 'f1' }], [LF_TEMPLATES]: [{ id: 't1' }] },
             chatMetadata: {},
         },
-    });
+    }));
     assert.deepEqual(
-        { refs: legacy.refs, folders: legacy.folders, templates: legacy.templates },
+        { refs: migrated.refs, folders: migrated.folders, templates: migrated.templates },
         { refs: 1, folders: 1, templates: 1 },
     );
 });
@@ -298,7 +274,7 @@ test('export includes the active chat binding only', async () => {
     });
 });
 
-test('v8 exports portable shared records without image bytes, recovery state, or secrets', async () => {
+test('v9 exports portable shared records without image bytes, recovery state, or secrets', async () => {
     extensionSettings = {
         imageConnections: {
             connections: [{ id: 'conn-1', apiKey: 'browser-secret', selectedRoute: { id: 'r1', apiFamily: 'openai' } }],
@@ -313,7 +289,7 @@ test('v8 exports portable shared records without image bytes, recovery state, or
 
     const backup = await exportUrisData();
 
-    assert.equal(backup.version, 8);
+    assert.equal(backup.version, 9);
     assert.deepEqual(backup.shared.connections, [{ id: 'conn-1', selectedRoute: { id: 'r1', resolutionState: 'unresolved', unresolved: true }, selectedRouteId: 'r1' }]);
     assert.equal(backup.shared.galleryCards, undefined);
     assert.deepEqual(backup.shared.refs, [{ id: 'ref-1', imagePath: 'user/images/ref.png' }]);
@@ -323,7 +299,7 @@ test('v8 exports portable shared records without image bytes, recovery state, or
     assert.equal(Object.hasOwn(backup.data.extensionSettings, 'recoveryState'), false);
 });
 
-test('v7 backup migrates connections to the derived-dialect read model (v8)', () => {
+test('v7 backup migrates connections to the derived-dialect read model (through v9)', () => {
     const normalized = normalizeBackup({
         version: 7,
         module: MODULE_NAME,
@@ -348,7 +324,7 @@ test('v7 backup migrates connections to the derived-dialect read model (v8)', ()
         },
     });
 
-    assert.equal(normalized.version, 8);
+    assert.equal(normalized.version, 9);
     const [connection] = normalized.shared.connections;
     assert.deepEqual(connection.model, { id: 'gemini-3.1-flash-image', source: 'list' });
     assert.deepEqual(connection.detected, {
@@ -500,7 +476,7 @@ test('normalization filters schema-normalized credentials from every portable in
         imageConnections: { server: [{ id: 'server', bearerToken: 'server', safe: true }] },
     });
 
-    assert.deepEqual(normalized.data.localforage[LF_IMAGE_PARAMS], { safe: true });
+    assert.deepEqual(normalized.data.localforage, {}, 'retired localforage section is dropped');
     assert.deepEqual(normalized.data.extensionSettings, { safe: true });
     assert.deepEqual(normalized.data.chatMetadata.chat, { schemaVersion: 4, safe: true });
     assert.deepEqual(normalized.shared.connections, [{ id: 'c', selectedRoute: {
@@ -511,9 +487,8 @@ test('normalization filters schema-normalized credentials from every portable in
     assert.equal(Object.hasOwn(normalized, 'imageConnections'), false);
 });
 
-test('import rollback removes a newly-created allowlisted record when a later write fails', async () => {
+test('import rollback restores the previous binding and leaves folded shared refs unwritten', async () => {
     chatId = 'chat-1';
-    memoryStore.delete(LF_REFS_POOL);
     chatMetadata = { [META_KEY]: { schemaVersion: 4, config: { imageProfileId: 'before' }, refs: {} } };
     const previousBinding = chatMetadata[META_KEY];
     const originalContext = globalThis.SillyTavern.getContext;
@@ -527,7 +502,7 @@ test('import rollback removes a newly-created allowlisted record when a later wr
 
     try {
         await assert.rejects(() => importUrisData({
-            version: 7, module: MODULE_NAME,
+            version: 8, module: MODULE_NAME,
             data: {
                 localforage: { [LF_REFS_POOL]: [{ id: 'incoming-ref' }] },
                 chatMetadata: { 'chat-1': { schemaVersion: 4, config: { imageProfileId: 'after' }, refs: {} } },
@@ -538,48 +513,10 @@ test('import rollback removes a newly-created allowlisted record when a later wr
         globalThis.SillyTavern.getContext = originalContext;
     }
 
-    assert.equal(memoryStore.has(LF_REFS_POOL), false);
+    // v8→v9 мигратор сложил LF_REFS_POOL в shared; откат должен вернуть
+    // настройки до импорта — без следов сложенных референсов.
+    assert.equal(settingsContainer[MODULE_NAME]?.imageConnections?.refs, undefined);
     assert.deepEqual(chatMetadata[META_KEY], previousBinding);
-});
-
-test('import rollback restores a preexisting LF record overwritten by merge', async () => {
-    const beforeRefs = await localforage.getItem(LF_REFS_POOL);
-    const originalSetItem = localforage.setItem;
-    localforage.setItem = async (key, value) => {
-        await originalSetItem(key, value);
-        if (key === LF_REFS_POOL) throw new Error('later LF write failed');
-    };
-    try {
-        await assert.rejects(() => importUrisData({
-            version: 7, module: MODULE_NAME,
-            data: { localforage: { [LF_REFS_POOL]: [{ id: 'incoming-ref' }] }, chatMetadata: {} },
-            imageConnections: { server: [] },
-        }), /later LF write failed/);
-    } finally {
-        localforage.setItem = originalSetItem;
-    }
-    assert.deepEqual(await localforage.getItem(LF_REFS_POOL), beforeRefs);
-});
-
-test('import rollback restores all records removed by replace before a later write failure', async () => {
-    const originalSetItem = localforage.setItem;
-    const beforeText = await localforage.getItem(LF_TEXT_PARAMS);
-    const beforeTemplates = await localforage.getItem(LF_TEMPLATES);
-    localforage.setItem = async (key, value) => {
-        await originalSetItem(key, value);
-        if (key === LF_REFS_POOL) throw new Error('later LF write failed');
-    };
-    try {
-        await assert.rejects(() => importUrisData({
-            version: 7, module: MODULE_NAME,
-            data: { localforage: { [LF_REFS_POOL]: [{ id: 'incoming-ref' }] }, chatMetadata: {} },
-            imageConnections: { server: [] },
-        }, { mode: 'replace' }), /later LF write failed/);
-    } finally {
-        localforage.setItem = originalSetItem;
-    }
-    assert.deepEqual(await localforage.getItem(LF_TEXT_PARAMS), beforeText);
-    assert.deepEqual(await localforage.getItem(LF_TEMPLATES), beforeTemplates);
 });
 
 test('import rollback restores exact detached extension settings after a later failure', async () => {
@@ -590,53 +527,37 @@ test('import rollback restores exact detached extension settings after a later f
         imageConnections: { pendingOperation: { id: 'p1' }, templates: [{ id: 'before' }] },
     };
     settingsContainer[MODULE_NAME] = originalSettings;
-    const originalSetItem = localforage.setItem;
-    localforage.setItem = async (key, value) => {
-        await originalSetItem(key, value);
-        if (key === LF_REFS_POOL) throw new Error('later LF write failed');
-    };
+    let saveMetadataCalls = 0;
+    chatId = 'chat-1';
+    const originalContext = globalThis.SillyTavern.getContext;
+    globalThis.SillyTavern.getContext = () => ({
+        extensionSettings: settingsContainer,
+        saveSettingsDebounced: () => {},
+        // Импортный сэйв (1-й) сбоит; откатный (2-й) проходит — откат чистый.
+        saveMetadata: () => {
+            saveMetadataCalls += 1;
+            if (saveMetadataCalls === 1) throw new Error('import metadata save failed');
+        },
+        chatId,
+        chatMetadata,
+    });
     try {
         await assert.rejects(() => importUrisData({
             version: 7, module: MODULE_NAME,
             data: {
-                localforage: { [LF_REFS_POOL]: [{ id: 'incoming-ref' }] },
+                localforage: {},
                 extensionSettings: { enabled: false },
-                chatMetadata: {},
+                chatMetadata: { 'chat-1': { schemaVersion: 4, config: { imageProfileId: 'incoming' }, refs: {} } },
             },
             shared: { templates: [{ id: 'incoming-template' }] },
             imageConnections: { server: [] },
-        }), /later LF write failed/);
+        }), /import metadata save failed/);
     } finally {
-        localforage.setItem = originalSetItem;
+        globalThis.SillyTavern.getContext = originalContext;
     }
+    // Откат возвращает ТОЧНО detached-снимок настроек до импорта.
     assert.deepEqual(settingsContainer[MODULE_NAME], originalSettings);
     assert.notStrictEqual(settingsContainer[MODULE_NAME], originalSettings);
-});
-
-test('import surfaces a rollback failure with the original import error as cause', async () => {
-    const originalSetItem = localforage.setItem;
-    localforage.setItem = async (key, value) => {
-        if (key === LF_REFS_POOL && Array.isArray(value) && value[0]?.id === 'incoming-ref') {
-            throw new Error('import write failed');
-        }
-        if (key === LF_IMAGE_PARAMS) throw new Error('rollback set failed');
-        await originalSetItem(key, value);
-    };
-    try {
-        await assert.rejects(
-            () => importUrisData({
-                version: 7, module: MODULE_NAME,
-                data: { localforage: { [LF_REFS_POOL]: [{ id: 'incoming-ref' }] }, chatMetadata: {} },
-                imageConnections: { server: [] },
-            }),
-            error => error.name === 'ImportRollbackError'
-                && /Rollback failed/.test(error.message)
-                && error.cause?.message === 'import write failed'
-                && error.rollbackErrors?.some(entry => entry.key === LF_IMAGE_PARAMS && entry.operation === 'setItem')
-        );
-    } finally {
-        localforage.setItem = originalSetItem;
-    }
 });
 
 test('normalization sanitizes extension settings, chat metadata, and server inputs', () => {
@@ -698,25 +619,6 @@ test('merge mode unions refs/folders/templates/presets/connections by id instead
     assert.deepEqual(ic.catalogs, { keep: true }, 'non-collection fields preserved');
 });
 
-test('snapshot is completed before server import is attempted', async () => {
-    let serverImportAttempted = false;
-    const originalFetch = globalThis.fetch;
-    globalThis.fetch = async () => { serverImportAttempted = true; throw new Error('server should not be called'); };
-    const originalGetItem = localforage.getItem;
-    localforage.getItem = async () => { throw new Error('snapshot failed'); };
-    try {
-        await assert.rejects(() => importUrisData({
-            version: 7, module: MODULE_NAME,
-            data: { localforage: {}, extensionSettings: null, chatMetadata: {} },
-            imageConnections: { server: [{ id: 's' }] },
-        }), /snapshot failed/);
-    } finally {
-        localforage.getItem = originalGetItem;
-        globalThis.fetch = originalFetch;
-    }
-    assert.equal(serverImportAttempted, false);
-});
-
 test('replace removes the current chat binding when the backup has no binding', async () => {
     chatId = 'chat-1';
     chatMetadata = { [META_KEY]: { schemaVersion: 4, config: { imageProfileId: 'existing' }, refs: {} } };
@@ -754,66 +656,50 @@ test('replace rollback restores the deleted current chat binding when metadata p
     assert.deepEqual(chatMetadata[META_KEY], originalBinding);
 });
 
-test('rollback restores a detached chat binding after the live binding mutates', async () => {
+test('rollback restores the pre-import binding after the incoming binding overwrote it', async () => {
     chatId = 'chat-1';
     chatMetadata = { [META_KEY]: { schemaVersion: 4, config: { imageProfileId: 'before' }, refs: {} } };
-    const originalSetItem = localforage.setItem;
-    localforage.setItem = async (key, value) => {
-        await originalSetItem(key, value);
-        if (key === LF_REFS_POOL) throw new Error('later LF write failed');
-    };
+    const originalContext = globalThis.SillyTavern.getContext;
+    globalThis.SillyTavern.getContext = () => ({
+        extensionSettings: settingsContainer,
+        saveSettingsDebounced: () => {},
+        saveMetadata: () => { throw new Error('metadata save failed'); },
+        chatId,
+        chatMetadata,
+    });
     try {
         await assert.rejects(() => importUrisData({
             version: 7, module: MODULE_NAME,
             data: {
-                localforage: { [LF_REFS_POOL]: [{ id: 'incoming-ref' }] },
+                localforage: {},
                 chatMetadata: { 'chat-1': { schemaVersion: 4, config: { imageProfileId: 'after' }, refs: {} } },
             },
             imageConnections: { server: [] },
-        }), /later LF write failed/);
+        }), /metadata save failed/);
     } finally {
-        localforage.setItem = originalSetItem;
+        globalThis.SillyTavern.getContext = originalContext;
     }
+    // Снапшот был detached-клоном ДО перезаписи — откат вернул 'before', а не
+    // входящий 'after'.
     assert.deepEqual(chatMetadata[META_KEY], { schemaVersion: 4, config: { imageProfileId: 'before' }, refs: {} });
 });
 
-test('rollback removes dynamically-created exportable localforage keys absent from snapshot', async () => {
-    const dynamicKey = LF_TEXT_PARAMS;
-    memoryStore.delete(dynamicKey);
-    const originalSetItem = localforage.setItem;
-    localforage.setItem = async (key, value) => {
-        await originalSetItem(key, value);
-        if (key === LF_REFS_POOL) {
-            await originalSetItem(dynamicKey, { id: 'created-during-import' });
-            throw new Error('later LF write failed');
-        }
-    };
-    try {
-        await assert.rejects(() => importUrisData({
-            version: 7, module: MODULE_NAME,
-            data: { localforage: { [LF_REFS_POOL]: [{ id: 'incoming-ref' }] }, chatMetadata: {} },
-            imageConnections: { server: [] },
-        }), /later LF write failed/);
-    } finally {
-        localforage.setItem = originalSetItem;
-    }
-    assert.equal(memoryStore.has(dynamicKey), false);
-});
-
-test('rollback aggregates browser-local storage, settings, and chat metadata failures', async () => {
-    const originalSetItem = localforage.setItem;
-    localforage.setItem = async (key, value) => {
-        if (key === LF_IMAGE_PARAMS) throw new Error('rollback localforage failed');
-        if (key === LF_REFS_POOL && Array.isArray(value) && value[0]?.id === 'incoming-ref') {
-            throw new Error('import write failed');
-        }
-        await originalSetItem(key, value);
-    };
+test('import surfaces a rollback failure with the original import error as cause', async () => {
+    let saveMetadataCalls = 0;
+    let saveSettingsCalls = 0;
     const originalContext = globalThis.SillyTavern.getContext;
     globalThis.SillyTavern.getContext = () => ({
         extensionSettings: settingsContainer,
-        saveSettingsDebounced: () => { throw new Error('rollback settings failed'); },
-        saveMetadata: () => { throw new Error('rollback chat metadata failed'); },
+        // Импортный сэйв настроек (1-й) проходит; откатный (2-й) сбоит.
+        saveSettingsDebounced: () => {
+            saveSettingsCalls += 1;
+            if (saveSettingsCalls >= 2) throw new Error('rollback settings failed');
+        },
+        // Метаданные сбоит на импортной фазе (1-й) — форсит откат.
+        saveMetadata: () => {
+            saveMetadataCalls += 1;
+            if (saveMetadataCalls === 1) throw new Error('import metadata save failed');
+        },
         chatId: 'chat-1',
         chatMetadata: { [META_KEY]: { schemaVersion: 4, config: { imageProfileId: 'before' }, refs: {} } },
     });
@@ -821,17 +707,54 @@ test('rollback aggregates browser-local storage, settings, and chat metadata fai
         await assert.rejects(
             () => importUrisData({
                 version: 7, module: MODULE_NAME,
-                data: { localforage: { [LF_REFS_POOL]: [{ id: 'incoming-ref' }] }, chatMetadata: {} },
+                data: { localforage: {}, chatMetadata: { 'chat-1': { schemaVersion: 4, config: { imageProfileId: 'incoming' }, refs: {} } } },
+                shared: { templates: [{ id: 'incoming-template' }] },
+                imageConnections: { server: [] },
             }),
             error => error.name === 'ImportRollbackError'
-                && error.cause?.message === 'import write failed'
-                && error.rollbackErrors?.some(entry => entry.source === 'localforage' && entry.cause?.message === 'rollback localforage failed')
+                && /Rollback failed/.test(error.message)
+                && error.cause?.message === 'import metadata save failed'
+                && error.rollbackErrors?.some(entry => entry.source === 'settings' && entry.cause?.message === 'rollback settings failed')
+        );
+    } finally {
+        globalThis.SillyTavern.getContext = originalContext;
+    }
+});
+
+test('rollback aggregates settings and chat metadata failures', async () => {
+    let saveMetadataCalls = 0;
+    let saveSettingsCalls = 0;
+    const originalContext = globalThis.SillyTavern.getContext;
+    globalThis.SillyTavern.getContext = () => ({
+        extensionSettings: settingsContainer,
+        saveSettingsDebounced: () => {
+            saveSettingsCalls += 1;
+            // Бэкап без settings/shared → импорт не делает save-вызовов, откат
+            // делает первый — и сбоит.
+            if (saveSettingsCalls >= 1) throw new Error('rollback settings failed');
+        },
+        saveMetadata: () => {
+            saveMetadataCalls += 1;
+            if (saveMetadataCalls === 1) throw new Error('import metadata save failed');
+            throw new Error('rollback chat metadata failed');
+        },
+        chatId: 'chat-1',
+        chatMetadata: { [META_KEY]: { schemaVersion: 4, config: { imageProfileId: 'before' }, refs: {} } },
+    });
+    try {
+        await assert.rejects(
+            () => importUrisData({
+                version: 7, module: MODULE_NAME,
+                data: { localforage: {}, chatMetadata: { 'chat-1': { schemaVersion: 4, config: { imageProfileId: 'incoming' }, refs: {} } } },
+                imageConnections: { server: [] },
+            }),
+            error => error.name === 'ImportRollbackError'
+                && error.cause?.message === 'import metadata save failed'
                 && error.rollbackErrors?.some(entry => entry.source === 'settings' && entry.cause?.message === 'rollback settings failed')
                 && error.rollbackErrors?.some(entry => entry.source === 'chatMetadata' && entry.cause?.message === 'rollback chat metadata failed')
                 && !error.rollbackErrors?.some(entry => entry.source === 'server')
         );
     } finally {
-        localforage.setItem = originalSetItem;
         globalThis.SillyTavern.getContext = originalContext;
     }
 });
