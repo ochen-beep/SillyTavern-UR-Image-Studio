@@ -622,11 +622,18 @@ export function fnv1aHex(value) {
  * Timeout is NOT retried in any mode: retrying a paid generation on timeout
  * guaranteed spends money twice (provider finishes and charges), returning no
  * result. The old regex included "Timeout" → with maxRetries>0 it burned money N times.
+ *
+ * Errors carrying `noRetry === true` are never retried regardless of their
+ * message: this is how typed delivery outcomes (DELIVERY_AMBIGUOUS from
+ * proxy.autoFetch) opt out — the request may have reached the provider, and a
+ * resend could bill it twice. The regex also no longer matches "unavailable":
+ * it used to match our own provider wrapper text ("Text API is unavailable:
+ * <raw error>"), turning any wrapped failure into a retry.
  */
 export async function callWithRetry(fn, label, mode = 'network', signal = null) {
     const s = state.settings;
     // Retryable: transient network failures. Timeout excluded intentionally (see jsdoc).
-    const retryable = /429|502|503|504|network|Failed to fetch|CORS|unavailable/i;
+    const retryable = /429|502|503|504|network|Failed to fetch|CORS/i;
     const throwIfAborted = () => {
         if (signal?.aborted) throw new DOMException('Aborted', 'AbortError');
     };
@@ -645,7 +652,7 @@ export async function callWithRetry(fn, label, mode = 'network', signal = null) 
             lastErr = e;
             if (signal?.aborted) throw new DOMException('Aborted', 'AbortError');
             log(`${label} attempt ${attempt + 1}: ${e.message}`);
-            if (!retryable.test(e.message) || attempt === s.maxRetries) break;
+            if (e?.noRetry === true || !retryable.test(e.message) || attempt === s.maxRetries) break;
             await wait(s.retryDelay * Math.pow(2, attempt));
         }
     }

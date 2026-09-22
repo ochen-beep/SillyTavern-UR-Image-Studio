@@ -3,7 +3,7 @@
  * Gemini text provider.
  */
 import { normalizeEndpoint, readResponseBody, error } from '../core.js';
-import { autoFetch } from '../proxy.js';
+import { autoFetch, probeDeliveryStrategy } from '../proxy.js';
 
 /**
  * Native Gemini endpoints use an API key header; proxy and Vertex endpoints
@@ -45,14 +45,24 @@ export async function generateText(p, systemPrompt, userPrompt, onStatus, signal
         },
     };
 
+    const probeHeaders = authHeaders(p.endpoint, p.apiKey);
+    // Дешёвая разведка до платного POST — как в openai.js (см. probeDeliveryStrategy).
+    await probeDeliveryStrategy(url, `${normalizeEndpoint(p.endpoint)}/v1beta/models`, {
+        headers: probeHeaders, timeoutMs: 15000, signal,
+    }).catch(e => {
+        if (e?.name === 'AbortError') throw e;
+        error('gemini.generateText: delivery probe skipped', e.message);
+    });
     const resp = await autoFetch(url, {
         method: 'POST',
-        headers: authHeaders(p.endpoint, p.apiKey),
+        headers: probeHeaders,
         body: JSON.stringify(body),
         signal,
     }, p.timeoutMs ?? 300000).catch(e => {
         // User cancellation must stay an AbortError (see openai.generateText).
         if (e?.name === 'AbortError') throw e;
+        // DELIVERY_AMBIGUOUS (autoFetch) — не переклеиваем и не ретраим.
+        if (e?.noRetry) throw e;
         error('gemini.generateText: сетевая ошибка', url, e.message);
         if (/Timeout \(/.test(e?.message || '')) throw e;
         throw new Error(`Gemini Text API недоступен: ${e.message}`);

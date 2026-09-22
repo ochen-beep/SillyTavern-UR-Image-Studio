@@ -6,7 +6,7 @@ import {
     readResponseBody,
     error,
 } from '../core.js';
-import { autoFetch } from '../proxy.js';
+import { autoFetch, probeDeliveryStrategy } from '../proxy.js';
 
 /**
  * Generate a non-streaming text chat completion.
@@ -34,6 +34,17 @@ export async function generateText(p, systemPrompt, userPrompt, onStatus, signal
     if (p.temperature != null) body.temperature = p.temperature;
 
     onStatus?.('Generating prompt...');
+    // Дешёвая разведка до платного POST (probeDeliveryStrategy): один GET /models
+    // с теми же заголовками определяет, принимает ли хост браузер напрямую, и
+    // кэширует путь доставки — чтобы первый платный запрос сразу пошёл верной
+    // дорогой. Best-effort: неудача разведки (кроме отмены) не блокирует
+    // генерацию — autoFetch справится и без неё.
+    await probeDeliveryStrategy(url, url.replace(/\/chat\/completions$/, '/models'), {
+        headers, timeoutMs: 15000, signal,
+    }).catch(e => {
+        if (e?.name === 'AbortError') throw e;
+        error('openai.generateText: delivery probe skipped', e.message);
+    });
     const resp = await autoFetch(url, {
         method: 'POST',
         headers,
@@ -44,6 +55,9 @@ export async function generateText(p, systemPrompt, userPrompt, onStatus, signal
         // callWithRetry's retryable regex match "unavailable" and re-send the
         // cancelled request, and the pipeline would log it as an error.
         if (e?.name === 'AbortError') throw e;
+        // DELIVERY_AMBIGUOUS (autoFetch): the request may have reached the
+        // provider — rethrow as-is so it is neither rebranded nor retried.
+        if (e?.noRetry) throw e;
         error('openai.generateText: network error', url, e.message);
         if (/Timeout \(/.test(e?.message || '')) throw e;
         throw new Error(`Text API is unavailable: ${e.message}`);

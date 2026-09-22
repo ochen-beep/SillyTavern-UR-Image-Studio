@@ -188,6 +188,23 @@ export function getHostStrategies() {
 }
 
 /**
+ * Typed error for a paid (non-idempotent) request whose outcome is unknown:
+ * a CORS-masked failure is indistinguishable from "the server processed the
+ * request and the response was lost". The request is deliberately NOT re-sent
+ * automatically; the host strategy is flipped to 'proxy' by autoFetch so the
+ * caller's next attempt takes the safe path.
+ */
+function ambiguousDeliveryError(cause) {
+    const error = new Error(
+        'Запрос не получил ответ напрямую (CORS или обрыв связи) и мог быть уже обработан провайдером, поэтому автоматически не повторяется. Повторите действие — следующая попытка уйдёт через прокси SillyTavern (требуется enableCorsProxy в config.yaml).',
+        { cause },
+    );
+    error.code = 'DELIVERY_AMBIGUOUS';
+    error.noRetry = true;
+    return error;
+}
+
+/**
  * Automatic fetch: tries direct request, falls back to proxy on CORS block.
  *
  * Strategy is cached by hostname:
@@ -195,6 +212,18 @@ export function getHostStrategies() {
  *   - if 'proxy' — go through ST proxy immediately;
  *   - if unknown — try direct first; on CORS/network failure retry through proxy
  *     and remember 'proxy', on success remember 'direct'.
+ *
+ * Delivery safety (v0.9.2): the fallback above re-SENDS the request. That is
+ * fine for idempotent GETs (downloads, catalogs) but not for paid POSTs: a
+ * CORS-masked failure is indistinguishable from "the server processed the POST
+ * and the response was lost" (MDN: CORS error details are not available to
+ * JS), so a reactive retry can bill the provider twice. Therefore for POST:
+ *   - the proxy→direct flip is disabled (the proxy leg may have reached the
+ *     provider);
+ *   - the direct→proxy fallback is replaced by a typed DELIVERY_AMBIGUOUS
+ *     error (noRetry marker), and the host strategy is flipped to 'proxy' so
+ *     the caller's NEXT attempt goes through the proxy immediately, with no
+ *     doomed direct attempt and no second send inside this call.
  *
  * IMPORTANT: upstream HTTP errors (400/401/429/500) are NOT grounds for fallback —
  * the server responded, so the delivery path works; the error is valid and propagated as-is.
@@ -209,21 +238,15 @@ export function getHostStrategies() {
 export async function autoFetch(url, options = {}, timeoutMs = 120000) {
     const host = hostnameOf(url);
     const strategy = _hostStrategy.get(host);
+    const noResubmit = String(options?.method || 'GET').toUpperCase() === 'POST';
 
-    if (strategy === 'direct') {
-        try { return await fetchWithTimeout(url, options, timeoutMs); }
-        catch (e) {
-            if (e?.name === 'AbortError' || /Таймаут/.test(e?.message || '') || !isCorsOrNetworkError(e)) throw e;
-            _hostStrategy.delete(host);
-            const resp = await proxiedFetch(url, options, timeoutMs);
-            _hostStrategy.set(host, 'proxy');
-            return resp;
-        }
-    }
     if (strategy === 'proxy') {
         try { return await proxiedFetch(url, options, timeoutMs); }
         catch (e) {
             if (e?.name === 'AbortError' || /Таймаут/.test(e?.message || '')) throw e;
+            // The proxy leg may have reached the provider — a direct re-send
+            // could bill twice. Propagate; the strategy stays 'proxy'.
+            if (noResubmit) throw e;
             if (!isCorsOrNetworkError(e) && !/CORS-прокси SillyTavern недоступен/.test(e?.message || '')) throw e;
             _hostStrategy.delete(host);
             const resp = await fetchWithTimeout(url, options, timeoutMs);
@@ -231,7 +254,8 @@ export async function autoFetch(url, options = {}, timeoutMs = 120000) {
             return resp;
         }
     }
-    // User cancellation (AbortError) must NOT switch the strategy.
+
+    // Strategy 'direct' or unknown — the first attempt goes direct either way.
     try {
         const resp = await fetchWithTimeout(url, options, timeoutMs);
         _hostStrategy.set(host, 'direct');
@@ -241,22 +265,56 @@ export async function autoFetch(url, options = {}, timeoutMs = 120000) {
         // (fetchWithTimeout already distinguishes them: AbortError from external signal
         // is thrown as DOMException('Aborted'), timeout as Error('Timeout').)
         if (e?.name === 'AbortError' || /Таймаут/.test(e?.message || '')) throw e;
-        // CORS/network failure → retry through proxy.
-        if (isCorsOrNetworkError(e)) {
-            log('autoFetch: direct fetch failed (likely CORS), retrying through proxy', host, e.message);
-            try {
-                const resp = await proxiedFetch(url, options, timeoutMs);
-                _hostStrategy.set(host, 'proxy');
-                return resp;
-            } catch (proxyErr) {
-                // Proxy unavailable (disabled) — clear error once.
-                if (/CORS-прокси SillyTavern недоступен/.test(proxyErr?.message || '')) throw proxyErr;
-                // Proxy responded with upstream error — path works, error is valid,
-                // but don't cache the strategy (may be a temporary proxy issue).
-                throw proxyErr;
-            }
+        if (!isCorsOrNetworkError(e)) throw e;
+        // CORS/network failure on a paid POST: outcome unknown — do not re-send.
+        if (noResubmit) {
+            _hostStrategy.set(host, 'proxy');
+            log('autoFetch: paid POST failed with an ambiguous outcome; host flipped to proxy', host, e.message);
+            throw ambiguousDeliveryError(e);
         }
-        // Other error — propagate as-is, don't change strategy.
-        throw e;
+        // Idempotent request — the historical hybrid fallback is safe.
+        log('autoFetch: direct fetch failed (likely CORS), retrying through proxy', host, e.message);
+        const resp = await proxiedFetch(url, options, timeoutMs);
+        _hostStrategy.set(host, 'proxy');
+        return resp;
+    }
+}
+
+/**
+ * Cheap CORS-capability probe to run BEFORE a paid POST to an unknown host
+ * (review 2026-09-22, option B): GET a harmless same-host URL — typically the
+ * model list — with the same auth headers, and remember the delivery strategy,
+ * so the first paid request already takes the right path instead of dying
+ * with DELIVERY_AMBIGUOUS.
+ *
+ * Any HTTP response (even 401/404) proves the host talks to the browser
+ * directly → 'direct'. A CORS/network TypeError means the host needs the ST
+ * proxy → 'proxy'. Abort/timeout and other errors propagate without caching.
+ * A known strategy answers from cache with no request at all.
+ *
+ * The probe mirrors the POST's preflight situation closely enough: the same
+ * Authorization header makes it non-simple, so the browser preflights it too.
+ * It is a best-effort hint, not a guarantee — autoFetch's POST-safety (no
+ * automatic re-send) stays the actual guardrail.
+ *
+ * @param {string} url — the paid request URL (used for the host cache key)
+ * @param {string} probeUrl — harmless same-host GET URL (e.g. the /models list)
+ * @param {{ headers?: object, timeoutMs?: number, signal?: AbortSignal }} [opts]
+ * @returns {Promise<'direct'|'proxy'>}
+ */
+export async function probeDeliveryStrategy(url, probeUrl, { headers = {}, timeoutMs = 15000, signal } = {}) {
+    const host = hostnameOf(url);
+    const known = _hostStrategy.get(host);
+    if (known) return known;
+    try {
+        await fetchWithTimeout(probeUrl, { method: 'GET', headers: { ...headers }, signal }, timeoutMs);
+        _hostStrategy.set(host, 'direct');
+        return 'direct';
+    } catch (e) {
+        if (e?.name === 'AbortError' || /Таймаут/.test(e?.message || '')) throw e;
+        if (!isCorsOrNetworkError(e)) throw e;
+        _hostStrategy.set(host, 'proxy');
+        log('probeDeliveryStrategy: host needs the ST proxy', host, e.message);
+        return 'proxy';
     }
 }

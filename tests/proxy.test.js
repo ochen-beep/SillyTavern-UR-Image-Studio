@@ -272,36 +272,55 @@ test('autoFetch: второй запрос к direct-хосту идёт нап�
     } finally { restore(); }
 });
 
-test('autoFetch: CORS-блок прямого → fallback на прокси, кэшируется proxy', async () => {
+test('autoFetch: CORS-блок платного POST не перепосылается — DELIVERY_AMBIGUOUS, хост учит прокси', async () => {
     const calls = [];
-    const restore = mockFetch((url, _opts, viaProxy) => {
-        calls.push({ url, viaProxy });
+    const restore = mockFetch((_url, _opts, viaProxy) => {
+        calls.push(viaProxy);
         if (!viaProxy) throw new TypeError('Failed to fetch'); // браузерный CORS-блок
         return { ok: true, status: 200 };
     });
     try {
-        await autoFetch('https://cdn.moe-atelier.site/v1/images/generations', { method: 'POST' });
-        // Путь: прямой (упал) → probeCorsProxy (viaProxy=true) → прокси-запрос (viaProxy=true).
-        // probeCorsProxy внутри proxiedFetch делает GET к /proxy/example.com, чтобы убедиться,
-        // что прокси жив — это 3-й вызов. Реальный запрос генерации — не-пrobe вызовы с viaProxy=true.
+        await assert.rejects(
+            () => autoFetch('https://cdn.moe-atelier.site/v1/images/generations', { method: 'POST' }),
+            e => e?.code === 'DELIVERY_AMBIGUOUS' && e?.noRetry === true,
+        );
+        // Ровно одна попытка: исход неизвестен, повтор мог бы списать деньги дважды.
+        assert.deepEqual(calls, [false], 'платный POST не должен уходить второй раз через прокси');
+        // Хост запомнен как требующий прокси — следующая попытка пойдёт сразу через неё.
+        assert.equal(getHostStrategies()['cdn.moe-atelier.site'], 'proxy');
+    } finally { restore(); }
+});
+
+test('autoFetch: CORS-блок GET-запроса → fallback на прокси, кэшируется proxy', async () => {
+    // GET идемпотентен: исторический гибридный фолбэк для бесплатных запросов сохранён.
+    const calls = [];
+    const restore = mockFetch((_url, _opts, viaProxy) => {
+        calls.push({ viaProxy });
+        if (!viaProxy) throw new TypeError('Failed to fetch');
+        return { ok: true, status: 200 };
+    });
+    try {
+        await autoFetch('https://cdn.moe-atelier.site/v1/images/generations');
         const proxyRequests = calls.filter(c => c.viaProxy);
-        const directRequests = calls.filter(c => !c.viaProxy);
-        assert.equal(directRequests.length, 1, 'должна быть 1 прямая попытка (упавшая)');
+        assert.equal(calls.filter(c => !c.viaProxy).length, 1, 'должна быть 1 прямая попытка (упавшая)');
         assert.ok(proxyRequests.length >= 1, 'должен быть хотя бы 1 прокси-запрос');
         assert.deepEqual(getHostStrategies(), { 'cdn.moe-atelier.site': 'proxy' });
     } finally { restore(); }
 });
 
-test('autoFetch: второй запрос к proxy-хосту идёт СРАЗУ через прокси (без прямой попытки)', async () => {
+test('autoFetch: второй POST к proxy-хосту идёт СРАЗУ через прокси (без прямой попытки)', async () => {
     let directAttempts = 0;
     const restore = mockFetch((_url, _opts, viaProxy) => {
         if (!viaProxy) { directAttempts++; throw new TypeError('Failed to fetch'); }
         return { ok: true, status: 200 };
     });
     try {
-        await autoFetch('https://cdn.moe-atelier.site/gen', { method: 'POST' });
+        await assert.rejects(
+            () => autoFetch('https://cdn.moe-atelier.site/gen', { method: 'POST' }),
+            e => e?.code === 'DELIVERY_AMBIGUOUS',
+        );
         await autoFetch('https://cdn.moe-atelier.site/gen2', { method: 'POST' });
-        // Первый запрос: 1 прямой (упал) + 1 прокси. Второй: 0 прямых + 1 прокси.
+        // Первый POST: 1 прямой (упал, без повтора). Второй: 0 прямых + 1 прокси.
         assert.equal(directAttempts, 1, 'повторный запрос не должен бить напрямую для proxy-хоста');
     } finally { restore(); }
 });
@@ -324,14 +343,30 @@ test('autoFetch: HTTP-ошибка апстрима (400/500) НЕ тригге�
     } finally { restore(); }
 });
 
-test('autoFetch: CORS-блок + выключенный прокси → понятная ошибка', async () => {
+test('autoFetch: CORS-блок платного POST при выключенном прокси — честная AMBIGUOUS-ошибка, прокси не опрашивается', async () => {
+    const calls = [];
     const restore = mockFetch((_url, _opts, viaProxy) => {
+        calls.push(viaProxy);
         if (!viaProxy) throw new TypeError('Failed to fetch');
         return { ok: false, status: 404, text: async () => 'CORS proxy is disabled.' };
     });
     try {
         await assert.rejects(
             () => autoFetch('https://cdn.moe-atelier.site/gen', { method: 'POST' }),
+            e => e?.code === 'DELIVERY_AMBIGUOUS',
+        );
+        assert.deepEqual(calls, [false], 'выключенный прокси не должен опрашиваться для платного POST');
+    } finally { restore(); }
+});
+
+test('autoFetch: CORS-блок GET + выключенный прокси → понятная ошибка', async () => {
+    const restore = mockFetch((_url, _opts, viaProxy) => {
+        if (!viaProxy) throw new TypeError('Failed to fetch');
+        return { ok: false, status: 404, text: async () => 'CORS proxy is disabled.' };
+    });
+    try {
+        await assert.rejects(
+            () => autoFetch('https://cdn.moe-atelier.site/gen'),
             /CORS-прокси SillyTavern недоступен/,
         );
     } finally { restore(); }
@@ -435,7 +470,10 @@ test('autoFetch: разные хосты кэшируются независим
     });
     try {
         await autoFetch('https://naistera.org/gen', { method: 'POST' });
-        await autoFetch('https://cdn.moe-atelier.site/gen', { method: 'POST' });
+        await assert.rejects(
+            () => autoFetch('https://cdn.moe-atelier.site/gen', { method: 'POST' }),
+            e => e?.code === 'DELIVERY_AMBIGUOUS',
+        );
         const s = getHostStrategies();
         assert.equal(s['naistera.org'], 'direct');
         assert.equal(s['cdn.moe-atelier.site'], 'proxy');
@@ -451,5 +489,92 @@ test('clearHostStrategy(host) очищает только указанный х�
         const s = getHostStrategies();
         assert.equal(s['a.host'], undefined);
         assert.equal(s['b.host'], 'direct');
+    } finally { restore(); }
+});
+
+// ── probeDeliveryStrategy: разведка пути доставки до платного POST ──
+
+test('probeDeliveryStrategy: любой HTTP-ответ (даже 401) доказывает direct-доставку', async () => {
+    const calls = [];
+    const restore = mockFetch((url, opts) => {
+        calls.push({ url: String(url), method: opts?.method });
+        return { ok: false, status: 401 };
+    });
+    try {
+        const { probeDeliveryStrategy } = await import('../src/proxy.js');
+        const result = await probeDeliveryStrategy(
+            'https://api.example.test/v1/chat/completions',
+            'https://api.example.test/v1/models',
+            { headers: { Authorization: 'Bearer k' } },
+        );
+        assert.equal(result, 'direct');
+        assert.deepEqual(calls, [{ url: 'https://api.example.test/v1/models', method: 'GET' }]);
+        assert.equal(getHostStrategies()['api.example.test'], 'direct');
+    } finally { restore(); }
+});
+
+test('probeDeliveryStrategy: CORS TypeError → proxy, без обращения к прокси', async () => {
+    const calls = [];
+    const restore = mockFetch((_url, _opts, viaProxy) => {
+        calls.push(viaProxy);
+        if (!viaProxy) throw new TypeError('Failed to fetch');
+        return { ok: true, status: 200 };
+    });
+    try {
+        const { probeDeliveryStrategy } = await import('../src/proxy.js');
+        const result = await probeDeliveryStrategy('https://strict.host/v1/chat/completions', 'https://strict.host/v1/models');
+        assert.equal(result, 'proxy');
+        assert.deepEqual(calls, [false], 'разведка делает только прямой GET, прокси не опрашивается');
+        assert.equal(getHostStrategies()['strict.host'], 'proxy');
+    } finally { restore(); }
+});
+
+test('probeDeliveryStrategy: известная стратегия отвечает из кэша без запроса', async () => {
+    let calls = 0;
+    const restore = mockFetch(() => { calls++; return { ok: true, status: 200 }; });
+    try {
+        const { probeDeliveryStrategy } = await import('../src/proxy.js');
+        await autoFetch('https://known.host/gen', { method: 'POST' });
+        const before = calls;
+        const result = await probeDeliveryStrategy('https://known.host/other', 'https://known.host/models');
+        assert.equal(result, 'direct');
+        assert.equal(calls, before, 'кэшированная стратегия не порождает сетевых запросов');
+    } finally { restore(); }
+});
+
+test('probeDeliveryStrategy: AbortError пробрасывается и не кэшируется', async () => {
+    const restore = mockFetch(async (_url, opts) => {
+        if (opts?.signal?.aborted) throw Object.assign(new Error('Aborted'), { name: 'AbortError' });
+        return { ok: true, status: 200 };
+    });
+    try {
+        const { probeDeliveryStrategy } = await import('../src/proxy.js');
+        const ctrl = new AbortController();
+        ctrl.abort();
+        await assert.rejects(
+            () => probeDeliveryStrategy('https://aborted.host/gen', 'https://aborted.host/models', { signal: ctrl.signal }),
+            e => e?.name === 'AbortError',
+        );
+        assert.equal(getHostStrategies()['aborted.host'], undefined);
+    } finally { restore(); }
+});
+
+test('probeDeliveryStrategy + autoFetch: разведанный proxy-хост принимает POST сразу через прокси', async () => {
+    const directPosts = [];
+    const restore = mockFetch((_url, opts, viaProxy) => {
+        const method = String(opts?.method || 'GET').toUpperCase();
+        if (!viaProxy && method === 'POST') directPosts.push(String(_url));
+        if (!viaProxy) throw new TypeError('Failed to fetch');
+        return { ok: true, status: 200, json: async () => ({ data: [] }) };
+    });
+    try {
+        const { probeDeliveryStrategy } = await import('../src/proxy.js');
+        const strategy = await probeDeliveryStrategy('https://tunnel.host/v1/chat/completions', 'https://tunnel.host/v1/models');
+        assert.equal(strategy, 'proxy');
+        const resp = await autoFetch('https://tunnel.host/v1/chat/completions', { method: 'POST' });
+        assert.equal(resp.status, 200);
+        // Прямых платных POST — ноль: разведка (единственный прямой вызов) уже
+        // отправила хост в proxy-стратегию.
+        assert.deepEqual(directPosts, [], 'после разведки платный POST не тратит жертвенную прямую попытку');
     } finally { restore(); }
 });

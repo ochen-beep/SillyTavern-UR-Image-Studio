@@ -91,6 +91,38 @@ test('callWithRetry: maxRetries=0 → ровно 1 вызов всегда', asy
     assert.equal(calls, 1);
 });
 
+test('callWithRetry: пометка noRetry запрещает ретрай даже при ретраебельном тексте', async () => {
+    // DELIVERY_AMBIGUOUS из proxy.autoFetch: исход запроса неизвестен (возможно,
+    // провайдер его обработал) — повтор мог бы списать деньги дважды.
+    let calls = 0;
+    configureRetry(3);
+    await assert.rejects(
+        callWithRetry(async () => {
+            calls++;
+            const e = new Error('Запрос ... автоматически не повторяется. Failed to fetch');
+            e.noRetry = true;
+            throw e;
+        }, 'test', 'network'),
+        /не повторяется/,
+    );
+    assert.equal(calls, 1, 'noRetry-ошибка не должна ретраиться');
+});
+
+test('callWithRetry: слово unavailable больше не триггерит ретрай (само-матчинг обёртки убран)', async () => {
+    // «Text API is unavailable: …» — текст собственной обёртки провайдера;
+    // раньше он гарантированно матчился и ретраил любой завёрнутый сбой.
+    let calls = 0;
+    configureRetry(2);
+    await assert.rejects(
+        callWithRetry(async () => {
+            calls++;
+            throw new Error('Text API is unavailable: что-то пошло не так');
+        }, 'test', 'network'),
+        /unavailable/,
+    );
+    assert.equal(calls, 1);
+});
+
 test('callWithRetry: успех с первой попытки', async () => {
     let calls = 0;
     configureRetry(3);

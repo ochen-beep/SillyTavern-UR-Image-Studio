@@ -67,7 +67,7 @@ A detailed walkthrough — in Russian, with connections, inline markers and all 
 - Browser-side image requests need either a CORS-permissive endpoint or the SillyTavern CORS proxy. The connection's delivery setting is **auto** by default: direct first, proxy on a CORS block. See `docs/cors-proxy-setup.md`.
 - Stopping a generation that is delivered through the ST proxy cancels only the wait: the provider keeps processing and may bill the request (the proxy does not forward cancellation).
 - Chat Completions gateways ignore aspect ratio/size unless the correct dialect is selected: OpenRouter documents a top-level `image_config`, while new-api relays (most gateways) silently ignore it and only forward `extra_body.google.image_config`. Without the right dialect the gateway quietly returns its default format — URIS warns about dropped parameters and, after the image arrives, verifies that the actual pixels match the request.
-- Stage 1 via a Connection Manager profile is the most robust option behind proxies and non-CORS endpoints; custom endpoints depend on the provider allowing direct browser calls.
+- Stage 1 via a Connection Manager profile is the most robust option behind proxies and non-CORS endpoints; custom endpoints depend on the provider allowing direct browser calls. A custom-endpoint request is never re-sent automatically after an ambiguous failure: before the first request the extension probes the host's model list to pick the delivery path, and if a paid request still dies behind a possible CORS mask it surfaces a clear error and the next attempt goes through the ST proxy.
 
 ---
 
