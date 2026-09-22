@@ -61,21 +61,26 @@ async function loadDraftForStage2(chatId, msgId, messageText) {
 /**
  * Run Stage 2 for an explicit message draft using an immutable submission snapshot.
  *
- * @param {{chatId:string,msgId:number,messageText:string,templateId:string|null}} input
+ * Single input contract (v0.9.5): every run carries a submission snapshot.
+ * External callers pass theirs in `opts.submission` — the manual queue (captured
+ * at click time) and gallery regeneration (built from the stored card). The auto
+ * pipeline derives one from the freshly loaded draft (Stage 1 just wrote it in
+ * the same flight), with the chat's generationDefaults overlaid. The snapshot is
+ * authoritative over the live draft and never written back into it, and there is
+ * no post-materialize revision re-check: whatever the editor holds by execution
+ * time belongs to the next run.
+ * Fail-closed: a present submission with a missing/blank prompt throws (never
+ * silently degrades to a derived snapshot).
+ *
+ * @param {{chatId:string,msgId:number,messageText:string,templateId:string|null,chatConfig?:object}} input
  * @param {(status:string) => void} [onStatus]
  * @param {AbortSignal} [signal]
  * @param {object} [opts]
- * @param {object} [opts.instruction] - compatibility override for positional wrapper.
- * @param {Array<{image:string,name?:string}>} [opts.refs] - compatibility override for references.
- * @param {object} [opts.submission] - submit-time snapshot for queued manual runs:
+ * @param {object} [opts.submission] - submit-time snapshot:
  *   { prompt:string, aspectRatio?:string, imageSize?:string, quality?:string,
  *     references?:{includedIds:string[],excludedIds:string[],revision:number} }.
- *   Authoritative over the live draft: never written back into it, and exempt
- *   from the post-materialize revision re-check — the snapshot IS the submitted
- *   intent; whatever the editor holds by execution time belongs to the next run.
- *   Fail-closed: a present submission with a missing/blank prompt throws
- *   (never silently degrades to the reading path), and combining it with
- *   opts.instruction throws as well.
+ * @param {Array<{image:string,name?:string}>} [opts.refs] - ready-made references
+ *   (gallery regeneration "same refs"); skips reference materialization entirely.
  * @param {(refs: Array<{image:string,name?:string}>) => void} [opts.onRefsSent]
  * @param {boolean} [opts.isAuto]
  * @returns {Promise<object|null>}
@@ -147,7 +152,7 @@ export async function runStage2ForDraft(input, onStatus = () => {}, signal, opts
         recordDiagnosticEvent({
             event: 'stage2-start', stage: 'stage2', requestId: activeRequestId,
             chatHash: hashDiagnosticId(chatId), msgId,
-            operation: opts.instruction ? 'edit' : 'generate',
+            operation: 'generate',
             details: { source: opts.isAuto ? 'auto' : (signal ? 'queue' : 'manual') },
         });
         try { opts.onStart?.(activeRequestId); } catch { /* listener error must not break generation */ }
@@ -157,63 +162,51 @@ export async function runStage2ForDraft(input, onStatus = () => {}, signal, opts
         });
 
         // Fail-closed: a present-but-malformed submission must never silently
-        // degrade into the reading path — that would re-read the live draft and
-        // double-generate, exactly what this mode exists to prevent.
-        if (opts.instruction && opts.submission) {
-            throw new Error('opts.instruction and opts.submission are mutually exclusive.');
-        }
-        if (opts.submission
-            && (typeof opts.submission.prompt !== 'string' || !opts.submission.prompt.trim())) {
+        // degrade into a derived snapshot — that would generate something the
+        // caller did not submit.
+        const externalSubmission = opts.submission || null;
+        if (externalSubmission
+            && (typeof externalSubmission.prompt !== 'string' || !externalSubmission.prompt.trim())) {
             throw new Error('Invalid submission snapshot: prompt must be a non-empty string.');
         }
-        const submission = opts.submission || null;
         let draft = await loadDraftForStage2(chatId, msgId, messageText);
         if (useSignal.aborted) throw new DOMException('Aborted', 'AbortError');
         const generationDefaults = snapshot.generationDefaults || {};
-        // Skipped for submission runs on purpose: their parameter fields are
-        // overridden by the snapshot in the overlay below.
-        if (!opts.instruction && !submission && Object.values(generationDefaults).some(Boolean)) {
+        let submission;
+        if (externalSubmission) {
+            // The snapshot overrides draft fields for THIS run only. Nothing is
+            // persisted: the draft may already hold the next run's prompt.
+            draft = {
+                ...draft,
+                prompt: externalSubmission.prompt,
+                aspectRatio: externalSubmission.aspectRatio || draft.aspectRatio,
+                imageSize: externalSubmission.imageSize || draft.imageSize,
+                quality: externalSubmission.quality || draft.quality,
+                templateId: templateId ?? draft.templateId,
+            };
+            submission = externalSubmission;
+        } else {
+            // No external snapshot: derive one from the freshly loaded draft
+            // (auto pipeline — Stage 1 just wrote this draft in the same
+            // flight), with the chat's generationDefaults overlaid.
             draft = {
                 ...draft,
                 aspectRatio: generationDefaults.aspectRatio || draft.aspectRatio,
                 imageSize: generationDefaults.imageSize || draft.imageSize,
                 quality: generationDefaults.quality || draft.quality,
             };
-        }
-
-        if (opts.instruction) {
-            draft = await updateGenerationDraft(chatId, msgId, messageText, d => ({
-                ...d,
-                prompt: opts.instruction.prompt ?? d.prompt,
-                aspectRatio: opts.instruction.aspectRatio ?? d.aspectRatio,
-                imageSize: opts.instruction.imageSize ?? d.imageSize,
-                quality: opts.instruction.quality ?? d.quality,
-                promptOrigin: (opts.instruction.prompt || d.prompt) ? 'manual' : d.promptOrigin,
-            }));
-        }
-
-        if (submission) {
-            // The snapshot overrides draft fields for THIS run only. Nothing is
-            // persisted: the draft may already hold the next run's prompt, and
-            // the post-materialize re-read below is skipped — by construction
-            // there is nothing it could protect (refs resolve from the snapshot
-            // corrections too).
-            draft = {
-                ...draft,
-                prompt: submission.prompt,
-                aspectRatio: submission.aspectRatio || draft.aspectRatio,
-                imageSize: submission.imageSize || draft.imageSize,
-                quality: submission.quality || draft.quality,
-                templateId: templateId ?? draft.templateId,
+            submission = {
+                prompt: draft.prompt,
+                aspectRatio: draft.aspectRatio,
+                imageSize: draft.imageSize,
+                quality: draft.quality,
+                references: draft.references || { includedIds: [], excludedIds: [], revision: 0 },
             };
         }
 
         if (!draft.prompt) {
             throw new Error('Prompt is empty');
         }
-
-        const submissionPromptRevision = draft.promptRevision || 0;
-        const submissionReferenceRevision = draft.references?.revision || 0;
 
         // Resolve Stage 2 refs from the current prompt, not from the historical
         // Stage 1 snapshot. Provider capability/cap filtering stays downstream.
@@ -222,13 +215,7 @@ export async function runStage2ForDraft(input, onStatus = () => {}, signal, opts
         const referenceResolution = await resolvePromptReferenceContext({
             prompt: draft.prompt,
             candidates,
-            corrections: submission
-                ? {
-                    includedIds: submission.references?.includedIds || [],
-                    excludedIds: submission.references?.excludedIds || [],
-                    revision: submission.references?.revision || 0,
-                }
-                : (draft.references || { includedIds: [], excludedIds: [], revision: 0 }),
+            corrections: submission.references || { includedIds: [], excludedIds: [], revision: 0 },
         });
 
         const { imageConnId: resolvedImageConnId } = await resolveActivePresets(snapshot);
@@ -261,25 +248,6 @@ export async function runStage2ForDraft(input, onStatus = () => {}, signal, opts
             count: refs.length,
             refs: refs.map(summarizeReference),
         });
-
-        // Re-read the draft after awaited candidate/reference work. Manual
-        // parameter edits made while references resolve must win before the
-        // immutable paid-request snapshot is created. Skipped for submission
-        // runs: their inputs are already frozen at submit time. (The captured
-        // revisions above are therefore consumed by reading runs only.)
-        if (!opts.instruction && !submission) {
-            const latest = await loadDraftForStage2(chatId, msgId, messageText);
-            if ((latest.promptRevision || 0) !== submissionPromptRevision
-                || (latest.references?.revision || 0) !== submissionReferenceRevision) {
-                throw new Error('Generation inputs changed while references were loading; press Generate again.');
-            }
-            draft = {
-                ...latest,
-                aspectRatio: generationDefaults.aspectRatio || latest.aspectRatio,
-                imageSize: generationDefaults.imageSize || latest.imageSize,
-                quality: generationDefaults.quality || latest.quality,
-            };
-        }
 
         // UI mirror of sent refs.
         state.lastSentRefs = refs;
@@ -452,10 +420,14 @@ export async function runStage2ForDraft(input, onStatus = () => {}, signal, opts
 }
 
 /**
- * Positional compatibility adapter around {@link runStage2ForDraft}.
+ * Positional compatibility adapter around {@link runStage2ForDraft}: the
+ * gallery card fields become the submission snapshot. Unlike the old
+ * instruction path, the snapshot is NOT written back into the live draft —
+ * regenerating from the gallery no longer overwrites the prompt the user may
+ * be editing.
  *
  * @param {number|string} msgId
- * @param {object} instruction
+ * @param {object} instruction - { prompt, aspectRatio?, imageSize?, quality? } from the stored card.
  * @param {(status: string) => void} [onStatus]
  * @param {AbortSignal} [signal]
  * @param {object} [opts]
@@ -473,6 +445,6 @@ export async function runStage2(msgId, instruction, onStatus, signal, opts = {})
         { chatId, msgId, messageText, templateId: null, chatConfig },
         onStatus,
         signal,
-        { ...opts, instruction },
+        { ...opts, submission: instruction },
     );
 }

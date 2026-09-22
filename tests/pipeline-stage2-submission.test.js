@@ -333,11 +333,6 @@ test('malformed submission fails closed instead of degrading to the reading path
             runStage2ForDraft(input, undefined, undefined, { submission: { prompt: 42 } }),
             /prompt must be a non-empty string/,
         );
-        // The two override modes are mutually exclusive.
-        await assert.rejects(
-            runStage2ForDraft(input, undefined, undefined, { submission: { prompt: 'ok' }, instruction: { prompt: 'also ok' } }),
-            /mutually exclusive/,
-        );
         assert.equal(providerPosts, 0, 'no paid request on malformed input');
         const { getGenerationDraft } = await import('../src/generation-drafts.js');
         const draft = await getGenerationDraft('test-chat', 24, 'A cat.');

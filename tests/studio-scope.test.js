@@ -207,13 +207,15 @@ test('createQueueItem stores messageText for studio items and omits it for chat 
 
     const studioItem = await queue.createQueueItem({
         chatId: STUDIO_CHAT_ID, msgId: STUDIO_MSG_ID, messageText: 'сцена из студии',
-        requestedAction: 'full-pipeline', templateId: null,
+        requestedAction: 'current-prompt-stage2', templateId: null,
+        submission: { prompt: 'сцена из студии' },
     });
     assert.equal(studioItem.messageText, 'сцена из студии', 'studio item carries its scene text');
 
     const chatItem = await queue.createQueueItem({
         chatId: 'Alice - 3', msgId: 4, messageText: 'текст поста',
-        requestedAction: 'full-pipeline', templateId: null,
+        requestedAction: 'current-prompt-stage2', templateId: null,
+        submission: { prompt: 'текст поста' },
     });
     assert.equal(chatItem.messageText, undefined, 'chat items re-read the message at execution');
 });

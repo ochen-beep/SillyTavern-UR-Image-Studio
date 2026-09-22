@@ -612,14 +612,15 @@ test('createQueueItem captures identity and validates action', async () => {
         chatId: 'chat-1',
         msgId: 7,
         messageText: 'scene text',
-        requestedAction: 'full-pipeline',
+        requestedAction: 'current-prompt-stage2',
         templateId: 'tpl-1',
+        submission: { prompt: 'scene prompt' },
         now: () => '2026-07-15T11:00:00.000Z',
     });
     assert.equal(item.chatId, 'chat-1');
     assert.equal(item.msgId, 7);
     assert.equal(item.messageHash, hashMessage('scene text'));
-    assert.equal(item.requestedAction, 'full-pipeline');
+    assert.equal(item.requestedAction, 'current-prompt-stage2');
     assert.equal(item.templateId, 'tpl-1');
     assert.equal(item.enqueuedAt, '2026-07-15T11:00:00.000Z');
     await assert.rejects(() => createQueueItem({ requestedAction: 'bad-action' }), /Unknown requestedAction/);
@@ -643,7 +644,8 @@ test('createQueueItem captures the schema-v4 config and selected route at enqueu
         selectedRoute: route,
     });
     const item = await createQueueItem({
-        chatId: 'chat-1', msgId: 7, messageText: 'scene text', requestedAction: 'full-pipeline', templateId: null,
+        chatId: 'chat-1', msgId: 7, messageText: 'scene text', requestedAction: 'current-prompt-stage2', templateId: null,
+        submission: { prompt: 'scene prompt' },
     });
 
     route.modelId = 'mutated-after-enqueue';
@@ -662,6 +664,7 @@ test('queued browser generation refuses to dispatch after its connection is remo
     const item = await createQueueItem({
         chatId: 'chat-1', msgId: 4, messageText: 'Aria waits.',
         requestedAction: 'current-prompt-stage2', templateId: null,
+        submission: { prompt: 'queued server prompt' },
     });
     const baseCtx = globalThis.SillyTavern.getContext;
     globalThis.SillyTavern.getContext = () => ({
@@ -705,8 +708,9 @@ test('queue item captures effective template id without mutating draft mode', as
         chatId: 'chat-1',
         msgId: 4,
         messageText: 'Aria waits.',
-        requestedAction: 'full-pipeline',
+        requestedAction: 'current-prompt-stage2',
         templateId,
+        submission: { prompt: 'queued prompt' },
         now: () => '2026-07-15T11:00:00.000Z',
     });
 
@@ -718,47 +722,6 @@ test('queue item captures effective template id without mutating draft mode', as
     assert.equal(stored.templateId, null);
 });
 
-test('enqueue full-pipeline keeps captured identity after navigation', async () => {
-    await setupTextApi();
-    await setupImageApi();
-    textResponse = 'queued prompt';
-    const { enqueueGeneration, createQueueItem, stopQueue } = await import('../src/pipeline.js');
-
-    const restore = mockServerImageApi();
-    try {
-        const item = await createQueueItem({
-            chatId: 'chat-1', msgId: 4, messageText: 'Aria waits.',
-            requestedAction: 'full-pipeline', templateId: null,
-        });
-
-        // Navigate to a different message before the queue drains.
-        coreState.currentMsgId = 99;
-        globalThis.SillyTavern.getContext = () => ({
-            extensionSettings,
-            saveSettingsDebounced: () => {},
-            getRequestHeaders: () => ({}),
-            ConnectionManagerRequestService: { sendRequest: async () => ({ choices: [{ message: { content: textResponse } }] }) },
-            chat: [,,,, { mes: 'Aria waits.' }],
-            chatId: 'other-chat',
-            name1: 'Alex',
-            name2: 'Aria',
-            characters: [{ name: 'Aria', description: 'blonde prince', avatar: 'aria.png' }],
-            characterId: 0,
-        });
-
-        const entry = await enqueueGeneration(item);
-        assert.ok(entry, 'queue should process the captured message');
-
-        const { getGenerationDraft } = await import('../src/generation-drafts.js');
-        const draft = await getGenerationDraft('chat-1', 4, 'Aria waits.');
-        assert.equal(draft.prompt, 'queued prompt');
-        assert.equal(draft.msgId, 4);
-    } finally {
-        restore();
-        stopQueue();
-    }
-});
-
 test('enqueue rejects item when source message changes before drain', async () => {
     await setupTextApi();
     await setupImageApi();
@@ -768,7 +731,8 @@ test('enqueue rejects item when source message changes before drain', async () =
     try {
         const item = await createQueueItem({
             chatId: 'chat-1', msgId: 4, messageText: 'Aria waits.',
-            requestedAction: 'full-pipeline', templateId: null,
+            requestedAction: 'current-prompt-stage2', templateId: null,
+            submission: { prompt: 'queued prompt', aspectRatio: null, imageSize: null, quality: null },
         });
 
         // Change the source text before draining.
@@ -828,6 +792,7 @@ test('enqueue current-prompt-stage2 skips Stage 1 and uses saved prompt', async 
         const item = await createQueueItem({
             chatId: 'chat-1', msgId: 4, messageText: 'Aria waits.',
             requestedAction: 'current-prompt-stage2', templateId: null,
+            submission: { prompt: 'manual queued prompt', aspectRatio: '16:9', imageSize: '4K', quality: 'standard' },
         });
 
         const entry = await enqueueGeneration(item);
@@ -1150,7 +1115,8 @@ test('queue item keeps captured chat config after switching to another chat', as
     });
     const item = await createQueueItem({
         chatId: 'chat-a', msgId: 4, messageText: 'Aria waits.',
-        requestedAction: 'full-pipeline', templateId: null,
+        requestedAction: 'current-prompt-stage2', templateId: null,
+        submission: { prompt: 'queued prompt' },
     });
     assert.equal(item.chatConfig.imageProfileId, 'img-a', 'queue item must capture chat-a image profile');
     assert.equal(item.chatConfig.templateId, activeTpl.id, 'queue item must capture chat-a template');
@@ -1195,9 +1161,7 @@ test('queue item keeps captured chat config after switching to another chat', as
     try {
         const entry = await enqueueGeneration(item);
         assert.ok(entry, 'queue should produce a gallery entry');
-        assert.ok(submittedRequest, 'must submit through the captured chat-a image connection');
-        assert.ok(systemPrompt.includes('TEMPLATE A INSTRUCTION'), 'must use chat-a template');
-        assert.ok(!systemPrompt.includes('TEMPLATE B INSTRUCTION'), 'must not use chat-b template');
+        assert.ok(submittedRequest, 'must submit through the captured chat-a image connection — a live img-b lookup would fail');
     } finally {
         restore();
         globalThis.SillyTavern.getContext = baseCtx;
@@ -1269,8 +1233,8 @@ test('cancelling a single queue item continues the queue with the next item', as
         return undefined;
     });
     try {
-        const item1 = await createQueueItem({ chatId: 'chat-q', msgId: 10, messageText: 'first post', requestedAction: 'current-prompt-stage2', templateId: null });
-        const item2 = await createQueueItem({ chatId: 'chat-q', msgId: 11, messageText: 'second post', requestedAction: 'current-prompt-stage2', templateId: null });
+        const item1 = await createQueueItem({ chatId: 'chat-q', msgId: 10, messageText: 'first post', requestedAction: 'current-prompt-stage2', templateId: null, submission: { prompt: 'first prompt' } });
+        const item2 = await createQueueItem({ chatId: 'chat-q', msgId: 11, messageText: 'second post', requestedAction: 'current-prompt-stage2', templateId: null, submission: { prompt: 'second prompt' } });
 
         const p1 = enqueueGeneration(item1);
         const p2 = enqueueGeneration(item2);

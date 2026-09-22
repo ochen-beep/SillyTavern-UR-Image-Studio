@@ -10,32 +10,28 @@ import { state, getCtx, log, error } from './core.js';
 import { recordDiagnosticEvent, hashDiagnosticId } from './diagnostic-events.js';
 import { hashMessage } from './generation-drafts.js';
 import { resolveChatConfigSnapshot } from './pipeline-config.js';
-import { runStage1ForDraft } from './pipeline-stage1.js';
 import { runStage2ForDraft } from './pipeline-stage2.js';
 import { STUDIO_CHAT_ID } from './studio-scope.js';
 
 // ── Queue: explicit source identity and action ──
 
 /**
- * Build a queue item with captured source identity.
+ * Build a queue item with captured source identity. The queue only carries
+ * submission snapshots (current-prompt-stage2): the auto full-pipeline runs in
+ * the autolane, not here.
  *
- * @param {{chatId:string,msgId:number,messageText:string,requestedAction:'full-pipeline'|'current-prompt-stage2',templateId:string|null,submission?:object|null,now?:()=>string}} input
- * `submission` (current-prompt-stage2 only) is the submit-time snapshot
+ * @param {{chatId:string,msgId:number,messageText:string,requestedAction:'current-prompt-stage2',templateId:string|null,submission?:object|null,now?:()=>string}} input
+ * `submission` is the submit-time snapshot
  * `{prompt, aspectRatio?, imageSize?, quality?, references?}` captured at
  * click time; the queue deep-freezes a copy so later draft edits cannot
  * change what a queued Stage 2 will submit.
  * @returns {import('./core.js').GenerationQueueItem}
  */
 export async function createQueueItem({ chatId, msgId, messageText, requestedAction, templateId, submission = null, now = () => new Date().toISOString() }) {
-    if (!['full-pipeline', 'current-prompt-stage2'].includes(requestedAction)) {
+    if (requestedAction !== 'current-prompt-stage2') {
         throw new Error(`Unknown requestedAction: ${requestedAction}`);
     }
-    if (submission != null && requestedAction !== 'current-prompt-stage2') {
-        throw new Error('submission is only valid for current-prompt-stage2');
-    }
-    // Validate before copying: a non-string prompt (e.g. a number) must not
-    // pass coercion and fail loudly later at paid-dispatch time.
-    if (submission != null && (typeof submission.prompt !== 'string' || !submission.prompt.trim())) {
+    if (submission == null || typeof submission.prompt !== 'string' || !submission.prompt.trim()) {
         throw new Error('submission.prompt must be a non-empty string');
     }
     // Explicit field copy: the snapshot must not alias (or freeze) the caller's
@@ -96,25 +92,6 @@ export function enqueueGeneration(item) {
     });
 }
 
-/**
- * Compatibility wrapper: enqueue full-pipeline for the current message.
- *
- * @param {number|string} msgId
- * @returns {Promise<object|null>}
- */
-export async function enqueue(msgId) {
-    const ctx = getCtx();
-    const chatId = ctx.chatId;
-    const messageText = ctx.chat?.[msgId]?.mes || '';
-    return enqueueGeneration(await createQueueItem({
-        chatId,
-        msgId,
-        messageText,
-        requestedAction: 'full-pipeline',
-        templateId: null,
-    }));
-}
-
 async function processQueue() {
     if (state.queueRunning) return;
     state.queueRunning = true;
@@ -148,17 +125,10 @@ async function processQueue() {
                     chatConfig: item.chatConfig,
                 };
                 let entry;
-                if (item.requestedAction === 'current-prompt-stage2') {
-                    entry = await runStage2ForDraft(input, (s) => { log('Q:', s); }, state.queueAbort.signal,
-                        item.submission ? { submission: item.submission } : {});
-                } else {
-                    const run = await runStage1ForDraft(input, (s) => { log('Q:', s); }, state.queueAbort.signal);
-                    if (run.applied && run.draft?.prompt) {
-                        entry = await runStage2ForDraft(input, (s) => { log('Q:', s); }, state.queueAbort.signal);
-                    } else {
-                        entry = null;
-                    }
-                }
+                // The queue only carries submission snapshots; the auto
+                // full-pipeline runs in the autolane (pipeline-stage1.js).
+                entry = await runStage2ForDraft(input, (s) => { log('Q:', s); }, state.queueAbort.signal,
+                    item.submission ? { submission: item.submission } : {});
                 recordDiagnosticEvent({ event: 'queue-complete', stage: 'queue', chatHash: hashDiagnosticId(item.chatId), msgId: item.msgId, outcome: 'completed' });
                 resolve(entry);
             } catch (e) {

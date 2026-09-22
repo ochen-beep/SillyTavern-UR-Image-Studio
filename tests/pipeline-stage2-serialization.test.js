@@ -72,7 +72,7 @@ beforeEach(async () => {
     proxy.clearHostStrategy();
 });
 
-const instr = { prompt: 'a cat', style: 'anime', aspectRatio: '1:1', imageSize: '1K' };
+const submission = { prompt: 'a cat', aspectRatio: '1:1', imageSize: '1K' };
 
 
 test('browser generation persists a pending request before POST and materializes the ready result', async () => {
@@ -124,7 +124,7 @@ test('browser generation persists a pending request before POST and materializes
             undefined,
             undefined,
             {
-                instruction: instr,
+                submission,
             },
         );
         // A browser pending record (notStarted) is persisted before the provider
@@ -189,7 +189,7 @@ test('browser generation logs a confirmed capability line on success', async () 
         const { runStage2ForDraft } = await import('../src/pipeline-stage2.js');
         await runStage2ForDraft(
             { chatId: 'test-chat', msgId: 22, messageText: 'A cat.', templateId: null, chatConfig: { imageProfileId: connId, templateId: null, imageRoute: route } },
-            undefined, undefined, { instruction: instr },
+            undefined, undefined, { submission },
         );
         const line = cap.find();
         assert.ok(line, 'expected a capability log line after a successful generation');
@@ -226,7 +226,7 @@ test('browser generation logs network-unknown (never unsupported) on a CORS fail
         const { runStage2ForDraft } = await import('../src/pipeline-stage2.js');
         await assert.rejects(runStage2ForDraft(
             { chatId: 'test-chat', msgId: 23, messageText: 'A cat.', templateId: null, chatConfig: { imageProfileId: connId, templateId: null, imageRoute: route } },
-            undefined, undefined, { instruction: instr },
+            undefined, undefined, { submission },
         ));
         assert.equal(postCount, 1, 'a paid POST must not be auto-resubmitted after a CORS failure');
         const line = cap.find();
@@ -275,7 +275,7 @@ test('browser generation rejects references exceeding the route maximum before P
                 undefined,
                 undefined,
                 {
-                    instruction: instr,
+                    submission,
                     refs: [
                         { id: 'first', name: 'First', image: 'data:image/png;base64,Zmlyc3Q=' },
                         { id: 'second', name: 'Second', image: 'data:image/png;base64,c2Vjb25k' },
@@ -365,7 +365,7 @@ test('internal abort controller is registered in activeGenerations and cleaned u
             { chatId: 'test-chat', msgId: 31, messageText: 'A cat.', templateId: null, chatConfig: { imageProfileId: connId, templateId: null, imageRoute: route } },
             undefined,
             undefined,
-            { instruction: instr },
+            { submission },
         );
 
         // Poll the draft until stage2 is 'running' with a requestId.
@@ -423,7 +423,7 @@ test('external signal abort sets draft status to cancelled (not error)', async (
             { chatId: 'test-chat', msgId: 32, messageText: 'A cat.', templateId: null, chatConfig: { imageProfileId: connId, templateId: null, imageRoute: route } },
             undefined,
             controller.signal,
-            { instruction: instr },
+            { submission },
         );
 
         // Abort after the fetch has started.
@@ -471,7 +471,7 @@ test('external-signal (queue) Stage 2 also registers in activeGenerations and is
             { chatId: 'test-chat', msgId: 33, messageText: 'A cat.', templateId: null, chatConfig: { imageProfileId: connId, templateId: null, imageRoute: route } },
             undefined,
             queueController.signal,
-            { instruction: instr },
+            { submission },
         );
 
         let requestId = null;
@@ -547,8 +547,8 @@ test('Stop-all cancels a queued (chained) Stage 2 before it starts; it never rea
         };
 
         // First click starts the run; second click queues into the per-post chain.
-        const first = runStage2ForDraft(input, undefined, undefined, { instruction: instr });
-        const second = runStage2ForDraft({ ...input }, undefined, undefined, { instruction: instr });
+        const first = runStage2ForDraft(input, undefined, undefined, { submission });
+        const second = runStage2ForDraft({ ...input }, undefined, undefined, { submission });
         await new Promise(r => setTimeout(r, 30));
 
         // "Stop stops everything": every registered controller is aborted — the
@@ -575,11 +575,11 @@ test('stage2 chain is keyed per chat: the same msgId in another chat does not wa
 
         const first = runStage2ForDraft(
             { chatId: 'chat-a', msgId: 5, messageText: 'A cat.', templateId: null, chatConfig },
-            undefined, undefined, { instruction: instr },
+            undefined, undefined, { submission },
         );
         const second = runStage2ForDraft(
             { chatId: 'chat-b', msgId: 5, messageText: 'A cat.', templateId: null, chatConfig },
-            undefined, undefined, { instruction: instr },
+            undefined, undefined, { submission },
         );
 
         // With a bare-msgId key the second run waited for the first chat's chain
@@ -627,7 +627,7 @@ test('stage2-end закрывает генерацию с outcome, chatHash и �
         const { runStage2ForDraft } = await import('../src/pipeline-stage2.js');
         await runStage2ForDraft(
             { chatId: 'test-chat', msgId: 30, messageText: 'A cat.', templateId: null, chatConfig: { imageProfileId: connId, templateId: null, imageRoute: route } },
-            undefined, undefined, { instruction: instr },
+            undefined, undefined, { submission },
         );
         const end = journal.listDiagnosticEvents().find(e => e.event === 'stage2-end');
         assert.ok(end, 'stage2-end must be recorded');

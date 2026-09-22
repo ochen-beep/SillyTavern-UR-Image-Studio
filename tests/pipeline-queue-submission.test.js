@@ -105,16 +105,22 @@ test('createQueueItem validates and deep-freezes the submission snapshot', async
     assert.ok(Object.isFrozen(item.submission.references.includedIds));
 });
 
-test('createQueueItem rejects malformed submissions', async () => {
+test('createQueueItem rejects malformed submissions and legacy actions', async () => {
     const { createQueueItem } = await import('../src/pipeline-queue.js');
     const base = { chatId: 'test-chat', msgId: 0, messageText: 'A cat.', templateId: null };
     await assert.rejects(
         () => createQueueItem({ ...base, requestedAction: 'current-prompt-stage2', submission: { prompt: '   ' } }),
         /submission\.prompt/,
     );
+    // The queue carries submission snapshots only: the auto full-pipeline
+    // lives in the autolane, and the old full-pipeline queue action is gone.
     await assert.rejects(
         () => createQueueItem({ ...base, requestedAction: 'full-pipeline', submission: { prompt: 'P' } }),
-        /current-prompt-stage2/,
+        /Unknown requestedAction/,
+    );
+    await assert.rejects(
+        () => createQueueItem({ ...base, requestedAction: 'current-prompt-stage2' }),
+        /submission\.prompt/,
     );
 });
 

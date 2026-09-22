@@ -186,7 +186,7 @@ export async function regenerate(item, root, regenBtn) {
         }
         if (regenBtn) regenBtn.disabled = true;
         setStatus('Перегенерация...');
-        const instr = { style: item.style, prompt: item.prompt, aspectRatio: item.aspectRatio, imageSize: item.imageSize, quality: item.quality };
+        const instr = { prompt: item.prompt, aspectRatio: item.aspectRatio, imageSize: item.imageSize, quality: item.quality };
         let opts = {};
         if (useSameRefs && snapshot) {
             const refs = await rebuildRefsFromSnapshot(snapshot);
