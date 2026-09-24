@@ -54,13 +54,21 @@ export async function urisGenerate(request, opts) {
 
 | Метод | Вход → Результат |
 |---|---|
-| `generate(req, opts)` | `{prompt, aspectRatio?, imageSize?, quality?, references?, connectionId?, modelId?, useSceneRefs?, expandMacros?}` + `{caller, signal?, onStatus?, queue?}` → `{requestId, cardId, imagePath, width, height, warnings}` |
+| `generate(req, opts)` | `{prompt, aspectRatio?, imageSize?, quality?, references?, connectionId?, modelId?, trigger?, useSceneRefs?, expandMacros?}` + `{caller, signal?, onStatus?, queue?}` → `{requestId, cardId, imagePath, width, height, warnings}` |
 | `buildPrompt(req, opts)` | `{text, templateId?, useScene?=true, expandMacros?=true}` → `{requestId, prompt, templateId, templateType, matchedReferences, ambiguities}` — Stage 1 URIS над произвольным текстом |
+| `generateFromScene(req, opts)` | `{text, templateId?, aspectRatio?, …}` → `{built, result}` — оба шага одним вызовом (на мосту с URIS 0.9.6; в клиенте — и на старых) |
 | `getStatus()` | `{enabled, ready, accepting, connection, active}` |
 | `listConnections()` | `[{id, label, modelId, ready}]` — без ключей |
 | `listRefs()` / `listTemplates()` | sanitized-списки |
+| `listTriggers()` | ≥ 0.9.6. `[{id, name, aliases, aspect, refsPolicy}]` — реестр для `generate({trigger})` |
+| `getCapabilities(id?)` | ≥ 0.9.6. До платного вызова: `{contract, imageGeneration, references, maxReferences, sizes, qualities, modelId, ready}` |
+| `listGallery({caller?, limit?, offset?})` | ≥ 0.9.6. `{total, cards:[{id, imagePath, thumbPath, prompt, status, caller, requestId, …}]}` — чтение галереи URIS; клиент фильтрует по вашему caller |
+| `getCard(cardId)` | ≥ 0.9.6. Одна карточка по id |
+| `removeCard(cardId)` | ≥ 0.9.6. Удалить **только свою** карточку (чужая/ручная → `CARD_NOT_OWNED`); файл изображения остаётся |
+| `listPending({caller?})` | ≥ 0.9.6. Recovery: платные запросы без подтверждённого исхода — `[{requestId, status, createdAt, error, prompt, …}]` |
+| `classifyError(err)` | ≥ 0.9.6. `{code, category, retryable}` — политика обработки ошибки |
 | `abort(requestId)` | `bool` — отмена, в т.ч. стоящего в очереди |
-| `on(type, cb)` / `off` | события `generation:queued/started/ended/error`, `prompt:*`, `'*'` |
+| `on(type, cb)` / `off` | события `generation:queued/started/ended/error`, `prompt:*`, `gallery:added/removed` (≥ 0.9.6), `'*'` |
 
 - Константы: `aspectRatio` ∈ `1:1, 2:3, 3:2, 3:4, 4:3, 4:5, 5:4, 9:16, 16:9, 21:9`;
   `imageSize` ∈ `1K, 2K, 4K`; `quality` ∈ `auto, high, medium, low`.
@@ -69,6 +77,8 @@ export async function urisGenerate(request, opts) {
 - Макросы `{{char}}`/`{{user}}` в prompt/text разворачиваются (не хотите — `expandMacros: false`).
 - **`caller`** — обязательный тег вашего расширения (`[A-Za-z0-9][A-Za-z0-9_-]{0,63}`),
   по нему пользователь видит, кто тратил деньги. Задайте константой.
+- Методы «≥ 0.9.6» на старом URIS отсутствуют: `typeof URIS.listGallery === 'function'`
+  или drop-in клиент (он оборачивает недоступность в `URIS_UNAVAILABLE`).
 
 ### Коды ошибок (`err.code`) — ветвление делайте по коду, не по тексту
 
@@ -77,9 +87,18 @@ export async function urisGenerate(request, opts) {
 | `URIS_UNAVAILABLE` | не установлен → спрятать кнопки, не падать |
 | `EXT_DISABLED` / `NOT_READY` | выключен/грузится → подсказка |
 | `NO_CONNECTION`, `ROUTE_SELECTION_REQUIRED`, `MISSING_API_KEY`, `*_TOKEN_REQUIRED` | юзеру настроить URIS (показать `err.message`) |
-| `REF_NOT_FOUND`, `REF_UNAVAILABLE`, `TEMPLATE_INVALID`, `NOT_FOUND` | конфигурация |
+| `REF_NOT_FOUND`, `REF_UNAVAILABLE`, `TEMPLATE_INVALID`, `NOT_FOUND`, `TRIGGER_NOT_FOUND` | конфигурация |
+| `CARD_NOT_OWNED` | удаляете чужую/ручную карточку — чистите свой список |
 | `INVALID_PARAMS`, `INVALID_CALLER` | ваш баг |
 | `ABORTED` | **отмена — не ошибка**, убрать заготовку молча |
+
+С URIS ≥ 0.9.6 у каждой ошибки есть `err.category` и `err.retryable` (то же в
+событиях `generation:error`): `cancelled | unavailable | config |
+invalid-request | auth | quota | rate-limit | provider-error | timeout |
+network-unknown | content-policy | unsupported-feature | internal`.
+`retryable: true` — транзиент, можно повторить. `category: 'internal'` —
+деньги могли СПИСАТЬСЯ, а сохранение упало: не повторяйте платный вызов
+вслепую, покажите запись из `listPending()`.
 
 ## 4. Результат и показ
 
@@ -94,6 +113,11 @@ img.src = '/' + result.imagePath;      // просто путь, не dataURL
 Храните `imagePath` в своих сообщениях/записях (переживает перезагрузку),
 клик — ваш лайтбокс или что угодно. Карточка в галерее URIS создаётся
 автоматически. Для vision-модели: `fetch('/'+path)` → blob → dataURL.
+
+С URIS ≥ 0.9.6 галерея читается обратно: `listGallery({caller})` — ваши
+карточки (восстановление после перезагрузки без своего индекса),
+`getCard(cardId)`, `removeCard(cardId)` (только свои; файл остаётся),
+события `gallery:added`/`gallery:removed` — для реактивных лент.
 
 ## 5. Рецепты триггеров — что реализуете вы
 
@@ -209,9 +233,13 @@ ctx.SlashCommandParser.addCommandObject(ctx.SlashCommand.fromProps({
 - [ ] `caller` — константа расширения, валидный тег
 - [ ] Все вызовы через `globalThis.URIS` в момент вызова, с `signal`
 - [ ] Pending-UI с отменой; `ABORTED` обрабатывается молча
-- [ ] `err.code`-свитч на все коды из §3; тексты сообщений не парсятся
+- [ ] `err.code`-свитч на все коды из §3; тексты сообщений не парсятся;
+      на URIS ≥ 0.9.6 ветвление по `err.category`/`err.retryable`
+- [ ] `category: 'internal'` → подсказка про recovery (`listPending()`),
+      а не автоповтор платного вызова
 - [ ] `imagePath` сохраняется в вашем хранилище; показ через `<img src="/+path">`
-- [ ] Без URIS расширение работает (кнопки скрыты/подсказка), не падает
+- [ ] Без URIS расширение работает (кнопки скрыты/подсказка), не падает;
+      методы 0.9.6 feature-detect'ятся или идут через клиент (URIS_UNAVAILABLE)
 - [ ] Выключение URIS посреди генерации → заготовка убрана, не «вечный спиннер»
 - [ ] Триггер(ы) из §5 реализованы и не стреляют повторно на перезагрузку
       (перезагрузка страницы не должна запускать новую платную генерацию для

@@ -11,7 +11,12 @@
  * manual generation. Nothing here duplicates provider/transport logic.
  *
  * Test-build scope (theory check):
- *   - generate / abort / getStatus / listConnections / on / off / ready
+ *   - generate / buildPrompt / generateFromScene / abort / getStatus / on / off / ready
+ *   - read surface: listConnections / listRefs / listTemplates / listTriggers /
+ *     getCapabilities / listGallery / getCard / listPending (all sanitized);
+ *     the one write-back is removeCard, scoped to the caller's own cards
+ *   - structured errors: err.code, err.category, err.retryable and the same in
+ *     event payloads (classifyBridgeError is exposed for local classification)
  *   - serial queue for external calls (default) to prevent N parallel paid POSTs
  *   - caller attribution: requestId prefix, diagnostic events, gallery provenance
  *   - permission UI (allowlist per caller) is NOT implemented yet — any enabled
@@ -40,6 +45,10 @@ import { listRefs } from './refs-library.js';
 import { enqueueAutoLane } from './autolane.js';
 import { parseInline } from './inline/grammar.js';
 import { buildAliasIndex, resolveProfile, sanitizeTriggerList, buildInlinePrompt, DEFAULT_TRIGGERS } from './inline/triggers.js';
+import { listCards, removeCard as removeGalleryCard } from './gallery-index.js';
+import { listPendingBrowserRequests } from './browser-image-recovery.js';
+import { classifyOutcome } from './capability-observer.js';
+import { supportedImageSizesFor } from './image-model-capabilities.js';
 
 /** Public contract version. Increment on breaking changes to the surface below. */
 export const BRIDGE_API_VERSION = 1;
@@ -137,6 +146,210 @@ export function normalizeBridgeRequest(request) {
     const useSceneRefs = req.useSceneRefs === true;
     const expandMacros = req.expandMacros !== false;
     return { prompt, aspectRatio, imageSize, quality, references, connectionId, modelId, trigger, useSceneRefs, expandMacros };
+}
+
+// ── Caller attribution on artifacts ──
+
+/**
+ * Extract the external caller tag from a bridge-generated requestId
+ * (`ext_<caller>_<uuid>`; the uuid part never contains underscores, so the
+ * caller is everything between `ext_` and the last underscore). Returns null
+ * for manual (non-bridge) request ids. Gallery cards carry the requestId in
+ * `provenance.requestId`, so this is also the card attribution key.
+ * @param {unknown} requestId
+ * @returns {string|null}
+ */
+export function bridgeCallerFromRequestId(requestId) {
+    if (typeof requestId !== 'string' || !requestId.startsWith('ext_')) return null;
+    const m = /^ext_([A-Za-z0-9][A-Za-z0-9_-]{0,63})_[^_]+$/.exec(requestId);
+    return m ? m[1] : null;
+}
+
+// ── Structured error classification (additive contract since apiVersion 1) ──
+
+/**
+ * Categories a consumer can branch on. codes keep pinpointing the exact
+ * failure; category groups codes into handling policies:
+ *   - cancelled        the request was aborted (not an error worth showing)
+ *   - unavailable      URIS itself is off/initializing — retry later
+ *   - config           the user must fix something in URIS (connection, key,
+ *                      template, ref pool); retrying unchanged is pointless
+ *   - invalid-request  the consumer's request shape is wrong (its own bug)
+ *   - auth/quota       provider key state; retry only after the user acts
+ *   - rate-limit/timeout/network-unknown
+ *                      transient — retryable
+ *   - provider-error   upstream 5xx or an upstream response URIS could not
+ *                      parse — retryable
+ *   - content-policy   refused by policy; reword, do not retry verbatim
+ *   - unsupported-feature  the model/contract cannot do what was asked
+ *   - internal         generation may have been BILLED but materialization
+ *                      failed — check listPending(), never retry blindly
+ *   - unknown          no structured signal at all
+ */
+const BRIDGE_ERROR_META = Object.freeze({
+    ABORTED: { category: 'cancelled', retryable: false },
+    NOT_READY: { category: 'unavailable', retryable: true },
+    EXT_DISABLED: { category: 'unavailable', retryable: true },
+    INVALID_CALLER: { category: 'invalid-request', retryable: false },
+    INVALID_PARAMS: { category: 'invalid-request', retryable: false },
+    CARD_NOT_OWNED: { category: 'invalid-request', retryable: false },
+    NO_CONNECTION: { category: 'config', retryable: false },
+    NO_ROUTE: { category: 'config', retryable: false },
+    TRIGGER_NOT_FOUND: { category: 'config', retryable: false },
+    REF_NOT_FOUND: { category: 'config', retryable: false },
+    REF_UNAVAILABLE: { category: 'config', retryable: false },
+    NOT_FOUND: { category: 'config', retryable: false },
+    TEMPLATE_INVALID: { category: 'config', retryable: false },
+    MODEL_NOT_IMAGE: { category: 'config', retryable: false },
+    ROUTE_SELECTION_REQUIRED: { category: 'config', retryable: false },
+    MISSING_API_KEY: { category: 'config', retryable: false },
+    POLLINATIONS_TOKEN_REQUIRED: { category: 'config', retryable: false },
+    POLLINATIONS_TOKEN_INVALID: { category: 'config', retryable: false },
+    NAISTERA_TOKEN_REQUIRED: { category: 'config', retryable: false },
+    NAISTERA_TOKEN_INVALID: { category: 'config', retryable: false },
+});
+
+// capability-observer outcome → bridge-facing (category, retryable). The
+// diagnostic taxonomy stays inside URIS; consumers get a stable, smaller set.
+const OUTCOME_ERROR_META = Object.freeze({
+    'auth': { category: 'auth', retryable: false },
+    'quota': { category: 'quota', retryable: false },
+    'rate-limit': { category: 'rate-limit', retryable: true },
+    'provider-error': { category: 'provider-error', retryable: true },
+    'timeout': { category: 'timeout', retryable: true },
+    'invalid-request': { category: 'invalid-request', retryable: false },
+    'content-policy': { category: 'content-policy', retryable: false },
+    'unsupported-feature': { category: 'unsupported-feature', retryable: false },
+    // 200 OK without an image / malformed JSON: the model answered, URIS could
+    // not use the answer. Reads as provider-error to consumers.
+    'missing-image': { category: 'provider-error', retryable: true },
+    'malformed': { category: 'provider-error', retryable: true },
+    // Provider POST succeeded (billed) but local materialization failed.
+    'materialize': { category: 'internal', retryable: false },
+    'network-unknown': { category: 'network-unknown', retryable: true },
+});
+
+/**
+ * Classify any error the bridge can throw or emit. Pure — never throws.
+ * @param {unknown} err
+ * @returns {{code:string|null, category:string, retryable:boolean}}
+ */
+export function classifyBridgeError(err) {
+    const code = typeof err?.code === 'string' ? err.code : null;
+    if (err?.name === 'AbortError' || code === 'ABORTED') return { code: 'ABORTED', category: 'cancelled', retryable: false };
+    const own = code ? BRIDGE_ERROR_META[code] : null;
+    if (own) return { code, ...own };
+    const outcomeMeta = OUTCOME_ERROR_META[classifyOutcome(err)];
+    if (outcomeMeta) return { code, ...outcomeMeta };
+    return { code, category: 'unknown', retryable: false };
+}
+
+/**
+ * Stamp category/retryable onto an error object about to cross the bridge
+ * boundary. Never replaces an existing stamp (a deeper layer knows better).
+ * @param {unknown} err
+ */
+function stampBridgeError(err) {
+    if (!err || typeof err !== 'object') return;
+    const info = classifyBridgeError(err);
+    if (err.category == null) err.category = info.category;
+    if (err.retryable == null) err.retryable = info.retryable;
+}
+
+/**
+ * Event-payload form of an error: code + human message + classification.
+ * @param {unknown} err
+ * @returns {{code:string|null, message:string, category:string, retryable:boolean}}
+ */
+function bridgeErrorPayload(err) {
+    const info = classifyBridgeError(err);
+    return {
+        code: info.code,
+        message: err?.message || String(err),
+        category: info.category,
+        retryable: info.retryable,
+    };
+}
+
+// ── Sanitized read models (gallery cards, pending recovery) ──
+
+const MAX_GALLERY_LIMIT = 200;
+const GALLERY_PROMPT_CLIP = 4096;
+const PENDING_PROMPT_CLIP = 2000;
+
+/**
+ * Sanitized gallery card for external consumers. No prompt bodies over 4 KB,
+ * no provenance internals, no style/snapshot blobs; attribution is reduced to
+ * `caller` + `requestId`. Returns null for unusable input.
+ * @param {unknown} card
+ * @returns {object|null}
+ */
+export function sanitizeBridgeCard(card) {
+    if (!card || typeof card !== 'object' || Array.isArray(card)) return null;
+    const requestId = typeof card.provenance?.requestId === 'string' ? card.provenance.requestId : null;
+    return {
+        id: String(card.id || ''),
+        imagePath: typeof card.imagePath === 'string' ? card.imagePath : null,
+        thumbPath: typeof card.thumbPath === 'string' ? card.thumbPath : null,
+        prompt: typeof card.prompt === 'string' ? card.prompt.slice(0, GALLERY_PROMPT_CLIP) : '',
+        connectionId: typeof card.connectionId === 'string' && card.connectionId ? card.connectionId : null,
+        modelId: typeof card.modelId === 'string' && card.modelId ? card.modelId : null,
+        aspectRatio: typeof card.aspectRatio === 'string' && card.aspectRatio ? card.aspectRatio : null,
+        imageSize: typeof card.imageSize === 'string' && card.imageSize ? card.imageSize : null,
+        quality: typeof card.quality === 'string' && card.quality ? card.quality : null,
+        width: Number.isFinite(card.width) ? card.width : null,
+        height: Number.isFinite(card.height) ? card.height : null,
+        status: card.status === 'missing' ? 'missing' : 'ready',
+        hidden: card.hidden === true,
+        referenceIds: Array.isArray(card.referenceIds) ? card.referenceIds.filter(id => typeof id === 'string') : [],
+        createdAt: Number.isFinite(card.createdAt) ? card.createdAt : null,
+        requestId,
+        caller: bridgeCallerFromRequestId(requestId),
+    };
+}
+
+/**
+ * Sanitized pending-recovery record (a paid provider request whose result
+ * URIS could not confirm). References are reduced to a count — descriptions
+ * and payloads never cross the bridge.
+ * @param {unknown} item
+ * @returns {object|null}
+ */
+export function sanitizeBridgePendingRecord(item) {
+    if (!item || typeof item !== 'object' || Array.isArray(item)) return null;
+    const requestId = typeof item.requestId === 'string' ? item.requestId : (typeof item.id === 'string' ? item.id : null);
+    if (!requestId) return null;
+    const prompt = typeof item.prompt === 'string' ? item.prompt : (typeof item.effectivePrompt === 'string' ? item.effectivePrompt : '');
+    return {
+        requestId,
+        caller: bridgeCallerFromRequestId(requestId),
+        status: typeof item.status === 'string' ? item.status : 'notStarted',
+        createdAt: typeof item.createdAt === 'string' ? item.createdAt : null,
+        error: typeof item.error === 'string' ? item.error : null,
+        connectionId: typeof item.connId === 'string' ? item.connId : null,
+        modelId: typeof item.modelId === 'string' ? item.modelId : null,
+        aspectRatio: typeof item.aspectRatio === 'string' ? item.aspectRatio : null,
+        imageSize: typeof item.imageSize === 'string' ? item.imageSize : null,
+        quality: typeof item.quality === 'string' ? item.quality : null,
+        prompt: prompt.slice(0, PENDING_PROMPT_CLIP),
+        referenceCount: Array.isArray(item.referenceIds) ? item.referenceIds.length : 0,
+    };
+}
+
+/**
+ * Validate a listGallery query. Pure.
+ * @param {unknown} query
+ * @returns {{caller:string|null, limit:number, offset:number, includeHidden:boolean}}
+ */
+export function normalizeGalleryQuery(query) {
+    const q = query && typeof query === 'object' && !Array.isArray(query) ? /** @type {Record<string, unknown>} */ (query) : {};
+    const caller = typeof q.caller === 'string' && q.caller.trim() ? q.caller.trim() : null;
+    if (caller && !CALLER_RE.test(caller)) {
+        throw bridgeError('INVALID_PARAMS', `caller filter "${caller}" is not a valid caller tag`);
+    }
+    const limit = Number.isFinite(q.limit) ? Math.min(Math.max(1, Math.trunc(q.limit)), MAX_GALLERY_LIMIT) : 50;
+    const offset = Number.isFinite(q.offset) ? Math.max(0, Math.trunc(q.offset)) : 0;
+    return { caller, limit, offset, includeHidden: q.includeHidden === true };
 }
 
 // ── Runtime (browser) state ──
@@ -331,6 +544,11 @@ async function generateOnce(caller, requestId, norm, controller, onStatus) {
             durationMs: Date.now() - startedAt,
             details: { caller, cardId: payload.cardId, imagePath: payload.imagePath },
         });
+        // gallery:added lands before generation:ended: reactive consumers can
+        // refresh their own galleries on the first event and still correlate
+        // the await-resolution with the second.
+        const cardSummary = sanitizeBridgeCard(result?.galleryEntry);
+        if (cardSummary) emitBridge('gallery:added', { requestId, caller, card: cardSummary });
         emitBridge('generation:ended', { requestId, caller, result: payload });
         return payload;
     } catch (e) {
@@ -343,9 +561,10 @@ async function generateOnce(caller, requestId, norm, controller, onStatus) {
         // DOMException AbortError carries a legacy numeric .code (20), so the
         // wrap condition must ask for a *string* code — otherwise the raw
         // DOMException leaks to consumers instead of the coded ABORTED.
-        if (cancelled && typeof e?.code !== 'string') throw bridgeError('ABORTED', 'Generation aborted');
-        emitBridge('generation:error', { requestId, caller, error: { code: e?.code || null, message: e?.message || String(e) } });
-        throw e;
+        const thrown = cancelled && typeof e?.code !== 'string' ? bridgeError('ABORTED', 'Generation aborted') : e;
+        stampBridgeError(thrown);
+        emitBridge('generation:error', { requestId, caller, error: bridgeErrorPayload(thrown) });
+        throw thrown;
     } finally {
         state.activeGenerations.delete(requestId);
         _externalRuns.delete(requestId);
@@ -466,8 +685,10 @@ async function getStatus() {
 
 /**
  * Subscribe to bridge events. Types: 'generation:queued' | 'generation:started'
- * | 'generation:ended' | 'generation:error' | 'ready' | 'destroyed', or '*'.
- * Returns an unsubscribe function.
+ * | 'generation:ended' | 'generation:error' | 'prompt:started' | 'prompt:ended'
+ * | 'prompt:error' | 'gallery:added' | 'gallery:removed' | 'ready'
+ * | 'destroyed', or '*'. Error payloads carry { code, message, category,
+ * retryable }. Returns an unsubscribe function.
  * @param {string} type
  * @param {(detail:any) => void} cb
  * @returns {() => void}
@@ -611,14 +832,205 @@ async function buildPrompt(request, opts = {}) {
             details: { caller, code: e?.code || null, message: e?.message || String(e) },
         });
         // Same numeric-code caveat as generateOnce: DOMException carries code 20.
-        if (cancelled && typeof e?.code !== 'string') throw bridgeError('ABORTED', 'Request aborted');
-        emitBridge('prompt:error', { requestId, caller, error: { code: e?.code || null, message: e?.message || String(e) } });
-        throw e;
+        const thrown = cancelled && typeof e?.code !== 'string' ? bridgeError('ABORTED', 'Request aborted') : e;
+        stampBridgeError(thrown);
+        emitBridge('prompt:error', { requestId, caller, error: bridgeErrorPayload(thrown) });
+        throw thrown;
     } finally {
         state.activeGenerations.delete(requestId);
         _externalRuns.delete(requestId);
         emitStage2(requestId, caller, 'end');
     }
+}
+
+// ── Gallery, recovery and capability reads (all additive to apiVersion 1) ──
+
+/**
+ * Read the URIS gallery (native ST gallery cards). Defaults to the newest 50
+ * non-hidden cards; `caller` narrows to one external caller via
+ * provenance.requestId. Read-only and unreconciled (no server scan), so it is
+ * safe to poll: a card whose file was deleted out-of-band still shows up with
+ * status 'missing' from the last reconcile.
+ * @param {unknown} query - { caller?, limit?, offset?, includeHidden? }
+ * @returns {Promise<{total:number, cards:Array}>}
+ */
+async function listGallery(query = {}) {
+    if (!isGenerationAllowed()) {
+        throw bridgeError(isBridgeActive() ? 'EXT_DISABLED' : 'NOT_READY', 'URIS bridge is not accepting requests (extension disabled or not initialized)');
+    }
+    const { caller, limit, offset, includeHidden } = normalizeGalleryQuery(query);
+    const all = await listCards({ reconcile: false });
+    const filtered = [];
+    for (const card of all) {
+        const summary = sanitizeBridgeCard(card);
+        if (!summary) continue;
+        if (!includeHidden && summary.hidden) continue;
+        if (caller && summary.caller !== caller) continue;
+        filtered.push(summary);
+    }
+    return { total: filtered.length, cards: filtered.slice(offset, offset + limit) };
+}
+
+/**
+ * One gallery card by id (same sanitized shape as listGallery entries).
+ * @param {unknown} cardId
+ */
+async function getCard(cardId) {
+    if (!isGenerationAllowed()) {
+        throw bridgeError(isBridgeActive() ? 'EXT_DISABLED' : 'NOT_READY', 'URIS bridge is not accepting requests (extension disabled or not initialized)');
+    }
+    const id = typeof cardId === 'string' && cardId.trim() ? cardId.trim() : null;
+    if (!id) throw bridgeError('INVALID_PARAMS', 'getCard(cardId): cardId is required');
+    const all = await listCards({ reconcile: false });
+    const card = all.find(item => item?.id === id);
+    if (!card) throw bridgeError('NOT_FOUND', `Gallery card "${id}" was not found`);
+    return sanitizeBridgeCard(card);
+}
+
+/**
+ * Remove a gallery card. The ONLY write the bridge exposes, and it is scoped:
+ * the card must be attributed to opts.caller (provenance.requestId prefix).
+ * Manual generations and other extensions' cards are refused with
+ * CARD_NOT_OWNED. The underlying image FILE is kept (same semantics as the
+ * URIS gallery's own delete-card path).
+ * @param {unknown} cardId
+ * @param {unknown} opts - { caller }
+ * @returns {Promise<boolean>} true when a card was removed
+ */
+async function removeCard(cardId, opts = {}) {
+    const caller = validateBridgeCaller(opts && typeof opts === 'object' ? /** @type {Record<string, unknown>} */ (opts).caller : undefined);
+    if (!isGenerationAllowed()) {
+        throw bridgeError(isBridgeActive() ? 'EXT_DISABLED' : 'NOT_READY', 'URIS bridge is not accepting requests (extension disabled or not initialized)');
+    }
+    const id = typeof cardId === 'string' && cardId.trim() ? cardId.trim() : null;
+    if (!id) throw bridgeError('INVALID_PARAMS', 'removeCard(cardId): cardId is required');
+    const all = await listCards({ reconcile: false });
+    const card = all.find(item => item?.id === id);
+    if (!card) throw bridgeError('NOT_FOUND', `Gallery card "${id}" was not found`);
+    const owner = bridgeCallerFromRequestId(card?.provenance?.requestId);
+    if (owner !== caller) {
+        throw bridgeError('CARD_NOT_OWNED', `Card "${id}" belongs to ${owner ? `"${owner}"` : 'a manual generation'}, not to "${caller}"`);
+    }
+    const removed = await removeGalleryCard(id);
+    if (removed) emitBridge('gallery:removed', { caller, cardId: id });
+    return removed;
+}
+
+/**
+ * Pending recovery records: paid provider requests whose outcome URIS could
+ * not confirm (tab closed mid-flight, network died after the POST…). Never
+ * resubmitted automatically — this is a review list, and the caller filter
+ * narrows it to one consumer's records.
+ * @param {unknown} query - { caller? }
+ * @returns {Promise<Array>}
+ */
+async function listPending(query = {}) {
+    if (!isGenerationAllowed()) {
+        throw bridgeError(isBridgeActive() ? 'EXT_DISABLED' : 'NOT_READY', 'URIS bridge is not accepting requests (extension disabled or not initialized)');
+    }
+    const q = query && typeof query === 'object' && !Array.isArray(query) ? /** @type {Record<string, unknown>} */ (query) : {};
+    const caller = typeof q.caller === 'string' && q.caller.trim() ? q.caller.trim() : null;
+    if (caller && !CALLER_RE.test(caller)) {
+        throw bridgeError('INVALID_PARAMS', `caller filter "${caller}" is not a valid caller tag`);
+    }
+    const records = await listPendingBrowserRequests();
+    const out = [];
+    for (const item of records) {
+        const summary = sanitizeBridgePendingRecord(item);
+        if (!summary) continue;
+        if (caller && summary.caller !== caller) continue;
+        out.push(summary);
+    }
+    return out;
+}
+
+/**
+ * Capabilities of one image connection (default: the current chat's). Read
+ * modelId/contract/refs policy/known sizes BEFORE composing a request, so a
+ * capability mistake is a local error instead of a paid one.
+ * Reflects URIS's current knowledge: 'unknown' means "never verified", it is
+ * not a refusal — dispatch may still succeed.
+ * @param {unknown} connectionId
+ */
+async function getCapabilities(connectionId = null) {
+    if (!isGenerationAllowed()) {
+        throw bridgeError(isBridgeActive() ? 'EXT_DISABLED' : 'NOT_READY', 'URIS bridge is not accepting requests (extension disabled or not initialized)');
+    }
+    let connId = typeof connectionId === 'string' && connectionId.trim() ? connectionId.trim() : null;
+    if (!connId) {
+        let snapshot = null;
+        try { snapshot = await resolveChatConfigSnapshot(); } catch { snapshot = null; }
+        connId = snapshot?.imageProfileId || null;
+    }
+    if (!connId) throw bridgeError('NO_CONNECTION', 'No image connection available. Pass connectionId or select a connection in the current chat.');
+    const resolved = await resolveConnection(connId);
+    if (!resolved) throw bridgeError('NO_CONNECTION', `Connection ${connId} was not found`);
+    const plan = resolveDispatchPlan(resolved.conn);
+    const route = plan?.route || null;
+    const caps = route?.capabilities || {};
+    const modelId = resolved.conn.model?.id ?? null;
+    return {
+        connectionId: resolved.conn.id,
+        label: resolved.conn.label || resolved.conn.name || resolved.conn.id,
+        modelId,
+        ready: Boolean(route),
+        contract: route?.generationContract ?? null,
+        imageGeneration: typeof caps.generate === 'string' ? caps.generate : 'unknown',
+        references: typeof caps.references === 'string' ? caps.references : 'unknown',
+        maxReferences: Number.isSafeInteger(caps.maxReferences) ? caps.maxReferences : null,
+        sizes: Array.isArray(caps.imageSizes) ? [...caps.imageSizes] : supportedImageSizesFor(modelId),
+        qualities: Array.isArray(caps.qualityValues) ? [...caps.qualityValues] : [...VALID_QUALITIES],
+    };
+}
+
+/**
+ * The inline-trigger registry as generate({trigger}) resolves it:
+ * { id, name, aliases, aspect, refsPolicy } per profile. Prompt fragments
+ * (prefix/suffix) are prompt bodies and stay private, same policy as
+ * listTemplates().
+ */
+async function listTriggerProfiles() {
+    if (!isGenerationAllowed()) {
+        throw bridgeError(isBridgeActive() ? 'EXT_DISABLED' : 'NOT_READY', 'URIS bridge is not accepting requests (extension disabled or not initialized)');
+    }
+    const registry = sanitizeTriggerList(state.settings?.inlineTriggers || DEFAULT_TRIGGERS);
+    return registry.map(t => ({ id: t.id, name: t.name, aliases: [...t.aliases], aspect: t.aspect, refsPolicy: t.refsPolicy }));
+}
+
+/**
+ * Scene text → URIS prompt template (Stage 1) → image (Stage 2) in one call.
+ * `request.text` is the scene; `request.templateId` picks a prompt template;
+ * every other generate() field passes through (`aspectRatio`, `quality`,
+ * `references`, `connectionId`, `modelId`, `useSceneRefs` defaulting to true…).
+ * Both halves share the caller and the opts.signal; both events fire
+ * (prompt:* then generation:*).
+ * @param {unknown} request - { text, templateId?, ...generateFields }
+ * @param {unknown} opts - { caller, signal?, onStatus?, queue? }
+ * @returns {Promise<{built:object, result:object}>}
+ */
+async function generateFromScene(request = {}, opts = {}) {
+    // Fail fast on an invalid caller before ANY paid stage starts.
+    validateBridgeCaller(opts && typeof opts === 'object' ? /** @type {Record<string, unknown>} */ (opts).caller : undefined);
+    const req = request && typeof request === 'object' && !Array.isArray(request) ? /** @type {Record<string, unknown>} */ (request) : {};
+    const built = await buildPrompt({
+        text: req.text,
+        templateId: req.templateId,
+        useScene: req.useScene,
+        expandMacros: req.expandMacros,
+    }, opts);
+    const result = await generate({
+        prompt: built.prompt,
+        aspectRatio: req.aspectRatio,
+        imageSize: req.imageSize,
+        quality: req.quality,
+        references: Array.isArray(req.references) ? req.references : [],
+        connectionId: req.connectionId,
+        modelId: req.modelId,
+        trigger: req.trigger,
+        useSceneRefs: req.useSceneRefs !== false,
+        expandMacros: req.expandMacros,
+    }, opts);
+    return { built, result };
 }
 
 // ── Lifecycle ──
@@ -638,6 +1050,7 @@ export function activateBridge() {
         ready: _readyPromise,
         generate,
         buildPrompt,
+        generateFromScene,
         parseInline: (text) => {
             const registry = sanitizeTriggerList(state.settings?.inlineTriggers || DEFAULT_TRIGGERS);
             const idx = buildAliasIndex(registry);
@@ -648,6 +1061,13 @@ export function activateBridge() {
         listConnections,
         listTemplates: listBridgeTemplates,
         listRefs: listBridgeRefs,
+        listTriggers: listTriggerProfiles,
+        getCapabilities,
+        listGallery,
+        getCard,
+        removeCard,
+        listPending,
+        classifyError: classifyBridgeError,
         getStatus,
         on,
         off,

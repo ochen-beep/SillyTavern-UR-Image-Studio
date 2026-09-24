@@ -118,19 +118,28 @@ URIS публикует в объект `globalThis.URIS` — «мост». Эт
 | `generate(req, opts)` | платная генерация картинки → `{requestId, cardId, imagePath, width, height, warnings}` |
 | `buildPrompt(req, opts)` | платный Stage 1 (шаблон + резолвер сцены) над произвольным текстом → `{requestId, prompt, templateId, templateType, matchedReferences, ambiguities}` |
 | `parseInline(text)` | синхронный, бесплатный: найти маркеры `[[тип: описание]]` → `[{type, desc, raw, start, end, profile}]` (в code-fence игнорируются) |
-| `generateFromScene` | метода на мосте нет — это сахар клиента (buildPrompt → generate), см. §4 |
+| `generateFromScene(req, opts)` | ≥ 0.9.6: оба шага одним вызовом (на старых URIS мост его не имеет — клиентский сахар §4 делает buildPrompt → generate сам) |
 | `getStatus()` | `{enabled, ready, accepting, connection, active}` |
 | `listConnections()` | `[{id, label, modelId, ready}]` — без endpoint'ов и ключей |
 | `listRefs()` | `[{id, name, folders, bindingMode}]` — пул без payload'ов |
 | `listTemplates()` | `[{id, name, type}]` — без тел промптов |
+| `listTriggers()` | ≥ 0.9.6: `[{id, name, aliases, aspect, refsPolicy}]` — валидные `trigger` для `generate`, без тел prefix/suffix |
+| `getCapabilities(connectionId?)` | ≥ 0.9.6: → `{connectionId, label, modelId, ready, contract, imageGeneration, references, maxReferences, sizes, qualities}`. Что URIS знает о соединении ДО платного вызова; `unknown` = «не проверяли», не отказ |
+| `listGallery({caller?, limit?, offset?, includeHidden?})` | ≥ 0.9.6: → `{total, cards:[{id, imagePath, thumbPath, prompt, status, width, height, createdAt, requestId, caller, …}]}` — чтение галереи URIS; карточки санитизированы (без снапшотов и внутренностей) |
+| `getCard(cardId)` | ≥ 0.9.6: одна карточка по id (та же форма), нет → `NOT_FOUND` |
+| `removeCard(cardId, {caller})` | ≥ 0.9.6: удалить карточку — **только свою** (атрибуцию по `provenance.requestId`; чужая/ручная → `CARD_NOT_OWNED`); файл изображения остаётся в галерее таверны |
+| `listPending({caller?})` | ≥ 0.9.6: recovery-список — платные запросы без подтверждённого результата → `[{requestId, caller, status, createdAt, error, prompt, referenceCount, …}]`; `status`: `notStarted`/`dispatchingUnknown`/`resultReceived` |
+| `classifyError(err)` | ≥ 0.9.6: → `{code, category, retryable}` — тот же классификатор, что в событиях |
 | `abort(requestId)` | `bool` — работает и для стоящего в очереди |
 | `listActive()` | снапшот ваших/чужих внешних запросов: `[{requestId, caller, queued, startedAt}]` |
-| `on(type, cb)` / `off(type, cb)` | события: `generation:queued/started/ended/error`, `prompt:started/ended/error`, `ready`, `destroyed`, `'*'`; возвращает unsubscribe |
+| `on(type, cb)` / `off(type, cb)` | события: `generation:queued/started/ended/error`, `prompt:started/ended/error`, `gallery:added`, `gallery:removed` (≥ 0.9.6), `ready`, `destroyed`, `'*'`; возвращает unsubscribe |
 
 События дублируются в `window` как `CustomEvent('uris:bridge')`
 (`detail.type`, `detail.caller`, …). При выключении URIS диспатчится
 `uris:bridge-destroyed`, глобал удаляется, все внешние запросы получают
-`ABORTED`. События опциональны — весь мост request/response.
+`ABORTED`. События опциональны — весь мост request/response. Payload ошибки
+в событиях `generation:error`/`prompt:error` (≥ 0.9.6): `{code, message,
+category, retryable}`.
 
 Мост включён, если расширение URIS включено и в его настройках не выключен
 тумблер «Разрешить генерацию другим расширениям» (по умолчанию включён).
@@ -174,7 +183,9 @@ export async function urisGenerateFromScene(
 
 В репозитории URIS есть более полный drop-in клиент: `docs/devkit/uris-client.js`
 (методы `ready/isAvailable/generate/buildPrompt/generateFromScene/getStatus/
-listConnections/listRefs/listTemplates/abort/onEvent`).
+listConnections/listRefs/listTemplates/abort/onEvent` плюс, с feature-detect
+на URIS ≥ 0.9.6, `listTriggers/getCapabilities/listGallery/getCard/removeCard/
+listPending/classifyError`).
 
 ## 5. Контракт `generate(request, opts)`
 
@@ -229,7 +240,19 @@ const result = await URIS.generate(request, {
 | `REF_NOT_FOUND` / `REF_UNAVAILABLE` | ваш запрос / файлы | `refId` нет в пуле или картинка не читается |
 | `TEMPLATE_INVALID` / `NOT_FOUND` | конфигурация | шаблон пуст / не найден |
 | `INVALID_PARAMS` / `INVALID_CALLER` | **ваш баг** | чинить на своей стороне, не ретраить |
+| `CARD_NOT_OWNED` (≥ 0.9.6) | ваш вызов | `removeCard` по чужой/ручной карточке — удалить нельзя, уберите её из своего списка |
 | `ABORTED` | пользователь | **отмена — не ошибка**: убрать заготовку молча |
+
+С URIS ≥ 0.9.6 каждая ошибка несёт и **политику обработки**: `err.category` +
+`err.retryable` (и то же — в событии ошибки). Категории: `cancelled`,
+`unavailable` (повтор позже), `config` (настройка в URIS), `invalid-request`
+(ваш баг), `auth`/`quota` (ключ/баланс — действие пользователя),
+`rate-limit`/`timeout`/`network-unknown` (транзиент, можно повторить),
+`provider-error` (5xx/непарсируемый ответ, повторимо), `content-policy`
+(переформулировать промпт), `unsupported-feature` (модель не умеет),
+`internal` (**генерация могла быть оплачена**, сохранение упало — смотрите
+`listPending()`, не ретраить вслепую). Без моста под рукой классифицировать
+можно через `URIS.classifyError(err)` или клиентский `classifyError`.
 
 Ошибки — экземпляры `Error` с полем `code` (мостовые — класса
 `UrisBridgeError`). Никогда не парсите текст сообщения.
@@ -239,7 +262,10 @@ const result = await URIS.generate(request, {
 - Один `AbortController` на генерацию; `ctl.abort()` рвёт и стоящий в
   очереди (платный POST ещё не отправлен), и летящий запрос. Если POST уже
   ушёл, провайдер мог насчитать токены — URIS оставит pending-recovery
-  запись для ручного разбора; потеря денег «молча» не бывает.
+  запись для ручного разбора; потеря денег «молча» не бывает. С URIS ≥ 0.9.6
+  эти записи отдаются наружу: `listPending({caller})` → покажите пользователю
+  неподтверждённый запрос и ссылку на галерею, вместо молчаливого повтора
+  платного вызова.
 - **Stop таверны и Stop-кнопка URIS останавливают и мостовые запросы**
   (внутри это общий `activeGenerations`) — ловите reject `ABORTED` и убирайте
   заготовку, не оставляйте вечный спиннер.
@@ -269,6 +295,12 @@ const result = await URIS.generate(request, {
 - **Перезагрузка страницы не должна стоить денег**: маркер/задачу в своём
   хранилище ключьте так, чтобы уже сгенерированный контент восстанавливал
   показ из сохранённого `imagePath`, а не запускал новую платную генерацию.
+  Удобный якорь (≥ 0.9.6): `listGallery({caller})` возвращает ваши карточки —
+  восстановление показа можно сверять с галереей, без собственного индекса.
+- **Реактивные ленты (≥ 0.9.6):** события `gallery:added` (detail.card —
+  санитизированная карточка, сверяйте `card.caller`) и `gallery:removed`;
+  возможности соединения до оплаты — `getCapabilities(connectionId?)`; меню
+  стилей из `listTriggers()`.
 
 ## 9. Чего НЕ делать
 
@@ -277,6 +309,10 @@ const result = await URIS.generate(request, {
   получается двойная сериализация и голодание.
 - Не звать `generate`/`buildPrompt` без `caller` и без `signal`.
 - Не писать свой API-слой с ключами/endpoint'ами вместо моста.
+- Не удалять файлы из галереи таверны напрямую и не удалять чужие карточки —
+  только `removeCard` своих (≥ 0.9.6).
+- Не ретраить автоматически категорию `internal` (деньги могли списаться) —
+  `listPending()` и ручной разбор.
 - Не читать чужие настройки и папки, не импортировать модули URIS.
 - Не проверять `globalThis.URIS` на верхнем уровне модуля одноразово —
   только в момент вызова или через `ready` с таймаутом.
@@ -289,8 +325,12 @@ const result = await URIS.generate(request, {
 - [ ] Без URIS расширение работает: кнопки скрыты, `init` не падает и не висит
 - [ ] Все `generate`/`buildPrompt` с валидными константами и ≤ 8 референсами
 - [ ] Каждый вызов со своим `AbortController`+`signal`; pending-UI с отменой на всё время ожидания
-- [ ] `err.code`-свитч на все коды из §6; тексты не парсятся; `ABORTED` — тихо
+- [ ] `err.code`-свитч на все коды из §6; тексты не парсятся; `ABORTED` — тихо;
+      на ≥ 0.9.6 используется `err.category`/`err.retryable`
 - [ ] `imagePath` сохраняется в вашем хранилище; показ `<img src="/"+path>`; перезагрузка не перегенерирует
+      (на ≥ 0.9.6 восстановление сверено с `listGallery({caller})`)
+- [ ] Методы 0.9.6 feature-detect'ятся (`typeof URIS.listGallery === 'function'`)
+      или идут через клиент ≥ 0.9.6 — на старом URIS `URIS_UNAVAILABLE`, не краш
 - [ ] Платные вызовы — за действием пользователя или с его явного согласия
 - [ ] Нет своего параллельного планировщика поверх моста
 - [ ] `extensionSettings.ur_image_studio` не читается и не пишется
@@ -303,7 +343,11 @@ const result = await URIS.generate(request, {
    генерация с `caller: 'selftest'` (платно — одной хватит).
 2. Вкладка **«Мост»** в UI URIS (включается галкой «Показывать вкладку
    „Мост"» в настройках URIS): ручные вызовы `generate`/`buildPrompt`
-   без консоли, со статусами и результатом.
+   без консоли, со статусами и результатом. С 0.9.6 там же — прочиты
+   поверхности: возможности соединения (`getCapabilities`), реестр
+   триггеров (`listTriggers`), карточки вашего caller (`listGallery` +
+   `removeCard`) и recovery-список (`listPending`), плюс события
+   `gallery:added/removed` перекрашивают секции сами.
 3. Негативные: выключить тумблер моста → `EXT_DISABLED`; выключить URIS →
    глобал исчез + событие `uris:bridge-destroyed`; несуществующий `refId` →
    `REF_NOT_FOUND`; неизвестный `trigger` → `TRIGGER_NOT_FOUND`.
@@ -311,8 +355,11 @@ const result = await URIS.generate(request, {
 ---
 
 *Контракт: apiVersion 1 (URIS ≥ 0.8.6), изменения аддитивны, breaking —
-только с ростом версии. Родственники в репо URIS: компактный бриф
-`docs/devkit/uris-bridge-brief-for-ai.md`, drop-in клиент
-`docs/devkit/uris-client.js`, полный гайд для разработчиков
+только с ростом версии. Аддитив URIS 0.9.6: `gallery:*` события, чтение
+галереи, recovery-список, `getCapabilities`, `listTriggers`,
+`generateFromScene` на мосту, `classifyError` и `category`/`retryable` у
+ошибок — всё помечено «≥ 0.9.6» и feature-detect'ится. Родственники в репо
+URIS: компактный бриф `docs/devkit/uris-bridge-brief-for-ai.md`, drop-in
+клиент `docs/devkit/uris-client.js`, полный гайд для разработчиков
 `docs/bridge-dev-guide.md`, ручные сценарии проверки
 `docs/bridge-test-runbook.md`.*

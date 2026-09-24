@@ -33,7 +33,18 @@ const _lab = {
     connections: null,   // cache: [{id,label,modelId,ready}]
     ctl: null,
     resultHtml: '',
+    // Read-surface lab (v0.9.6): triggers, capabilities, gallery, recovery
+    triggers: null,      // cache: [{id,name,aliases,aspect,refsPolicy}]
+    capsText: '',
+    gallery: null,       // cache: [{id,imagePath,thumbPath,prompt,status,…}]
+    galleryText: '',
+    pending: null,       // cache: [{requestId,status,createdAt,prompt,…}]
+    pendingText: '',
 };
+
+/** Live root of the rendered tab; lets module-level event handlers repaint. */
+let _labRoot = null;
+let _bridgeEventsWired = false;
 
 /** @param {HTMLElement} root */
 export function render(root) {
@@ -115,8 +126,79 @@ export function render(root) {
                 <small class="uris-hint" id="urisLabOut">${_lab.running ? 'Генерация…' : 'Готово к вызову.'}</small>
                 <div id="urisLabPreview">${_lab.resultHtml}</div>
             </section>
+
+            <section class="uris-settings-section">
+                <h3>Возможности соединения <small class="uris-hint">(getCapabilities)</small></h3>
+                <small class="uris-hint">Что URIS знает о выбранном соединении ДО платного вызова: контракт, референсы, известные размеры/качества.</small>
+                <div class="uris-settings-actions">
+                    <button type="button" class="uris-btn uris-btn-ghost" id="urisLabCaps"><i class="fa-solid fa-list-check"></i> Показать возможности</button>
+                </div>
+                <small class="uris-hint" id="urisLabCapsOut" style="white-space:pre-wrap">${escapeHtml(_lab.capsText)}</small>
+            </section>
+
+            <section class="uris-settings-section">
+                <h3>Триггер-профили <small class="uris-hint">(listTriggers)</small></h3>
+                <div id="urisLabTriggers">${_labTriggersHtml()}</div>
+            </section>
+
+            <section class="uris-settings-section">
+                <h3>Галерея caller'а <small class="uris-hint">(listGallery + removeCard)</small></h3>
+                <small class="uris-hint">Карточки с provenance.requestId = ext_&lt;caller&gt;_…. Удаление скоупнуто: чужие и ручные карточки мост удалить не даст (CARD_NOT_OWNED); файл на диске остаётся.</small>
+                <small class="uris-hint" id="urisLabGalleryOut">${escapeHtml(_lab.galleryText)}</small>
+                <div id="urisLabGallery" style="display:flex;flex-wrap:wrap;gap:6px">${_labGalleryHtml()}</div>
+            </section>
+
+            <section class="uris-settings-section">
+                <h3>Recovery <small class="uris-hint">(listPending)</small></h3>
+                <small class="uris-hint">Платные запросы, чей исход URIS не подтвердил (вкладка закрылась, обрыв после POST). Автоматически не пересылаются — это список ручного разбора.</small>
+                <small class="uris-hint" id="urisLabPendingOut">${escapeHtml(_lab.pendingText)}</small>
+                <div id="urisLabPending">${_labPendingHtml()}</div>
+            </section>
         </div>`;
     bindLab(root);
+}
+
+function _labTriggerChip(t) {
+    return `<span style="display:inline-block;border:1px solid var(--SmartThemeBorderColor,#444);border-radius:10px;padding:1px 8px;margin:2px" title="${escapeHtml(t.aliases.join(', '))}">${escapeHtml(t.id)} · ${escapeHtml(t.aspect)}${t.refsPolicy === 'off' ? ' · refs off' : ''}</span>`;
+}
+
+function _labTriggersHtml() {
+    if (!_lab.triggers) return '<small class="uris-hint">Не загружено.</small>';
+    if (!_lab.triggers.length) return '<small class="uris-hint">Реестр пуст.</small>';
+    return _lab.triggers.map(_labTriggerChip).join('');
+}
+
+function _labGalleryHtml() {
+    if (!_lab.gallery) return '<small class="uris-hint">Не загружено.</small>';
+    if (!_lab.gallery.length) return '<small class="uris-hint">Карточек этого caller пока нет.</small>';
+    return _lab.gallery.map(card => `
+        <div style="position:relative;border:1px solid var(--SmartThemeBorderColor,#444);border-radius:6px;padding:2px">
+            <img src="/${escapeHtml(card.thumbPath || card.imagePath || '')}" alt="" title="${escapeHtml(card.prompt.slice(0, 200))}" style="display:block;width:72px;height:72px;object-fit:cover;border-radius:4px${card.status === 'missing' ? ';opacity:.4' : ''}">
+            <button type="button" class="uris-btn uris-btn-ghost" data-card-id="${escapeHtml(card.id)}" title="removeCard (только свои карточки)" style="position:absolute;top:2px;right:2px;padding:0 5px;line-height:1.2">×</button>
+        </div>`).join('');
+}
+
+function _labPendingHtml() {
+    if (!_lab.pending) return '<small class="uris-hint">Не загружено.</small>';
+    if (!_lab.pending.length) return '<small class="uris-hint">Неподтверждённых платных запросов нет.</small>';
+    return _lab.pending.map(rec => `
+        <div style="border:1px solid var(--SmartThemeBorderColor,#444);border-radius:6px;padding:4px;margin:4px 0">
+            <small><code>${escapeHtml(rec.requestId)}</code> — ${escapeHtml(rec.status)}${rec.error ? ` · ${escapeHtml(rec.error)}` : ''}</small><br>
+            <small class="uris-hint">${escapeHtml(rec.createdAt || '')} · ${escapeHtml(rec.aspectRatio || '?')} · refs: ${rec.referenceCount}</small><br>
+            <small class="uris-hint">${escapeHtml(rec.prompt.slice(0, 160))}${rec.prompt.length > 160 ? '…' : ''}</small>
+        </div>`).join('');
+}
+
+/** Repaint gallery/pending when the bridge signals a change lab-wide. */
+function wireBridgeEventsOnce() {
+    if (_bridgeEventsWired || typeof window === 'undefined') return;
+    _bridgeEventsWired = true;
+    window.addEventListener('uris:bridge', (ev) => {
+        const type = ev?.detail?.type;
+        if (type !== 'gallery:added' && type !== 'gallery:removed') return;
+        if (!_labRoot) return;
+        refreshReadSurface(_labRoot, { gallery: true, pending: true }).catch(() => {});
+    });
 }
 
 function labOut(root, text) {
@@ -132,7 +214,18 @@ function labSetRunning(root, running) {
     if (abort) abort.hidden = !running;
 }
 
+/**
+ * One-line error for the lab: code + classification + message, exactly the
+ * fields an external consumer should be branching on.
+ */
+function formatBridgeError(e) {
+    const code = e?.code ? ` [${e.code}${e?.category ? ` · ${e.category}` : ''}${e?.retryable ? ' · повторимо' : ''}]` : '';
+    return `Ошибка${code}: ${e?.message || e}`;
+}
+
 function bindLab(root) {
+    _labRoot = root;
+    wireBridgeEventsOnce();
     root.querySelector('#urisLabRefresh')?.addEventListener('click', () => refreshLabData(root));
     root.querySelector('#urisLabTemplate')?.addEventListener('change', e => { _lab.templateId = e.target.value; });
     root.querySelector('#urisLabScene')?.addEventListener('input', e => { _lab.sceneText = e.target.value; });
@@ -150,6 +243,43 @@ function bindLab(root) {
         else _lab.refIds.delete(id);
     });
     root.querySelector('#urisLabAbort')?.addEventListener('click', () => { _lab.ctl?.abort(); });
+
+    root.querySelector('#urisLabCaps')?.addEventListener('click', async () => {
+        const bridge = getBridge();
+        if (!bridge) return;
+        labOut(root, 'Читаю возможности соединения…');
+        try {
+            const caps = await bridge.getCapabilities(_lab.connectionId || undefined);
+            _lab.capsText = [
+                `connection: ${caps.label} [${caps.connectionId}]`,
+                `model: ${caps.modelId || '—'} · contract: ${caps.contract || '—'} · ready: ${caps.ready}`,
+                `generation: ${caps.imageGeneration} · references: ${caps.references}${caps.maxReferences != null ? ` (max ${caps.maxReferences})` : ''}`,
+                `sizes: ${Array.isArray(caps.sizes) ? caps.sizes.join(', ') : 'неизвестно'} · qualities: ${Array.isArray(caps.qualities) ? caps.qualities.join(', ') : 'неизвестно'}`,
+            ].join('\n');
+            const out = root.querySelector('#urisLabCapsOut');
+            if (out) out.textContent = _lab.capsText;
+            labOut(root, 'Возможности получены.');
+        } catch (e) {
+            _lab.capsText = '';
+            labOut(root, formatBridgeError(e));
+        }
+    });
+
+    // Gallery delete: caller-scoped through the bridge (CARD_NOT_OWNED on foreign cards).
+    root.querySelector('#urisLabGallery')?.addEventListener('click', async (event) => {
+        const btn = event.target?.closest?.('[data-card-id]');
+        const cardId = btn?.getAttribute?.('data-card-id');
+        if (!cardId) return;
+        const bridge = getBridge();
+        if (!bridge) return;
+        try {
+            await bridge.removeCard(cardId, { caller: _lab.caller.trim() || 'bridge-test' });
+            labOut(root, `Карточка ${cardId} удалена (файл на диске оставлен).`);
+            refreshReadSurface(root, { gallery: true }).catch(() => {});
+        } catch (e) {
+            labOut(root, formatBridgeError(e));
+        }
+    });
 
     root.querySelector('#urisLabBuild')?.addEventListener('click', async () => {
         const bridge = getBridge();
@@ -183,7 +313,7 @@ function bindLab(root) {
             if (mEl) mEl.textContent = _lab.matchedLine;
             labOut(root, `Промпт готов [${res.requestId}] — перенесён в поле генерации ниже.`);
         } catch (e) {
-            labOut(root, `Ошибка${e?.code ? ` [${e.code}]` : ''}: ${e?.message || e}`);
+            labOut(root, formatBridgeError(e));
         } finally {
             _lab.building = false;
             _lab.ctl = null;
@@ -218,8 +348,9 @@ function bindLab(root) {
             _lab.resultHtml = img;
             if (preview) preview.innerHTML = img;
             labOut(root, `Готово [${res.requestId}]: ${res.width ?? '?'}×${res.height ?? '?'} · ${res.imagePath}`);
+            refreshReadSurface(root, { gallery: true, pending: true }).catch(() => {});
         } catch (e) {
-            labOut(root, `Ошибка${e?.code ? ` [${e.code}]` : ''}: ${e?.message || e}`);
+            labOut(root, formatBridgeError(e));
             error('bridge lab:', e);
         } finally {
             _lab.ctl = null;
@@ -251,7 +382,7 @@ async function refreshLabData(root) {
         const conn = status.connection
             ? `${status.connection.label} (${status.connection.modelId || 'модель не выбрана'})`
             : 'нет';
-        _lab.statusText = `ready=${status.ready}, accepting=${status.accepting}; соединение чата: ${conn}; в работе: ${status.active.length}.`;
+        _lab.statusText = `apiVersion ${bridge.apiVersion} · ready=${status.ready}, accepting=${status.accepting}; соединение чата: ${conn}; в работе: ${status.active.length}.`;
         const el = root?.querySelector?.('#urisLabStatus');
         if (el) el.textContent = _lab.statusText;
         if (templates) {
@@ -283,5 +414,49 @@ async function refreshLabData(root) {
         _lab.statusText = `Статус недоступен: ${e?.message || e}`;
         const el = root?.querySelector?.('#urisLabStatus');
         if (el) el.textContent = _lab.statusText;
+    }
+    // Read surface (triggers, gallery, pending) — не блокирует статус при сбое.
+    refreshReadSurface(root, { triggers: true, gallery: true, pending: true }).catch(() => {});
+}
+
+/**
+ * Fill the read-only labs: listTriggers / listGallery / listPending. Each
+ * block degrades on its own — a failing read must not blank the others.
+ */
+async function refreshReadSurface(root, { triggers = false, gallery = false, pending = false } = {}) {
+    const bridge = getBridge();
+    if (!bridge) return;
+    const caller = _lab.caller.trim() || 'bridge-test';
+    if (triggers && typeof bridge.listTriggers === 'function') {
+        try {
+            _lab.triggers = await bridge.listTriggers();
+            const box = root.querySelector('#urisLabTriggers');
+            if (box) box.innerHTML = _labTriggersHtml();
+        } catch { /* секция остаётся на прошлом значении */ }
+    }
+    if (gallery && typeof bridge.listGallery === 'function') {
+        try {
+            const page = await bridge.listGallery({ caller, limit: 12 });
+            _lab.gallery = page.cards;
+            _lab.galleryText = `listGallery({caller:"${caller}"}): показано ${page.cards.length} из ${page.total}.`;
+        } catch (e) {
+            _lab.galleryText = formatBridgeError(e);
+        }
+        const out = root.querySelector('#urisLabGalleryOut');
+        if (out) out.textContent = _lab.galleryText;
+        const box = root.querySelector('#urisLabGallery');
+        if (box) box.innerHTML = _labGalleryHtml();
+    }
+    if (pending && typeof bridge.listPending === 'function') {
+        try {
+            _lab.pending = await bridge.listPending({ caller });
+            _lab.pendingText = `listPending({caller:"${caller}"}): ${_lab.pending.length} записей.`;
+        } catch (e) {
+            _lab.pendingText = formatBridgeError(e);
+        }
+        const out = root.querySelector('#urisLabPendingOut');
+        if (out) out.textContent = _lab.pendingText;
+        const box = root.querySelector('#urisLabPending');
+        if (box) box.innerHTML = _labPendingHtml();
     }
 }

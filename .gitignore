@@ -7,9 +7,11 @@ node_modules/
 .zcode/
 
 # temp scratch & test output
+tmp/
 tmp_*
 *.log
 .nano-*
+gui-test-screenshots/
 
 # OS junk
 Thumbs.db

@@ -19,7 +19,13 @@ UI — очередь, события, lifecycle).
    пула (уйдут как `references: [{refId}]`), включить «Авто-подбор по промпту»
    (резолвер Stage 2 — `useSceneRefs`), выбрать формат/соединение, нажать
    «Сгенерировать». Превью + строка `Готово [ext_…]: W×H · imagePath`.
-3. Смысл: потребителю (Offstage и т.п.) не нужно повторять пайплайн URIS —
+3. **Читающая поверхность (0.9.6)** — нижние секции вкладки: «Возможности
+   соединения» (`getCapabilities`), «Триггер-профили» (`listTriggers`),
+   «Галерея caller'а» (`listGallery`, удаление через `removeCard` — кнопка ×),
+   «Recovery» (`listPending`). Галерея и recovery перекрашиваются сами на
+   события `gallery:added/removed` — после генерации карточка появляется без
+   ручного «Обновить». Ошибки показываются как `[CODE · category · повторимо]`.
+4. Смысл: потребителю (Offstage и т.п.) не нужно повторять пайплайн URIS —
    мост отдаёт и «построй промпт по шаблону со сценой», и «сгенерируй с
    авто-подбором референсов» тем же вызовом, что и голую генерацию.
 
@@ -226,10 +232,53 @@ async function testContactAvatar(name) {
 await testContactAvatar('Mira');
 ```
 
+## H. Читающая поверхность (URIS ≥ 0.9.6)
+
+```js
+// Возможности соединения до платного вызова:
+await URIS.getCapabilities();           // соединение текущего чата
+// → {connectionId, label, modelId, ready, contract, imageGeneration,
+//    references, maxReferences, sizes, qualities}
+
+// Реестр триггер-профилей (валидные generate({trigger})):
+await URIS.listTriggers();              // [{id, name, aliases, aspect, refsPolicy}] — prefix/suffix не отдаются
+
+// Галерея: свои карточки по caller-атрибуции:
+const page = await URIS.listGallery({ caller: 'console-test', limit: 5 });
+page.total; page.cards;                 // [{id, imagePath, thumbPath, prompt, status, caller, requestId, …}]
+await URIS.getCard(page.cards[0].id);   // одна карточка по id
+
+// Удаление скоупнуто: своя карточка удаляется, чужая/ручная — нет:
+await URIS.removeCard(page.cards[0].id, { caller: 'console-test' });   // true
+await URIS.removeCard(page.cards[0].id, { caller: 'console-test' }).catch(e => e.code);
+// → 'NOT_FOUND' (уже удалена)
+const foreign = (await URIS.listGallery({ limit: 50 })).cards.find(c => c.caller !== 'console-test');
+if (foreign) await URIS.removeCard(foreign.id, { caller: 'console-test' }).catch(e => e.code);
+// → 'CARD_NOT_OWNED'; карточка на месте (проверить в галерее URIS).
+
+// Recovery: платные запросы без подтверждённого исхода:
+await URIS.listPending({ caller: 'console-test' });
+// → [{requestId, caller, status, createdAt, error, prompt, referenceCount, …}]
+
+// Классификация ошибок (та же, что в payload событий и на самих ошибках):
+URIS.classifyError(Object.assign(new Error('slow down'), { code: 'UPSTREAM_HTTP_ERROR', httpStatus: 429 }));
+// → {code: 'UPSTREAM_HTTP_ERROR', category: 'rate-limit', retryable: true}
+
+// gallery-события (реактивные ленты потребителя):
+URIS.on('gallery:added', d => console.log('card added by', d.card.caller, d.card.id));
+URIS.on('gallery:removed', d => console.log('card removed', d.cardId));
+// генерация из B → в консоли 'card added by console-test …'
+```
+
+Проверки: `page.cards` содержит только `caller === 'console-test'`; карточка
+из B отбражена с тем же `requestId`; удалённая карточка пропала из
+`listGallery`, но её файл остаётся в галерее таверны (`open(imagePath)`).
+
 ## Что сознательно НЕ тестируется в этой сборке
 
-- Разрешения/allowlist по caller'ам (M3) — любой включённый扩展 может
-  генерировать; атрибуция только логируется.
+- Разрешения/allowlist по caller'ам (M3) — любое включённое расширение может
+  генерировать; атрибуция логируется, а запись ограничена caller-скоупом
+  `removeCard`.
 - Слэш-команды `/uris:*` со стороны URIS (потребители регистрируют свои —
   как `/offstage-draw` у Offstage).
 - Параллельные внешние запросы (`queue: false` доступен, но не рекомендуется).

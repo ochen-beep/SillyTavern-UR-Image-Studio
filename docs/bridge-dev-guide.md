@@ -6,7 +6,9 @@ API-слоя. Ключи, провайдеры, CORS, recovery, галерея, 
 внутри URIS.
 
 - Канал: `globalThis.URIS`, контракт **apiVersion 1** (URIS ≥ 0.8.6, мост
-  включён тумблером «Разрешить генерацию другим расширениям»).
+  включён тумблером «Разрешить генерацию другим расширениям»). URIS ≥ 0.9.6
+  добавляет аддитивно: чтение галереи, recovery-список, возможности
+  соединений, реестр триггеров и классификацию ошибок (§4).
 - Всё локально в странице: расширения ST и так делят один контекст — мост не
   открывает ничего наружу, кроме публичной поверхности.
 - Каждый вызов помечен вашим `caller` — requestId, диагностика и карточка
@@ -144,13 +146,20 @@ async function onDrawClicked(sceneText) {
 | Метод | Вход | Результат | Заметки |
 |---|---|---|---|
 | `ready()` | `{timeoutMs?}` | поверхность моста | ждёт глобал и init |
-| `generate(req, opts)` | `{prompt, aspectRatio?, imageSize?, quality?, references?, connectionId?, modelId?, useSceneRefs?, expandMacros?}` / `{signal?, onStatus?, queue?}` | `{requestId, cardId, imagePath, width, height, warnings}` | **платный** POST; recovery/галерея/Stop — в URIS |
+| `generate(req, opts)` | `{prompt, aspectRatio?, imageSize?, quality?, references?, connectionId?, modelId?, trigger?, useSceneRefs?, expandMacros?}` / `{signal?, onStatus?, queue?}` | `{requestId, cardId, imagePath, width, height, warnings}` | **платный** POST; recovery/галерея/Stop — в URIS |
 | `buildPrompt(req, opts)` | `{text, templateId?, useScene?=true, expandMacros?=true}` | `{requestId, prompt, templateId, templateType, matchedReferences, ambiguities}` | **платный** текстовый LLM-запрос (Stage 1) |
-| `generateFromScene(req, opts)` | `{text, templateId?, aspectRatio?, …}` | `{built, result}` | сахар: buildPrompt → generate |
+| `generateFromScene(req, opts)` | `{text, templateId?, aspectRatio?, …}` | `{built, result}` | сахар: buildPrompt → generate; ≥ 0.9.6 на самом мосту |
 | `getStatus()` | — | `{enabled, ready, accepting, connection, active}` | |
 | `listConnections()` | — | `[{id, label, modelId, ready}]` | endpoint/ключи не отдаются |
 | `listRefs()` | — | `[{id, name, folders, bindingMode}]` | пул без payload'ов |
 | `listTemplates()` | — | `[{id, name, type}]` | без тел промптов |
+| `listTriggers()` | — | `[{id, name, aliases, aspect, refsPolicy}]` | ≥ 0.9.6; реестр для `generate({trigger})`, без тел prefix/suffix |
+| `getCapabilities(id?)` | connectionId или чат | `{connectionId, label, modelId, ready, contract, imageGeneration, references, maxReferences, sizes, qualities}` | ≥ 0.9.6; что URIS знает **до** платного вызова |
+| `listGallery(query?)` | `{caller?, limit?, offset?, includeHidden?}` | `{total, cards:[{id, imagePath, thumbPath, prompt, status, width, height, createdAt, requestId, caller, …}]}` | ≥ 0.9.6; см. §7 |
+| `getCard(cardId)` | id | card summary | ≥ 0.9.6 |
+| `removeCard(cardId, opts)` | id + `{caller}` | `true` | ≥ 0.9.6; только свои карточки (иначе `CARD_NOT_OWNED`); файл остаётся |
+| `listPending(query?)` | `{caller?}` | `[{requestId, caller, status, createdAt, error, prompt, referenceCount, …}]` | ≥ 0.9.6; recovery-разбор, см. §7.4 |
+| `classifyError(err)` | любая ошибка | `{code, category, retryable}` | ≥ 0.9.6; та же классификация, что в событиях |
 | `abort(requestId)` | id | `bool` | работает и для очереди |
 | `on(type, cb)` / `off` | тип или `'*'` | unsubscribe | события из §8 |
 
@@ -159,20 +168,43 @@ async function onDrawClicked(sceneText) {
 
 ### Коды ошибок (`err.code`)
 
-| Код | Что делать |
-|---|---|
-| `URIS_UNAVAILABLE` (клиент) | URIS не установлен/не появился — подсказка |
-| `NOT_READY` / `EXT_DISABLED` | мост выключен или URIS инициализируется — повторить позже |
-| `NO_CONNECTION` | нет соединения: попросить выбрать (или передать `connectionId`) |
-| `NO_ROUTE` | модель несовместима с соединением — сбросить `modelId` |
-| `ROUTE_SELECTION_REQUIRED`, `MISSING_API_KEY`, `*_TOKEN_REQUIRED` | настроить соединение в URIS; сообщение уже готово для показа |
-| `TEMPLATE_INVALID`, `NOT_FOUND` | шаблон пуст/не найден — конфигурация, не сеть |
-| `REF_NOT_FOUND`, `REF_UNAVAILABLE` | `refId` нет в пуле или картинка не читается |
-| `INVALID_PARAMS`, `INVALID_CALLER` | ваша ошибка — чинить на своей стороне |
-| `ABORTED` | нормальный путь отмены, не показывать как ошибку |
+| Код | Категория | Что делать |
+|---|---|---|
+| `URIS_UNAVAILABLE` (клиент) | `unavailable` | URIS не установлен/не появился — подсказка |
+| `NOT_READY` / `EXT_DISABLED` | `unavailable`, retryable | мост выключен или URIS инициализируется — повторить позже |
+| `NO_CONNECTION` | `config` | нет соединения: попросить выбрать (или передать `connectionId`) |
+| `NO_ROUTE` | `config` | модель несовместима с соединением — сбросить `modelId` |
+| `ROUTE_SELECTION_REQUIRED`, `MISSING_API_KEY`, `*_TOKEN_REQUIRED` | `config` | настроить соединение в URIS; сообщение уже готово для показа |
+| `TEMPLATE_INVALID`, `NOT_FOUND`, `TRIGGER_NOT_FOUND` | `config` | шаблон/триггер пуст или не найден — конфигурация, не сеть |
+| `REF_NOT_FOUND`, `REF_UNAVAILABLE` | `config` | `refId` нет в пуле или картинка не читается |
+| `CARD_NOT_OWNED` | `invalid-request` | `removeCard` по чужой/ручной карточке — убирайте свою из своего списка |
+| `INVALID_PARAMS`, `INVALID_CALLER` | `invalid-request` | ваша ошибка — чинить на своей стороне |
+| `ABORTED` | `cancelled` | нормальный путь отмены, не показывать как ошибку |
+| `UPSTREAM_HTTP_ERROR` и др. провайдерские | `auth` / `quota` / `rate-limit` / `provider-error` / `content-policy` / `unsupported-feature` | по категории, см. ниже |
+| (таймауты, CORS/сеть) | `timeout` / `network-unknown`, retryable | транзиент — можно повторить |
+| (материализация после платного POST) | `internal`, НЕ повторять — смотрите `listPending()` | генерация могла быть оплачена |
 
-Ошибки — `Error` с полем `code`. **Никогда не парсите текст сообщения** —
-тексты могут меняться, коды — контракт.
+Ошибки — `Error` с полем `code`; URIS ≥ 0.9.6 добавляет `category` и
+`retryable` и на самой ошибке, и в payload событий `generation:error` /
+`prompt:error` (`{code, message, category, retryable}`). **Никогда не парсите
+текст сообщения** — тексты могут меняться, коды и категории — контракт.
+Классификатор доступен и отдельно: `URIS.classifyError(err)` (клиентский
+`uris.classifyError(err)` деградирует в локальную копию на URIS < 0.9.6).
+
+Категории — политика обработки, код — точная причина:
+
+| category | retryable | смысл и действие |
+|---|---|---|
+| `cancelled` | — | отмена (аборт, Stop таверны) — не ошибка |
+| `unavailable` | да | URIS выключен/грузится — подсказка, повтор позже |
+| `config` | нет | настройка в URIS (соединение, ключ, шаблон, триггер, ref) |
+| `invalid-request` | нет | ошибка формы запроса — чинится в вашем коде |
+| `auth` / `quota` | нет | ключ/баланс провайдера — действие пользователя |
+| `rate-limit` / `timeout` / `network-unknown` | да | транзиент — можно повторить с backoff |
+| `provider-error` | да | 5xx или непарсируемый ответ провайдера |
+| `content-policy` | нет | отказ по политике — переформулировать промпт |
+| `unsupported-feature` | нет | модель/контракт не умеет запрошенное |
+| `internal` | **нет** | storage/materialize после платного POST — деньги могли списаться; смотрите `listPending()` (§7.4), не повторяйте вслепую |
 
 ## 5. Пайплайн URIS для внешних вызовов
 
@@ -196,6 +228,15 @@ const res = await uris.generate({
     useSceneRefs: true,                        // + совпадения по промпту
 }, { signal });
 ```
+
+**Возможности до оплаты (≥ 0.9.6).** `await uris.getCapabilities()` (или с
+`connectionId`) — что URIS знает о соединении: `contract`, `references`
+(supported/unsupported/unknown), `maxReferences`, `sizes`, `qualities`.
+Не полагайтесь на это как на гарантию ('unknown' = «не проверяли»), но
+явный `references: 'unsupported'` — бесплатный отказ вместо платного промаха
+с `references: [...]`. **Триггер-профили:** `await uris.listTriggers()` —
+валидные значения для `generate({trigger})` (id, аспект, политика
+референсов); меню «стаиля» в вашем UI можно строить прямо из него.
 
 ## 6. Паттерны встраивания
 
@@ -249,6 +290,61 @@ if (marker) {
   карточку галереи URIS.
 - **Очередь**: мост выполняет внешние вызовы строго по одному; не стройте
   параллельных очередей на своей стороне. `queue: false` — осознанный обход.
+
+### 7.1. Галерейное API (URIS ≥ 0.9.6)
+
+Раньше генерация была «односторонней»: карточка появлялась в галерее URIS, но
+прочитать её обратно было нельзя. Теперь мост отдаёт санитизированные
+карточки:
+
+```js
+// Только свои карточки (по caller-атрибуции из provenance.requestId):
+const { total, cards } = await uris.listGallery({ limit: 20 });
+// cards: [{id, imagePath, thumbPath, prompt, status, width, height,
+//          createdAt, requestId, caller, modelId, aspectRatio, …}]
+```
+
+- Фильтрация по `caller` клиент подставляет сам (свой тег); без фильтра —
+  вся галерея. Скрытые карточки — только с `includeHidden: true`.
+- `status: 'ready' | 'missing'`: файл удалён — карточка остаётся с `missing`
+  (показ крошится — фильтруйте).
+- Чтение **не задевает диск** (без reconcile-сканирования): смело опрашивайте
+  после своих генераций.
+- «Восстановление после перезагрузки» — это и удобнее всего делать через
+  `listGallery({caller})`: перезапросите свои карточки вместо хранения
+  собственного индекса ради дедупликации (грабля №6, §11).
+
+### 7.2. Удаление своих карточек
+
+`await uris.removeCard(cardId)` — единственная запись моста. Удалить можно
+**только карточку со своей атрибуцией** (`provenance.requestId = ext_<caller>_…`);
+чужая или ручная карточка → `CARD_NOT_OWNED`. Файл изображения остаётся в
+галерее таверны (та же семантика, что у удаления карточки в самом URIS).
+
+### 7.3. Реактивность: gallery-события
+
+`uris.on('gallery:added', …)` / `'gallery:removed'` (≥ 0.9.6): обновляйте
+свои ленты, когда карточки приходят (любой генерацией, в т.ч. ручной —
+сверяйте `detail.card.caller === 'my-extension'`) или удаляются.
+
+### 7.4. Recovery: listPending (URIS ≥ 0.9.6)
+
+Платный POST мог уйти к провайдеру, но результат — не вернуться (закрыта
+вкладка, обрыв сети, ошибка материализации). URIS хранит такие записи для
+ручного разбора и **никогда не пересылает их сам**. Мост отдаёт их вам:
+
+```js
+const pending = await uris.listPending();  // отфильтровано по вашему caller
+// [{requestId, status, createdAt, error, prompt, modelId, aspectRatio,
+//   referenceCount, connectionId}]
+// status: notStarted | dispatchingUnknown | resultReceived
+```
+
+Сценарий UX: покажите пользователю «неподтверждённый запрос от <дата>:
+<промпт>» с кнопкой «проверить в галерее» (→ `listGallery`/`getCard`), а не
+молчаливым повтором платной генерации. Ошибки категории `internal` (§4)
+требуют именно этого сценария. Полный разбор доступен пользователю в URIS
+(вкладка «Хранилище»).
 
 ## 8. Аборты и отмена
 
@@ -338,10 +434,17 @@ cancelButton.onclick = () => ctl.abort();
 - [ ] `caller` — константа, валидная по `[A-Za-z0-9][A-Za-z0-9_-]{0,63}`
 - [ ] Детект: `isAvailable()` / `ready({timeoutMs})` — без блокировки init
 - [ ] Все вызовы с `signal` (AbortController), кнопка отмены в pending-UI
-- [ ] `err.code`-свитч; `ABORTED` — тихо; тексты ошибок не парсятся
+- [ ] `err.code`-свитч + `err.category`; `ABORTED`/`cancelled` — тихо; тексты
+      ошибок не парсятся
+- [ ] Категория `internal` → подсказка «проверьте recovery» через
+      `listPending()`, а не молчаливый повтор платного вызова
 - [ ] `imagePath` сохраняется в ваших данных; `<img src="/"+path>` для показа
+- [ ] Восстановление после перезагрузки — через `listGallery({caller})`, без
+      повторных платных вызовов; удаление — только `removeCard` своих карточек
 - [ ] Нет кэша ссылки на `globalThis.URIS`
-- [ ] Деградация без URIS: кнопки скрыты, init не падает
+- [ ] Деградация без URIS: кнопки скрыты, init не падает; методы 0.9.6
+      (listGallery/listPending/getCapabilities/listTriggers) —
+      feature-detect или клиент ≥ 0.9.6 (быстрый `URIS_UNAVAILABLE`)
 - [ ] Платные вызовы — за действием юзера/с согласием; лимиты на вашей стороне
 - [ ] `extensionSettings.ur_image_studio` не читается и не пишется
 - [ ] Проверено: выключение URIS посреди полёта → `ABORTED`, включение → работает
@@ -386,7 +489,9 @@ cancelButton.onclick = () => ctl.abort();
 
 **Галерея забивается чужими картинками?** Атрибуция живёт в
 `provenance.requestId` (префикс `ext_<caller>_…`) и в самом имени файла
-(`uris_ext_<caller>_….png`) — фильтр по нему в планах URIS (M3).
+(`uris_ext_<caller>_….png`). С URIS ≥ 0.9.6 мост сам умеет фильтровать:
+`listGallery({ caller: 'your-extension' })` отдаёт только ваши карточки
+(§7.1), а `removeCard` скоупнут тем же caller (§7.2).
 
 **Стабильность контракта?** `apiVersion: 1`; изменения только аддитивно,
 breaking — с ростом версии и сохранением старой поверхности.
