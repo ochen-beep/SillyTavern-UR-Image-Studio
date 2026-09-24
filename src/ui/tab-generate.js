@@ -690,7 +690,7 @@ export function bindGenerate(root) {
             }
         } catch (e) {
             error('Generate action:', e.message);
-            recordUrisError({ scope: 'Stage 1', message: e.message });
+            recordUrisError({ scope: 'Stage 1', message: e.message, context: input ? { post: input.msgId } : null });
             toastr?.error(e.message);
             setStatus('');
         }
@@ -864,11 +864,16 @@ export async function submitCurrentGeneration(root, deps = {}) {
         queued.then(entry => {
             if (!entry) return;
             toastr?.success('Картинка сгенерирована');
-            // Provider warnings (dropped size/quality etc.) — surface, don't bury.
-            if (Array.isArray(entry?.warnings)) {
-                for (const warning of entry.warnings) {
-                    toastr?.warning(`${warning.feature}: ${warning.details}`);
-                }
+            // Provider warnings (dropped size/quality, adjusted aspect ratio…)
+            // are not failures: record them quietly in the INFO pool instead of
+            // toasting on every generation.
+            if (Array.isArray(entry?.warnings) && entry.warnings.length) {
+                recordUrisError({
+                    scope: 'Провайдер',
+                    message: entry.warnings.map(w => `${w?.feature || '?'}: ${w?.details || ''}`).join('; '),
+                    context: entry?.generationContext || null,
+                    quiet: true,
+                });
             }
             if (getActiveTab() === 'gallery') refreshActive();
         }).catch(e => {
@@ -879,7 +884,7 @@ export async function submitCurrentGeneration(root, deps = {}) {
                 if (e?.message !== 'Queue stopped') toastr?.info('Генерация отменена');
             } else {
                 error('Generate action:', e?.message || e);
-                recordUrisError({ scope: 'Генерация', message: e?.message || String(e) });
+                recordUrisError({ scope: 'Генерация', message: e?.message || String(e), context: e?.urisContext || null });
                 toastr?.error(e?.message || String(e));
             }
         }).finally(() => {
@@ -888,7 +893,7 @@ export async function submitCurrentGeneration(root, deps = {}) {
         });
     } catch (e) {
         error('Generate action:', e?.message || e);
-        recordUrisError({ scope: 'Генерация', message: e?.message || String(e) });
+        recordUrisError({ scope: 'Генерация', message: e?.message || String(e), context: e?.urisContext || null });
         toastr?.error(e?.message || String(e));
     }
 }

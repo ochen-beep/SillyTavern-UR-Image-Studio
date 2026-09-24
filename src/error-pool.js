@@ -1,7 +1,7 @@
 // @ts-check
 /**
- * Session error pool: one neutral, user-clearable list of everything that
- * went wrong, surfaced as an ERR badge in the panel header.
+ * Session event pool: one neutral, user-clearable list of everything that
+ * went wrong, surfaced as an INFO badge in the panel header.
  *
  * Design constraints (per user feedback):
  *   - no red inline blocks scattered across tabs — errors collect here;
@@ -25,22 +25,34 @@ function emitChanged() {
 }
 
 /**
- * Record an error. Deduplicated: the same scope+message within 5 seconds
- * bumps a counter instead of spamming a new row.
- * @param {{scope?:string, message:string}} input
+ * Record an error. Deduplicated: the same scope+message+post within 10 minutes
+ * bumps a counter instead of spamming a new row (wide window on purpose —
+ * quiet provider warnings repeat on every generation, minutes apart).
+ * @param {{scope?:string, message:string, context?:{post?:number|string, connection?:string, model?:string}|null, quiet?:boolean}} input
+ *   context: generation provenance shown in the panel row; quiet: entry lands
+ *   in the dropdown but does not light the header badge.
  * @returns {object} the recorded entry
  */
-export function recordUrisError({ scope = 'URIS', message } = {}) {
+export function recordUrisError({ scope = 'URIS', message, context = null, quiet = false } = {}) {
     const text = safeErrorText(message) || '(без сообщения)';
+    const cleanContext = context ? {
+        ...(context.post !== undefined && context.post !== null && context.post !== '' ? { post: context.post } : {}),
+        ...(context.connection ? { connection: safeErrorText(context.connection).slice(0, 200) } : {}),
+        ...(context.model ? { model: safeErrorText(context.model).slice(0, 200) } : {}),
+    } : null;
+    const hasContext = cleanContext && Object.keys(cleanContext).length > 0;
     const now = Date.now();
     const previous = _errors[_errors.length - 1];
-    if (previous && previous.scope === scope && previous.message === text && (now - previous.firstAt) < 5000) {
+    if (previous && previous.scope === scope && previous.message === text && previous.context?.post === cleanContext?.post
+        && (now - previous.firstAt) < 600000) {
         previous.count += 1;
         previous.ts = now;
         emitChanged();
         return previous;
     }
     const entry = { scope: String(scope), message: text, ts: now, firstAt: now, count: 1 };
+    if (hasContext) entry.context = cleanContext;
+    if (quiet === true) entry.quiet = true;
     _errors.push(entry);
     if (_errors.length > MAX_ERRORS) _errors.shift();
     emitChanged();
@@ -62,5 +74,11 @@ export function clearUrisErrors() {
 export function formatUrisError(entry) {
     const time = new Date(entry.ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
     const count = entry.count > 1 ? ` ×${entry.count}` : '';
-    return `${time} · ${entry.scope}${count}: ${entry.message}`;
+    const context = entry.context || {};
+    const parts = [
+        context.post !== undefined && context.post !== null && context.post !== '' ? `пост #${context.post}` : '',
+        context.connection ? `«${context.connection}»` : '',
+        context.model || '',
+    ].filter(Boolean);
+    return `${time} · ${entry.scope}${count}: ${entry.message}` + (parts.length ? ` — ${parts.join(' · ')}` : '');
 }

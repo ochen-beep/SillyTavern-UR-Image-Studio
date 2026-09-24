@@ -48,7 +48,7 @@ export function mountPanel() {
             <span class="uris-title">🎨 UR Image Studio</span>
             <div class="uris-header-actions">
                 <span class="uris-status" id="urisStatus"></span>
-                <button class="uris-icon-btn uris-error-badge" id="urisErrorBadge" hidden title="Ошибки и незавершённые запросы" aria-label="Ошибки и незавершённые запросы" aria-expanded="false" aria-controls="urisErrorPanel">ERR <span class="uris-error-count" id="urisErrorCount">0</span></button>
+                <button class="uris-icon-btn uris-error-badge" id="urisErrorBadge" hidden title="События и незавершённые запросы" aria-label="События и незавершённые запросы" aria-expanded="false" aria-controls="urisErrorPanel">INFO <span class="uris-error-count" id="urisErrorCount">0</span></button>
                 <button class="uris-icon-btn" id="urisExportDumps" title="Выгрузить диагностику (только метаданные)" aria-label="Выгрузить диагностику (только метаданные)">📥</button>
                 <button class="uris-icon-btn" id="urisClose" title="Свернуть" aria-label="Свернуть">✕</button>
             </div>
@@ -275,10 +275,12 @@ function renderErrorPanel(winEl, errors, pending = []) {
         : '<div class="uris-error-row uris-error-empty">Ошибок текущей сессии нет</div>';
     const preDispatch = pending.filter(item => item.status === 'notStarted');
     const uncertain = pending.filter(item => item.status !== 'notStarted');
-    panel.innerHTML = `<section class="uris-error-section"><h3>Ошибки текущей сессии</h3><div class="uris-error-rows">${errorRows}</div></section>
+    // Действия вынесены наверх: панели с записями могут быть длинными, кнопки
+    // не должны требовать прокрутки.
+    panel.innerHTML = `<div class="uris-error-panel-actions"><button type="button" class="uris-btn uris-btn-ghost" id="urisErrorClear">Очистить события</button><button type="button" class="uris-btn uris-btn-ghost" id="urisPendingClear">Удалить recovery</button></div>
+        <section class="uris-error-section"><h3>Ошибки текущей сессии</h3><div class="uris-error-rows">${errorRows}</div></section>
         <section class="uris-error-section"><h3>Результат/сохранение не завершено</h3><div class="uris-error-rows">${renderPendingRows(uncertain)}</div></section>
-        <section class="uris-error-section"><h3>Неотправленные операции</h3><div class="uris-error-rows">${renderPendingRows(preDispatch)}</div></section>
-        <div class="uris-error-panel-actions"><button type="button" class="uris-btn uris-btn-ghost" id="urisErrorClear">Очистить ошибки</button><button type="button" class="uris-btn uris-btn-ghost" id="urisPendingClear">Удалить recovery</button></div>`;
+        <section class="uris-error-section"><h3>Неотправленные операции</h3><div class="uris-error-rows">${renderPendingRows(preDispatch)}</div></section>`;
     panel.querySelectorAll('[data-pending-id]').forEach(button => button.addEventListener('click', async () => {
         button.disabled = true;
         try { await discardPendingBrowserRequest(button.dataset.pendingId); }
@@ -313,11 +315,14 @@ function bindErrorPool(el) {
         const pending = await listPendingBrowserRequests();
         const errors = listUrisErrors();
         if (seq !== refreshSeq || (el.isConnected === false)) return;
-        const count = errors.length + pending.length;
+        // Quiet entries (provider warnings etc.) live only in the dropdown —
+        // they must not keep the badge permanently lit.
+        const badgeErrors = errors.filter(entry => entry.quiet !== true);
+        const count = badgeErrors.length + pending.length;
         badge.hidden = count === 0;
         badge.title = pending.length
-            ? `Ошибки и ${pending.length} незавершённый запрос`
-            : 'Ошибки';
+            ? `События и ${pending.length} незавершённый запрос`
+            : 'События';
         badge.setAttribute('aria-expanded', String(!panel.hidden));
         el.querySelector('#urisErrorCount').textContent = String(count);
         if (!panel.hidden) {

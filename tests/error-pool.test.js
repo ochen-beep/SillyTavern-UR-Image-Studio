@@ -55,3 +55,41 @@ test('formatUrisError includes time, scope, repeat count, and message', () => {
     assert.match(formatted, /\d{2}:\d{2}:\d{2}/);
     assert.match(formatted, /Проверка ×2: bad gateway/);
 });
+
+test('generation context is stored and rendered in the row', () => {
+    const entry = recordUrisError({
+        scope: 'Генерация',
+        message: 'gateway 502',
+        context: { post: 42, connection: 'Novita Card', model: 'sd-xl' },
+    });
+
+    assert.deepEqual(entry.context, { post: 42, connection: 'Novita Card', model: 'sd-xl' });
+    const formatted = formatUrisError(entry);
+    assert.match(formatted, /пост #42/);
+    assert.match(formatted, /«Novita Card»/);
+    assert.match(formatted, /sd-xl/);
+});
+
+test('context without usable fields is not stored', () => {
+    const entry = recordUrisError({ scope: 'Генерация', message: 'x', context: {} });
+    assert.equal(entry.context, undefined);
+});
+
+test('quiet flag is stored only when requested', () => {
+    const quietEntry = recordUrisError({ scope: 'Провайдер', message: 'quality dropped', quiet: true });
+    const loudEntry = recordUrisError({ scope: 'Генерация', message: 'boom' });
+    assert.equal(quietEntry.quiet, true);
+    assert.equal('quiet' in loudEntry, false);
+});
+
+test('dedup keeps post number in the key: same post collapses, different post does not', () => {
+    const a = recordUrisError({ scope: 'Генерация', message: 'fail', context: { post: 1 } });
+    const b = recordUrisError({ scope: 'Генерация', message: 'fail', context: { post: 1 } });
+    assert.equal(a, b);
+    assert.equal(a.count, 2);
+
+    const c = recordUrisError({ scope: 'Генерация', message: 'fail', context: { post: 2 } });
+    assert.notEqual(a, c);
+    assert.equal(listUrisErrors().length, 2);
+    assert.equal(c.context.post, 2);
+});

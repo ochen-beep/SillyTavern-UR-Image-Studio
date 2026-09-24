@@ -115,6 +115,9 @@ export async function runStage2ForDraft(input, onStatus = () => {}, signal, opts
     let imageConnId = null;
     let effectiveRoute = null;
     let effectiveConnection = null;
+    // Generation provenance for the INFO pool (post/connection/model); null
+    // until the connection resolves, so early failures simply carry nothing.
+    let genContext = null;
     let request = null;
     // The catch classifies the failure; the finally close-out needs it too, so
     // stage2-end can state how the run ended instead of leaving the outcome to
@@ -226,6 +229,11 @@ export async function runStage2ForDraft(input, onStatus = () => {}, signal, opts
         // connection, so without it the observer would report every edit as
         // multipart regardless of what the provider actually sent.
         effectiveConnection = resolvedConnection?.conn || null;
+        genContext = {
+            post: msgId ?? null,
+            connection: effectiveConnection?.label || effectiveConnection?.name || imageConnId || null,
+            model: effectiveRoute?.modelId || effectiveConnection?.model?.id || null,
+        };
 
         let refs;
         if (Array.isArray(opts.refs)) {
@@ -350,11 +358,17 @@ export async function runStage2ForDraft(input, onStatus = () => {}, signal, opts
             trace(`Stage 2 browser result materialized [${(activeRequestId || '').slice(0, 8)}], entry`, result?.galleryEntry?.id);
         const entry = result?.galleryEntry || result;
         // Surface provider warnings (e.g. dropped size/quality) through the
-        // entry so the Generate tab can toast them.
-        if (result?.warnings?.length && entry && typeof entry === 'object') entry.warnings = result.warnings;
+        // entry so the Generate tab can record them quietly in the INFO pool;
+        // genContext lets the row show post/connection/model.
+        if (result?.warnings?.length && entry && typeof entry === 'object') {
+            entry.warnings = result.warnings;
+            entry.generationContext = genContext;
+        }
         return entry;
     } catch (e) {
         failure = e;
+        // Provenance for the INFO pool rows; harmless if a consumer ignores it.
+        if (genContext) { try { e.urisContext = genContext; } catch { /* frozen error */ } }
         // Log the failure BEFORE the draft wrapper flattens it to e.message.
         // A materialize failure (after the provider POST succeeded) classifies
         // to the `materialize` outcome (no .code/.httpStatus, not a network

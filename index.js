@@ -198,7 +198,11 @@ async function init() {
                     toastr?.info('Генерация отменена');
                 } else {
                     error('Auto generation:', e.message);
-                    recordUrisError({ scope: 'Автогенерация', message: e.message });
+                    recordUrisError({
+                        scope: 'Автогенерация',
+                        message: e.message,
+                        context: e?.urisContext || { post: input.msgId },
+                    });
                     toastr?.error('Generation: ' + e.message);
                 }
             }

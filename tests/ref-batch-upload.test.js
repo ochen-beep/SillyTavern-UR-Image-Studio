@@ -187,7 +187,7 @@ test('загрузка: ошибка одного файла не роняет �
     assert.ok(rows[0].getAttribute('title').includes('store exploded'), 'текст ошибки виден в title строки');
     assert.ok(rows[1].classList.contains('uris-batch-ok'));
     assert.equal(errors.length, 1, 'ошибка записана в пул');
-    assert.deepEqual(toastrCalls.filter(c => c[0] === 'warning'), [['warning', 'Загружено 1, с ошибками 1 — детали в строках и в ERR-панели']]);
+    assert.deepEqual(toastrCalls.filter(c => c[0] === 'warning'), [['warning', 'Загружено 1, с ошибками 1 — детали в строках и в INFO-панели']]);
 });
 
 test('загрузка: правка имени в строке попадает в createRef', async () => {

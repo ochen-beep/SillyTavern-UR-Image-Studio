@@ -261,7 +261,7 @@ export function openBatchUploadDialog({ files, folderIds = [], onFinish, deps = 
         if (typeof toastr !== 'undefined' && toastr) {
             if (failed === 0) toastr.success?.(`Загружено референсов: ${created}`);
             else if (created === 0) toastr.error?.(`Не загружено ни одного референса (${failed})`);
-            else toastr.warning?.(`Загружено ${created}, с ошибками ${failed} — детали в строках и в ERR-панели`);
+            else toastr.warning?.(`Загружено ${created}, с ошибками ${failed} — детали в строках и в INFO-панели`);
         }
         okBtn.textContent = 'Готово';
         okBtn.disabled = false;

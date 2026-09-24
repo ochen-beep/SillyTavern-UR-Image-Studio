@@ -20,6 +20,7 @@ globalThis.SillyTavern = {
 };
 
 const { state } = await import('../src/core.js');
+const { listUrisErrors, clearUrisErrors } = await import('../src/error-pool.js');
 const { POST_FILTER } = await import('../src/post-navigator.js');
 const { hashMessage } = await import('../src/generation-drafts.js');
 const { MAX_REFS } = await import('../src/refs-library.js');
@@ -754,7 +755,7 @@ test('submitCurrentGeneration toasts once for an in-flight item aborted by the u
     }
 });
 
-test('submitCurrentGeneration toasts success and provider warnings on resolve', async () => {
+test('submitCurrentGeneration toasts success and records provider warnings quietly in the pool', async () => {
     const originalCtx = globalThis.SillyTavern.getContext;
     const successes = [];
     const warnings = [];
@@ -779,7 +780,10 @@ test('submitCurrentGeneration toasts success and provider warnings on resolve', 
     const fakeRoot = { querySelector: sel => (sel === '#urisPrompt' ? promptEl : null) };
     try {
         await tabGenerate.submitCurrentGeneration(fakeRoot, {
-            enqueue: () => Promise.resolve({ warnings: [{ feature: 'Стороны', details: 'модель вернула другое' }] }),
+            enqueue: () => Promise.resolve({
+                warnings: [{ feature: 'Стороны', details: 'модель вернула другое' }],
+                generationContext: { post: 0, connection: 'Test', model: 'sd-xl' },
+            }),
         });
     } finally {
         globalThis.SillyTavern.getContext = originalCtx;
@@ -789,10 +793,17 @@ test('submitCurrentGeneration toasts success and provider warnings on resolve', 
     try {
         await new Promise(r => setImmediate(r));
         assert.equal(successes.length, 1, 'success toast fired');
-        assert.equal(warnings.filter(m => /Стороны/.test(m)).length, 1, 'provider warning surfaced');
+        assert.equal(warnings.length, 0, 'provider warning does not toast');
         assert.equal(errors.length, 0);
+        const pool = listUrisErrors();
+        const entry = pool.find(item => item.scope === 'Провайдер');
+        assert.ok(entry, 'provider warning recorded in the pool');
+        assert.equal(entry.quiet, true, 'entry is quiet (no badge)');
+        assert.match(entry.message, /Стороны: модель вернула другое/);
+        assert.deepEqual(entry.context, { post: 0, connection: 'Test', model: 'sd-xl' });
     } finally {
         globalThis.toastr = undefined;
+        clearUrisErrors();
     }
 });
 

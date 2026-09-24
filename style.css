@@ -1853,7 +1853,7 @@
 .uris-error-row small { flex: 1 1 100%; color: var(--uris-text-mut); }
 .uris-error-empty { opacity: 0.5; }
 .uris-pending-discard { margin-left: auto; flex: 0 0 auto; font-size: calc(13px * var(--uris-font-scale, 1)); }
-.uris-error-panel-actions { display: flex; justify-content: flex-end; margin-top: 8px; }
+.uris-error-panel-actions { display: flex; justify-content: flex-end; margin-bottom: 8px; }
 
 @media (max-width: 768px) {
     .uris-error-panel {
