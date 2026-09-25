@@ -64,6 +64,12 @@ export async function render(root) {
 
 function card(it, i) {
     const badge = it.saved ? '<span class="uris-saved-badge" title="Сохранено в ST">💾</span>' : '';
+    // Название модели — градиентная подпись на нижней кромке миниатюры.
+    // Legacy-карточки и карточки после reconcile модель не знают — подписи нет.
+    const model = typeof it.modelId === 'string' ? it.modelId.trim() : '';
+    const modelBadge = model
+        ? `<span class="uris-model-badge" title="Модель: ${escapeHtml(model)}">${escapeHtml(model)}</span>`
+        : '';
     const gotoBtn = it.sourceMsgId != null
         ? `<button class="uris-card-btn" data-act="goto" title="Перейти к посту-источнику" aria-label="Перейти к посту-источнику"><i class="fa-solid fa-arrow-up-right-from-square"></i></button>`
         : '';
@@ -76,7 +82,7 @@ function card(it, i) {
         ? ` width="${Number(it.width)}" height="${Number(it.height)}"`
         : '';
     return `<div class="uris-card" data-id="${it.id}" data-idx="${i}">
-        <button type="button" class="uris-card-img" data-act="view" title="Просмотр" aria-label="Просмотр"><img src="${escapeHtml(src)}" alt="" loading="lazy" decoding="async"${dims}>${badge}</button>
+        <button type="button" class="uris-card-img" data-act="view" title="Просмотр" aria-label="Просмотр"><img src="${escapeHtml(src)}" alt="" loading="lazy" decoding="async"${dims}>${modelBadge}${badge}</button>
         <div class="uris-card-actions">
             <button class="uris-card-btn" data-act="regen" title="Перегенерировать" aria-label="Перегенерировать"><i class="fa-solid fa-rotate-right"></i></button>
             <button class="uris-card-btn" data-act="copy" title="Копировать текст" aria-label="Копировать текст"><i class="fa-solid fa-copy"></i></button>

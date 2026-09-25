@@ -95,3 +95,46 @@ test('рендер галереи не сканирует сервер; скан
     await new Promise(resolve => setTimeout(resolve, 0));
     assert.ok(listCalls.length >= 1, 'кнопка «Обновить» запускает reconcile-скан');
 });
+
+// Подпись модели на миниатюре: карточка с modelId рендерит .uris-model-badge,
+// карточка без модели (legacy / reconcile чужих файлов) — не рендерит ничего.
+test('миниатюра показывает модель генерации, только если она известна', async () => {
+    const { resetGalleryStoreForTests } = await import('../src/gallery-index.js');
+    resetGalleryStoreForTests();
+    const { document, root } = makeFakeDocument();
+    globalThis.document = document;
+    globalThis.document.body = root;
+    globalThis.SillyTavern = {
+        getContext: () => ({
+            chatId: 'test-chat',
+            extensionSettings: {
+                ur_image_studio: {
+                    imageConnections: {
+                        schemaVersion: 1,
+                        galleryIndex: [
+                            { id: 'm-1', imagePath: 'user/images/Test/m1.png', prompt: 'с моделью', modelId: 'gemini-2.5-flash-image', provenance: { chatId: 'test-chat' }, status: 'ready', createdAt: 1 },
+                            { id: 'm-2', imagePath: 'user/images/Test/m2.png', prompt: 'без модели', provenance: { chatId: 'test-chat' }, status: 'ready', createdAt: 2 },
+                        ],
+                    },
+                },
+            },
+            saveSettingsDebounced: () => {},
+            saveMetadata: () => {},
+            getRequestHeaders: () => ({}),
+        }),
+    };
+    const mod = await import('../src/ui/tab-gallery.js');
+
+    root.__urisTabId = 'gallery';
+    await mod.render(root);
+    assert.equal(root.querySelectorAll('.uris-card').length, 2, 'обе карточки отрендерены');
+
+    const badges = root.querySelectorAll('.uris-model-badge');
+    assert.equal(badges.length, 1, 'подпись только у карточки с известной моделью');
+    assert.equal(badges[0].textContent, 'gemini-2.5-flash-image');
+    assert.equal(badges[0].getAttribute('title'), 'Модель: gemini-2.5-flash-image', 'полное имя модели доступно в tooltip');
+    // Клик по подписи открывает просмотр силами bubbling до кнопки .uris-card-img
+    // (обработчик висит на ней). fake-dom не всплывает события к родителю,
+    // поэтому кликовая регрессия здесь невоспроизводима — покрытие клика
+    // остаётся в первом тесте (клик по самой кнопке).
+});
