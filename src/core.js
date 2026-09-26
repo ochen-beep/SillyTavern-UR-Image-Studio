@@ -3,7 +3,6 @@
  * UR Image Studio — core: state, defaults, persistence, utils.
  */
 
-import { decompress as fzstdDecompress } from './vendor/fzstd.esm.js';
 // Circular import netdump → core is safe: netdump functions are called
 // only at runtime (inside fetchWithTimeout), not at module load time.
 import { recordFromFetch, recordFromFetchError } from './netdump.js';
@@ -991,8 +990,13 @@ export async function decodeZstdBytes(bytes) {
     if (!isZstd(bytes)) return null;
     const native = await tryNativeZstd(bytes);
     if (native) return native;
-    try { return fzstdDecompress(bytes); }
-    catch { return null; }
+    // Полифилл грузится только здесь: браузер без DecompressionStream('zstd')
+    // и только на ответе, который действительно сжат. На старте расширения
+    // эти байты не парсятся.
+    try {
+        const { decompress } = await import('./vendor/fzstd.esm.js');
+        return decompress(bytes);
+    } catch { return null; }
 }
 
 /** Test-only: clear the cached native-zstd feature probe. */
