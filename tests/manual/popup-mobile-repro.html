@@ -113,32 +113,25 @@
             document.body.style.overflow = 'hidden'; // lockBodyScroll()
         }
 
-        // Lightbox — структура корня PhotoSwipe (photoswipe.esm.js) + наш класс
-        // uris-pswp; именно её геометрию (.pswp.uris-pswp) проверяем в ST-mobile.
+        // Просмотрщик — разметка .uris-viewer (src/ui/lightbox.js). Именно её
+        // геометрию (явные 100vh/100dvh, слой --uris-z-lightbox) проверяем в ST-mobile.
         function openLightbox() {
             closeAll();
             const lb = document.createElement('div');
-            lb.className = 'pswp uris-pswp pswp--open';
+            lb.className = 'uris-viewer';
             lb.setAttribute('role', 'dialog');
             lb.setAttribute('aria-label', 'Просмотр изображения');
             lb.tabIndex = -1;
             lb.innerHTML = `
-                <div class="pswp__bg"></div>
-                <div class="pswp__scroll-wrap">
-                    <div class="pswp__container">
-                        <div class="pswp__item"><img alt="" src="${img('gallery photo')}" style="max-width:90%;max-height:80%;margin:auto;display:block"></div>
-                    </div>
-                    <div class="pswp__top-bar">
-                        <div class="pswp__counter">1 / 3</div>
-                        <button class="pswp__button uris-pswp-act" title="Копировать промпт">⧉</button>
-                        <button class="pswp__button uris-pswp-act" title="Сохранить как референс">🔖</button>
-                        <button class="pswp__button uris-pswp-act" title="Перегенерировать">⟳</button>
-                        <button class="pswp__button uris-pswp-act uris-pswp-act-danger" title="Удалить">🗑</button>
-                        <button class="pswp__button pswp__button--close" title="Закрыть (Esc)">✕</button>
-                    </div>
-                    <button class="pswp__button pswp__button--arrow--prev" title="Предыдущее (←)">‹</button>
-                    <button class="pswp__button pswp__button--arrow--next" title="Следующее (→)">›</button>
-                </div>`;
+                <div class="uris-viewer-bar">
+                    <button class="uris-viewer-act" title="Копировать текст">⧉</button>
+                    <button class="uris-viewer-act" title="Сохранить как референс">🔖</button>
+                    <button class="uris-viewer-act" title="Перегенерировать">⟳</button>
+                    <button class="uris-viewer-act uris-viewer-act-danger" title="Удалить">🗑</button>
+                    <button class="uris-viewer-act" title="Закрыть (Esc)">✕</button>
+                </div>
+                <div class="uris-viewer-frame"><img class="uris-viewer-img" alt="" src="${img('gallery photo')}"></div>
+                <div class="uris-viewer-count">1 / 3</div>`;
             document.body.appendChild(lb);
             document.body.style.overflow = 'hidden';
         }
@@ -150,7 +143,7 @@
 
         function closeAll() {
             document.querySelector('.uris-picker-overlay')?.remove();
-            document.querySelector('.uris-lightbox')?.remove();
+            document.querySelector('.uris-viewer')?.remove();
             document.getElementById('urisErrorPanel').hidden = true;
             document.body.style.overflow = '';
         }

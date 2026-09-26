@@ -7,6 +7,7 @@ import { exportDiagnosticDump } from '../diagnostic-dump.js';
 import { listUrisErrors, clearUrisErrors, formatUrisError, recordUrisError } from '../error-pool.js';
 import { listPendingBrowserRequests, discardPendingBrowserRequest, clearPendingBrowserRequests } from '../browser-image-recovery.js';
 import { bindTabBarScroll } from './tab-bar-scroll.js';
+import { listQueueLog, queueBadgeCount, clearQueueLog, noteQueued, noteRunning, noteFinished } from './queue-log.js';
 
 const WIN_ID = 'urisWindow';
 export function isMobileViewport() { return window.innerWidth <= 768; }
@@ -48,11 +49,13 @@ export function mountPanel() {
             <span class="uris-title">🎨 UR Image Studio</span>
             <div class="uris-header-actions">
                 <span class="uris-status" id="urisStatus"></span>
+                <button class="uris-icon-btn uris-error-badge" id="urisQueueBadge" hidden title="Очередь генераций" aria-label="Очередь генераций" aria-expanded="false" aria-controls="urisQueuePanel">QUEUE <span class="uris-error-count" id="urisQueueCount">0</span></button>
                 <button class="uris-icon-btn uris-error-badge" id="urisErrorBadge" hidden title="События и незавершённые запросы" aria-label="События и незавершённые запросы" aria-expanded="false" aria-controls="urisErrorPanel">INFO <span class="uris-error-count" id="urisErrorCount">0</span></button>
                 <button class="uris-icon-btn" id="urisExportDumps" title="Выгрузить диагностику (только метаданные)" aria-label="Выгрузить диагностику (только метаданные)">📥</button>
                 <button class="uris-icon-btn" id="urisClose" title="Свернуть" aria-label="Свернуть">✕</button>
             </div>
         </div>
+        <div class="uris-error-panel" id="urisQueuePanel" role="dialog" aria-label="Очередь генераций" hidden></div>
         <div class="uris-error-panel" id="urisErrorPanel" role="dialog" aria-label="Ошибки и незавершённые запросы" hidden></div>
         <div class="uris-tabs" id="urisTabs"></div>
         <div class="uris-body" id="urisBody"></div>
@@ -60,6 +63,7 @@ export function mountPanel() {
     document.body.appendChild(el);
     bindWindowEvents(el);
     bindErrorPool(el);
+    bindQueueBadge(el);
     applyMobileClass(el);   // inside: on mobile clears inline styles + measureStChrome
     if (!isMobileViewport()) restoreGeometry(el);
     return el;
@@ -87,6 +91,10 @@ export function removePanel() {
     if (_errorKeyHandler && typeof document !== 'undefined') {
         document.removeEventListener('keydown', _errorKeyHandler);
         _errorKeyHandler = null;
+    }
+    if (_windowKeyHandler && typeof document !== 'undefined') {
+        document.removeEventListener('keydown', _windowKeyHandler, true);
+        _windowKeyHandler = null;
     }
     document.getElementById(WIN_ID)?.remove();
 }
@@ -176,6 +184,8 @@ function measureStChrome() {
 
 let _viewportTimer = null;
 let _viewportHandler = null;
+let _scrollClampFrame = null;
+let _scrollClampHandler = null;
 let _errorPoolHandler = null;
 let _pendingHandler = null;
 let _errorOutsideHandler = null;
@@ -183,36 +193,116 @@ let _errorKeyHandler = null;
 let _dragCleanup = null;
 let _resizeCleanup = null;
 let _tabBarScrollCleanup = null;
+let _windowKeyHandler = null;
+function clampOpenWindow() {
+    const el = document.getElementById(WIN_ID);
+    if (el && !el.classList.contains('uris-hidden')) clampWindowToViewport(el);
+}
+
 export function initViewportSync() {
     if (_viewportHandler) window.removeEventListener('resize', _viewportHandler);
+    if (_scrollClampHandler) window.removeEventListener('scroll', _scrollClampHandler);
     if (_viewportTimer) { clearTimeout(_viewportTimer); _viewportTimer = null; }
+    if (_scrollClampFrame) { cancelAnimationFrame(_scrollClampFrame); _scrollClampFrame = null; }
     _viewportHandler = () => {
         // Debounce 200ms — resize on mobile (URL-bar show/hide) fires frequently.
         clearTimeout(_viewportTimer);
         _viewportTimer = setTimeout(() => {
             const el = document.getElementById(WIN_ID);
-            if (el && !el.classList.contains('uris-hidden')) applyMobileClass(el);
+            if (el && !el.classList.contains('uris-hidden')) {
+                applyMobileClass(el);
+                // Desktop geometry is inline px, so a shrunken viewport (or the
+                // mobile→desktop restore inside applyMobileClass) can leave the
+                // header off-screen. Re-clamp after the class settles.
+                clampWindowToViewport(el);
+            }
         }, 200);
     };
+    // ST's `-webkit-transform` on <html> makes it the containing block for
+    // position:fixed, so the window rides document scroll. Clamp on the scroll
+    // itself (rAF-throttled — scroll fires per frame) to keep the header reachable.
+    _scrollClampHandler = () => {
+        if (_scrollClampFrame) return;
+        const raf = typeof requestAnimationFrame === 'function' ? requestAnimationFrame : fn => setTimeout(fn, 16);
+        _scrollClampFrame = raf(() => { _scrollClampFrame = null; clampOpenWindow(); });
+    };
     window.addEventListener('resize', _viewportHandler);
+    window.addEventListener('scroll', _scrollClampHandler, { passive: true });
 }
 export function removeViewportSync() {
     if (_viewportHandler) { window.removeEventListener('resize', _viewportHandler); _viewportHandler = null; }
+    if (_scrollClampHandler) { window.removeEventListener('scroll', _scrollClampHandler); _scrollClampHandler = null; }
     if (_viewportTimer) { clearTimeout(_viewportTimer); _viewportTimer = null; }
+    if (_scrollClampFrame) {
+        if (typeof cancelAnimationFrame === 'function') cancelAnimationFrame(_scrollClampFrame);
+        _scrollClampFrame = null;
+    }
+}
+
+// Минимум окна, видимый на экране: шапка с кнопками должна оставаться
+// достижимой, даже если геометрия сохранена на втором мониторе или окно уехало
+// со скроллом страницы (см. clampWindowToViewport).
+const MIN_WIDTH = 320;
+const MIN_HEIGHT = 360;
+const MIN_VISIBLE_PX = 100;
+
+/**
+ * Pure clamp of a floating window rect into the viewport.
+ *
+ * SillyTavern sets `-webkit-transform: translateZ(0)` on <html>
+ * (public/style.css), which makes <html> the containing block for
+ * `position: fixed`. A window opened while the chat is scrolled therefore
+ * rides the page and its header can leave the viewport entirely. The clamp
+ * keeps at least MIN_VISIBLE_PX of the window reachable from every edge and
+ * pushes the header below the ST top bar, which paints above the window.
+ *
+ * @param {{left:number, top:number, width:number, height:number}} rect
+ * @param {{width:number, height:number}} viewport
+ * @param {{topInset?:number}} [opts]
+ * @returns {{left:number, top:number, width:number, height:number}}
+ */
+export function clampWindowGeometry(rect, viewport, { topInset = 0 } = {}) {
+    const vw = Math.max(0, Number(viewport?.width) || 0);
+    const vh = Math.max(0, Number(viewport?.height) || 0);
+    const inset = Math.max(0, Math.min(Number(topInset) || 0, Math.max(0, vh - 1)));
+    const width = Math.min(Math.max(MIN_WIDTH, Number(rect?.width) || MIN_WIDTH), vw || MIN_WIDTH);
+    const height = Math.min(Math.max(MIN_HEIGHT, Number(rect?.height) || MIN_HEIGHT), vh || MIN_HEIGHT);
+    const minLeft = Math.min(0, vw - width);
+    const maxLeft = Math.max(minLeft, vw - MIN_VISIBLE_PX);
+    const minTop = inset;
+    const maxTop = Math.max(minTop, vh - MIN_VISIBLE_PX);
+    const left = Math.min(maxLeft, Math.max(minLeft, Number(rect?.left) || 0));
+    const top = Math.min(maxTop, Math.max(minTop, Number(rect?.top) || 0));
+    return { left, top, width, height };
+}
+
+function clampWindowToViewport(el) {
+    if (!el || isMobileViewport()) return;
+    const r = el.getBoundingClientRect();
+    const next = clampWindowGeometry(
+        { left: r.left, top: r.top, width: r.width, height: r.height },
+        { width: window.innerWidth, height: window.innerHeight },
+        { topInset: getStTopInsetPx() },
+    );
+    if (next.left === r.left && next.top === r.top && next.width === r.width && next.height === r.height) return;
+    el.style.left = next.left + 'px';
+    el.style.top = next.top + 'px';
+    el.style.width = next.width + 'px';
+    el.style.height = next.height + 'px';
+    el.style.right = 'auto';
+    el.style.bottom = 'auto';
 }
 
 function restoreGeometry(el) {
     const g = state.settings.windowGeometry;
     if (!g || isMobileViewport()) return;
-    // Clamp to viewport: otherwise the window restores outside the screen
-    // (geometry saved on a second monitor / viewport changed).
-    const vw = window.innerWidth, vh = window.innerHeight;
-    const w = Math.min(Math.max(320, g.width), vw);
-    const h = Math.min(Math.max(360, g.height), vh);
-    const left = Math.max(0, Math.min(g.left, vw - 100));
-    const top = Math.max(getStTopInsetPx(), Math.min(g.top, vh - 100));
-    el.style.left = left + 'px'; el.style.top = top + 'px';
-    el.style.width = w + 'px'; el.style.height = h + 'px';
+    const next = clampWindowGeometry(
+        { left: g.left, top: g.top, width: g.width, height: g.height },
+        { width: window.innerWidth, height: window.innerHeight },
+        { topInset: getStTopInsetPx() },
+    );
+    el.style.left = next.left + 'px'; el.style.top = next.top + 'px';
+    el.style.width = next.width + 'px'; el.style.height = next.height + 'px';
     el.style.right = 'auto'; el.style.bottom = 'auto';
 }
 
@@ -235,14 +325,49 @@ function bindWindowEvents(el) {
         });
     });
     const header = el.querySelector('#urisHeader');
-    header.addEventListener('mousedown', (e) => startDrag(e, el));
-    header.addEventListener('touchstart', (e) => startDrag(e, el), { passive: true });
+    // Pointer Events (как у плавающего лаунчера): один жест покрывает мышь, перо
+    // и палец. Раньше шапка слушала touchstart с passive:true — страница
+    // скроллилась под пальцем, а ресайзер не слушал тач вовсе.
+    header.addEventListener('pointerdown', (e) => startDrag(e, el));
     const resizer = el.querySelector('#urisResizer');
-    resizer.addEventListener('mousedown', (e) => startResize(e, el));
+    resizer.addEventListener('pointerdown', (e) => startResize(e, el));
+    bindWindowEscape(el);
     // Колесо мыши + drag-to-scroll на таб-баре: при узком окне вкладки
     // переполняют бар, и без этого хвостовые вкладки недостижимы на десктопе.
     _tabBarScrollCleanup?.();
     _tabBarScrollCleanup = bindTabBarScroll(el.querySelector('#urisTabs'), el.ownerDocument);
+}
+
+// ── Escape сворачивает окно ──
+//
+// Единственный выход из окна был «Свернуть» в шапке. Escape уже закрывает
+// собственные оверлеи расширения (панель ошибок, кроп, выбор папки, лайтбокс) —
+// они слушают keydown в capture-фазе и зовут stopPropagation, поэтому сюда
+// событие от них не доходит. SillyTavern на том же Escape закрывает свои панели
+// (RossAscends-mods.js, document keydown, bubble-фаза) и сама отступает, когда
+// открыт редактор сообщения или идёт стрим. Поэтому окно сворачивается только
+// если фокус внутри него: Escape из поля ввода чата остаётся таверне.
+
+function collapseWindow() {
+    if (state.settings.collapsed) return;
+    state.settings.collapsed = true;
+    saveSettings();
+    syncPanelVisibility();
+}
+
+function bindWindowEscape(winEl) {
+    if (_windowKeyHandler && typeof document !== 'undefined') {
+        document.removeEventListener('keydown', _windowKeyHandler, true);
+    }
+    _windowKeyHandler = (event) => {
+        if (event.key !== 'Escape') return;
+        if (!isPanelVisible()) return;
+        const target = event.target;
+        if (!target || typeof winEl.contains !== 'function' || !winEl.contains(target)) return;
+        event.preventDefault();
+        collapseWindow();
+    };
+    if (typeof document !== 'undefined') document.addEventListener('keydown', _windowKeyHandler, true);
 }
 
 // ── Error pool badge + panel ──
@@ -298,6 +423,86 @@ function renderErrorPanel(winEl, errors, pending = []) {
     });
 }
 
+const QUEUE_STATUS_TEXT = { waiting: 'ждёт', running: 'выполняется', done: 'готово' };
+
+function renderQueuePanel(winEl) {
+    const panel = winEl?.querySelector?.('#urisQueuePanel');
+    if (!panel) return;
+    const rows = listQueueLog();
+    const body = rows.length
+        ? rows.slice().reverse().map(row => {
+            const tone = row.tone === 'ok' ? ' uris-queue-ok' : row.tone === 'fail' ? ' uris-queue-fail' : '';
+            const detail = row.detail ? `<small>${escapeHtml(row.detail)}</small>` : '';
+            return `<div class="uris-error-row uris-queue-row${tone}"><span>${escapeHtml(row.label)} — ${QUEUE_STATUS_TEXT[row.status] || ''}</span>${detail}</div>`;
+        }).join('')
+        : '<div class="uris-error-row uris-error-empty">Очередь пуста</div>';
+    panel.innerHTML = `<div class="uris-error-panel-actions"><button type="button" class="uris-btn uris-btn-ghost" id="urisQueueClear">Очистить завершённые</button></div>
+        <section class="uris-error-section"><h3>Генерации</h3><div class="uris-error-rows">${body}</div></section>`;
+    panel.querySelector('#urisQueueClear')?.addEventListener('click', () => clearQueueLog());
+}
+
+/**
+ * Бейдж QUEUE рядом с INFO. Цифра — живые генерации (ждут или выполняются),
+ * прячется, когда живых нет. Лента помнит и завершённые: успех зелёным,
+ * неудача красным, отмена без заливки.
+ *
+ * Пакетная очередь пишет в журнал сама. Ручные и авто-генерации в неё не
+ * попадают, поэтому их строки заводятся здесь по событиям старта и финиша.
+ */
+function bindQueueBadge(el) {
+    const badge = el.querySelector('#urisQueueBadge');
+    const panel = el.querySelector('#urisQueuePanel');
+    if (!badge || !panel) return;
+    const sync = () => {
+        const count = queueBadgeCount();
+        badge.hidden = count === 0;
+        badge.setAttribute('aria-expanded', String(!panel.hidden));
+        el.querySelector('#urisQueueCount').textContent = String(count);
+        if (!panel.hidden) {
+            // Как у панели INFO: лист открывается под своим бейджем, а не в
+            // углу вьюпорта. На мобиле позицию задаёт CSS.
+            if (!isMobileViewport()) {
+                const rect = badge.getBoundingClientRect();
+                panel.style.top = `${Math.max(8, rect.bottom + 6)}px`;
+                panel.style.right = `${Math.max(8, window.innerWidth - rect.right)}px`;
+            }
+            renderQueuePanel(el);
+        }
+    };
+    const onStart = (ev) => {
+        const detail = ev.detail || {};
+        if (!detail.requestId || detail.source === 'queue') return;
+        const post = Number(detail.msgId);
+        noteQueued({ id: detail.requestId, label: Number.isFinite(post) ? `Пост #${post + 1}` : 'Генерация' });
+        noteRunning(detail.requestId);
+    };
+    const onEnd = (ev) => {
+        const detail = ev.detail || {};
+        if (!detail.requestId) return;
+        const outcome = detail.outcome === 'error' ? 'error' : detail.outcome === 'cancelled' ? 'cancelled' : 'success';
+        noteFinished(detail.requestId, outcome, detail.error || '');
+    };
+    badge.addEventListener('click', event => {
+        event.stopPropagation();
+        panel.hidden = !panel.hidden;
+        const infoPanel = el.querySelector('#urisErrorPanel');
+        if (infoPanel && !panel.hidden) infoPanel.hidden = true;
+        sync();
+    });
+    if (typeof window !== 'undefined' && typeof window.addEventListener === 'function') {
+        window.addEventListener('uris:queue', sync);
+        window.addEventListener('uris:stage2-start', onStart);
+        window.addEventListener('uris:stage2-end', onEnd);
+        document.addEventListener('click', event => {
+            if (!panel.hidden && !panel.contains(event.target) && event.target !== badge) {
+                panel.hidden = true;
+                badge.setAttribute('aria-expanded', 'false');
+            }
+        });
+    }
+    sync();
+}
+
 function bindErrorPool(el) {
     const badge = el.querySelector('#urisErrorBadge');
     const panel = el.querySelector('#urisErrorPanel');
@@ -336,6 +541,8 @@ function bindErrorPool(el) {
     badge.addEventListener('click', async event => {
         event.stopPropagation();
         panel.hidden = !panel.hidden;
+        const queuePanel = el.querySelector('#urisQueuePanel');
+        if (queuePanel && !panel.hidden) queuePanel.hidden = true;
         await sync();
     });
     _errorOutsideHandler = event => {
@@ -366,58 +573,79 @@ function bindErrorPool(el) {
 
 function startDrag(e, el) {
     if (isMobileViewport()) return;
+    // Secondary button / pen-barrel: not a drag. Touch and pen are pointerType
+    // 'touch' / 'pen' and arrive here too — one handler covers all of them.
+    if (e.button !== undefined && e.button !== 0) return;
     if (e.target.closest('.uris-icon-btn')) return;
-    const p = point(e);
-    const r = el.getBoundingClientRect();
-    const dx = p.x - r.left, dy = p.y - r.top;
+    const pointerId = e.pointerId;
+    const dx = e.clientX - el.getBoundingClientRect().left;
+    const dy = e.clientY - el.getBoundingClientRect().top;
     const move = (ev) => {
-        const np = point(ev);
-        el.style.left = Math.max(0, np.x - dx) + 'px';
-        el.style.top = Math.max(getStTopInsetPx(), np.y - dy) + 'px';
+        if (pointerId !== undefined && ev.pointerId !== pointerId) return;
+        const next = clampWindowGeometry(
+            {
+                left: ev.clientX - dx,
+                top: ev.clientY - dy,
+                width: el.getBoundingClientRect().width,
+                height: el.getBoundingClientRect().height,
+            },
+            { width: window.innerWidth, height: window.innerHeight },
+            { topInset: getStTopInsetPx() },
+        );
+        el.style.left = next.left + 'px';
+        el.style.top = next.top + 'px';
         el.style.right = 'auto'; el.style.bottom = 'auto';
     };
-    const up = () => {
-        document.removeEventListener('mousemove', move);
-        document.removeEventListener('mouseup', up);
-        document.removeEventListener('touchmove', move);
-        document.removeEventListener('touchend', up);
+    const up = (ev) => {
+        if (pointerId !== undefined && ev?.pointerId !== undefined && ev.pointerId !== pointerId) return;
+        document.removeEventListener('pointermove', move);
+        document.removeEventListener('pointerup', up);
+        document.removeEventListener('pointercancel', up);
+        if (el.hasPointerCapture?.(pointerId)) el.releasePointerCapture(pointerId);
         if (_dragCleanup === up) _dragCleanup = null;
         saveGeometry(el);
     };
+    _dragCleanup?.();
     _dragCleanup = up;
-    document.addEventListener('mousemove', move);
-    document.addEventListener('mouseup', up);
-    document.addEventListener('touchmove', move, { passive: true });
-    document.addEventListener('touchend', up);
+    el.setPointerCapture?.(pointerId);
+    document.addEventListener('pointermove', move);
+    document.addEventListener('pointerup', up);
+    document.addEventListener('pointercancel', up);
 }
 
 function startResize(e, el) {
+    if (e.button !== undefined && e.button !== 0) return;
     e.stopPropagation(); e.preventDefault();
-    const p = point(e);
+    const pointerId = e.pointerId;
+    const startX = e.clientX, startY = e.clientY;
     const r = el.getBoundingClientRect();
     const sw = r.width, sh = r.height;
     const move = (ev) => {
-        const np = point(ev);
-        const maxWidth = Math.max(320, window.innerWidth - Math.max(0, r.left));
-        const maxHeight = Math.max(360, window.innerHeight - Math.max(0, r.top));
-        el.style.width = Math.min(maxWidth, Math.max(320, sw + (np.x - p.x))) + 'px';
-        el.style.height = Math.min(maxHeight, Math.max(360, sh + (np.y - p.y))) + 'px';
+        if (pointerId !== undefined && ev.pointerId !== pointerId) return;
+        const maxWidth = Math.max(MIN_WIDTH, window.innerWidth - Math.max(0, r.left));
+        const maxHeight = Math.max(MIN_HEIGHT, window.innerHeight - Math.max(0, r.top));
+        el.style.width = Math.min(maxWidth, Math.max(MIN_WIDTH, sw + (ev.clientX - startX))) + 'px';
+        el.style.height = Math.min(maxHeight, Math.max(MIN_HEIGHT, sh + (ev.clientY - startY))) + 'px';
     };
-    const up = () => {
-        document.removeEventListener('mousemove', move);
-        document.removeEventListener('mouseup', up);
+    const up = (ev) => {
+        if (pointerId !== undefined && ev?.pointerId !== undefined && ev.pointerId !== pointerId) return;
+        document.removeEventListener('pointermove', move);
+        document.removeEventListener('pointerup', up);
+        document.removeEventListener('pointercancel', up);
+        if (el.hasPointerCapture?.(pointerId)) el.releasePointerCapture(pointerId);
         if (_resizeCleanup === up) _resizeCleanup = null;
         saveGeometry(el);
     };
+    _resizeCleanup?.();
     _resizeCleanup = up;
-    document.addEventListener('mousemove', move);
-    document.addEventListener('mouseup', up);
+    el.setPointerCapture?.(pointerId);
+    document.addEventListener('pointermove', move);
+    document.addEventListener('pointerup', up);
+    document.addEventListener('pointercancel', up);
 }
 
-function point(e) {
-    if (e.touches && e.touches[0]) return { x: e.touches[0].clientX, y: e.touches[0].clientY };
-    return { x: e.clientX, y: e.clientY };
-}
+// Test seam: pure geometry math (same pattern as _testFloatingLauncher).
+export const _testWindowGeometry = { clampWindowGeometry, MIN_VISIBLE_PX, MIN_WIDTH, MIN_HEIGHT };
 
 export function setStatus(text) {
     const el = document.getElementById('urisStatus');

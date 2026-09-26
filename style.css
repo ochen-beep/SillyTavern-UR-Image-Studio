@@ -185,6 +185,11 @@
     padding: 8px 12px; cursor: move; user-select: none;
     background: var(--uris-surface-header); flex-shrink: 0;
     border-bottom: 1px solid var(--uris-border-soft);
+    /* Жест перетаскивания принадлежит окну, а не скроллу страницы: без этого
+       палец на шапке листает чат под окном (pointer-обработчик в window.js).
+       На мобиле окно на весь экран и не двигается — там правило перекрыто
+       `#urisWindow.uris-mobile .uris-header { touch-action: pan-y }`. */
+    touch-action: none;
 }
 .uris-title { font-weight: 600; font-size: calc(14px * var(--uris-font-scale, 1)); }
 .uris-header-actions { display: flex; align-items: center; gap: 8px; }
@@ -300,6 +305,9 @@
 .uris-resizer {
     position: absolute; right: 0; bottom: 0; width: 16px; height: 16px;
     cursor: nwse-resize; background: linear-gradient(135deg, transparent 50%, rgba(255,255,255,.3) 50%);
+    /* Тот же контракт, что у шапки: жест ресайза (pointer, window.js) не должен
+       уходить в скролл страницы. На мобиле ресайзер скрыт вовсе. */
+    touch-action: none;
 }
 
 /* ── Пресеты ── */
@@ -1864,6 +1872,11 @@
 .uris-error-row { display: flex; align-items: flex-start; gap: 5px; opacity: 0.9; word-break: break-word; }
 .uris-error-row small { flex: 1 1 100%; color: var(--uris-text-mut); }
 .uris-error-empty { opacity: 0.5; }
+/* Строки очереди: успех зелёным, неудача красным. Отмена остаётся без заливки. */
+.uris-queue-row { flex-wrap: wrap; border-radius: 6px; padding: 3px 6px; }
+.uris-queue-row small { flex: 1 1 100%; }
+.uris-queue-ok { background: color-mix(in srgb, var(--uris-accent) 28%, transparent); }
+.uris-queue-fail { background: color-mix(in srgb, var(--uris-err, #b34141) 32%, transparent); }
 .uris-pending-discard { margin-left: auto; flex: 0 0 auto; font-size: calc(13px * var(--uris-font-scale, 1)); }
 .uris-error-panel-actions { display: flex; justify-content: flex-end; margin-bottom: 8px; }
 
