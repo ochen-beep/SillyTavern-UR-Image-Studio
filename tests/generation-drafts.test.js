@@ -246,6 +246,64 @@ test('sweepStaleRunningDrafts folds running stages back to idle and leaves other
     assert.deepEqual(lfMock._store.get(otherKey), { whatever: true }, 'non-draft keys untouched');
 });
 
+const DAY = 24 * 60 * 60 * 1000;
+
+function storedDraft(chatId, msgId, { updatedAt, prompt = '' } = {}) {
+    return {
+        chatId, msgId, prompt,
+        stage1: { status: 'ready', error: null, builtAt: updatedAt },
+        stage2: { status: 'idle', error: null, lastSubmittedSnapshot: null },
+        ...(updatedAt ? { updatedAt } : {}),
+    };
+}
+
+test('sweepStaleRunningDrafts drops drafts untouched for longer than the retention window', async () => {
+    const now = new Date('2026-09-25T00:00:00Z').getTime();
+    const freshKey = drafts.generationDraftKey('chat-a', 1);
+    const staleKey = drafts.generationDraftKey('chat-a', 2);
+    lfMock._store.set(freshKey, storedDraft('chat-a', 1, { updatedAt: new Date(now - 2 * DAY).toISOString(), prompt: 'свежий' }));
+    lfMock._store.set(staleKey, storedDraft('chat-a', 2, { updatedAt: new Date(now - 40 * DAY).toISOString(), prompt: 'старый' }));
+
+    await drafts.sweepStaleRunningDrafts({ now: () => now });
+
+    assert.equal(lfMock._store.has(freshKey), true, 'черновик младше окна хранения остаётся');
+    assert.equal(lfMock._store.has(staleKey), false, 'черновик старше 30 дней удаляется');
+});
+
+test('sweepStaleRunningDrafts caps how many drafts one chat keeps, dropping the least recently touched', async () => {
+    const now = new Date('2026-09-25T00:00:00Z').getTime();
+    // 4 черновика одного чата, все внутри окна хранения: остаться должны 3
+    // последних по updatedAt, самый старый — уйти.
+    for (let msgId = 1; msgId <= 4; msgId++) {
+        lfMock._store.set(
+            drafts.generationDraftKey('chat-b', msgId),
+            storedDraft('chat-b', msgId, { updatedAt: new Date(now - msgId * DAY).toISOString() }),
+        );
+    }
+    // Другой чат со своими тремя не должен пострадать от потолка первого.
+    const otherKey = drafts.generationDraftKey('chat-c', 1);
+    lfMock._store.set(otherKey, storedDraft('chat-c', 1, { updatedAt: new Date(now - DAY).toISOString() }));
+
+    await drafts.sweepStaleRunningDrafts({ now: () => now, maxPerChat: 3 });
+
+    assert.equal(lfMock._store.has(drafts.generationDraftKey('chat-b', 4)), false, 'самый давний сверх потолка удалён');
+    for (const msgId of [1, 2, 3]) {
+        assert.equal(lfMock._store.has(drafts.generationDraftKey('chat-b', msgId)), true, `msg ${msgId} внутри потолка`);
+    }
+    assert.equal(lfMock._store.has(otherKey), true, 'потолок считается отдельно на каждый чат');
+});
+
+test('sweepStaleRunningDrafts keeps a draft with no timestamp: legacy records predate the retention clock', async () => {
+    // Черновики, записанные до появления updatedAt, не несут времени. Считать их
+    // протухшими означало бы вычистить все накопленное при первом же запуске.
+    const key = drafts.generationDraftKey('chat-legacy', 5);
+    lfMock._store.set(key, storedDraft('chat-legacy', 5));
+
+    await drafts.sweepStaleRunningDrafts({ now: () => Date.parse('2026-09-25T00:00:00Z') });
+
+    assert.equal(lfMock._store.has(key), true);
+});
+
 test('sweepStaleRunningDrafts is a no-op when localforage has no keys()', async () => {
     globalThis.SillyTavern.libs.localforage = { getItem: async () => null, setItem: async () => {} };
     await assert.doesNotReject(drafts.sweepStaleRunningDrafts());

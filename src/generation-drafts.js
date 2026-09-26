@@ -47,6 +47,9 @@ function withDraftLock(chatId, msgId, fn) {
  * @property {string} [sceneText]
  *   Studio-only: the editable scene text the draft was built from. Chat drafts
  *   don't carry it — their source text lives in the chat and is hash-checked.
+ * @property {string} [updatedAt]
+ *   ISO timestamp of the last write. Feeds the retention sweep; drafts written
+ *   before it existed have none and are never expired on age alone.
  */
 
 /**
@@ -352,7 +355,36 @@ export function createStage2Snapshot({ draft, contextSnapshot, refs, effectivePr
  */
 export async function saveGenerationDraft(draft) {
     const key = generationDraftKey(draft.chatId, draft.msgId);
-    await SillyTavern.libs.localforage.setItem(key, serializeGenerationDraft(draft));
+    const serialized = serializeGenerationDraft(draft);
+    // Stamp every write so the retention sweep can tell a live draft from one
+    // abandoned months ago. Readers compare the stored object by identity-stable
+    // fields only, so an extra timestamp never invalidates a draft.
+    serialized.updatedAt = new Date().toISOString();
+    await SillyTavern.libs.localforage.setItem(key, serialized);
+}
+
+// A draft is written for every post the Generation tab is opened on, and
+// nothing used to remove one. Two bounds keep IndexedDB from growing without
+// limit: a draft untouched for this long is forgotten, and a single chat keeps
+// at most this many of its most recently touched drafts.
+const DRAFT_TTL_MS = 30 * 24 * 60 * 60 * 1000;
+const DRAFTS_PER_CHAT = 100;
+
+/**
+ * Best-effort "last touched" instant for a draft. `updatedAt` is stamped on
+ * every save; drafts persisted before that existed fall back to the Stage 1
+ * build time. No timestamp at all means "unknown", and those are kept — expiry
+ * must not wipe the whole store on the first run after the upgrade.
+ *
+ * @param {object} raw
+ * @returns {number|null} epoch ms
+ */
+function draftTouchedAt(raw) {
+    for (const candidate of [raw?.updatedAt, raw?.stage1?.builtAt]) {
+        const ms = Date.parse(candidate || '');
+        if (Number.isFinite(ms)) return ms;
+    }
+    return null;
 }
 
 /**
@@ -362,18 +394,32 @@ export async function saveGenerationDraft(draft) {
  * "idle"; every other status (ready / error / cancelled) is preserved. Only
  * status and error are touched - refs, prompt and snapshots are left intact.
  *
+ * The same pass enforces retention: drafts untouched for longer than
+ * {@link DRAFT_TTL_MS} are removed, and each chat keeps at most `maxPerChat`
+ * of its newest drafts. Both bounds are best-effort — a failed read or delete
+ * skips that one key.
+ *
+ * @param {{now?: () => number, ttlMs?: number, maxPerChat?: number}} [options]
  * @returns {Promise<void>}
  */
-export async function sweepStaleRunningDrafts() {
+export async function sweepStaleRunningDrafts({ now = Date.now, ttlMs = DRAFT_TTL_MS, maxPerChat = DRAFTS_PER_CHAT } = {}) {
     const lf = SillyTavern.libs.localforage;
     if (!lf?.keys) return;
     let keys;
     try { keys = await lf.keys(); } catch { return; }
+    const nowMs = now();
+    /** @type {Map<string, {key: string, touched: number}[]>} */
+    const keptByChat = new Map();
     for (const key of keys) {
         if (typeof key !== 'string' || !key.startsWith(LF_GENERATION_DRAFT_PREFIX)) continue;
         let raw;
         try { raw = await lf.getItem(key); } catch { continue; }
         if (!raw) continue;
+        const touched = draftTouchedAt(raw);
+        if (touched !== null && Number.isFinite(nowMs) && nowMs - touched > ttlMs) {
+            try { await lf.removeItem(key); } catch { /* ignore individual delete failures */ }
+            continue;
+        }
         let stage1 = raw.stage1;
         let stage2 = raw.stage2;
         let changed = false;
@@ -386,7 +432,24 @@ export async function sweepStaleRunningDrafts() {
             changed = true;
         }
         if (changed) {
+            // A reload-recovery rewrite is not a user edit: keep the original
+            // timestamp so the retention clock keeps running from the last real
+            // write instead of restarting on every page load.
             try { await lf.setItem(key, { ...raw, stage1, stage2 }); } catch { /* ignore individual write failures */ }
+        }
+        const chatId = typeof raw.chatId === 'string' ? raw.chatId : '';
+        if (!chatId) continue;
+        const bucket = keptByChat.get(chatId) || [];
+        bucket.push({ key, touched: touched ?? Number.POSITIVE_INFINITY });
+        keptByChat.set(chatId, bucket);
+    }
+    for (const bucket of keptByChat.values()) {
+        if (bucket.length <= maxPerChat) continue;
+        // Unknown-age drafts sort last, so a cap never evicts them ahead of
+        // drafts whose age is actually known.
+        bucket.sort((a, b) => b.touched - a.touched);
+        for (const stale of bucket.slice(maxPerChat)) {
+            try { await lf.removeItem(stale.key); } catch { /* ignore individual delete failures */ }
         }
     }
 }
