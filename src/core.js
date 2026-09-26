@@ -614,7 +614,7 @@ export function fnv1aHex(value) {
  * @param {(attempt: number) => Promise<any>} fn
  * @param {string} label — for logging
  * @param {'network' | 'generation'} [mode='network']
- *   - 'network'     — retry 429/502/503/504/network/CORS. Do NOT retry timeout:
+ *   - 'network'     — retry transient failures. Do NOT retry timeout:
  *                     retrying is usually useless (LLM either responds in time or hangs).
  *   - 'generation'  — same but applies to paid image generation. Semantically
  *                     identical to 'network' (timeout excluded from retryable in both modes),
@@ -624,17 +624,32 @@ export function fnv1aHex(value) {
  * guaranteed spends money twice (provider finishes and charges), returning no
  * result. The old regex included "Timeout" → with maxRetries>0 it burned money N times.
  *
- * Errors carrying `noRetry === true` are never retried regardless of their
- * message: this is how typed delivery outcomes (DELIVERY_AMBIGUOUS from
- * proxy.autoFetch) opt out — the request may have reached the provider, and a
- * resend could bill it twice. The regex also no longer matches "unavailable":
- * it used to match our own provider wrapper text ("Text API is unavailable:
- * <raw error>"), turning any wrapped failure into a retry.
+ * Retryability is decided by STRUCTURE, never by the message text. The previous
+ * regex scanned the whole message for /429|502|503|504|network|…/i, so a gateway
+ * that mentioned "429" anywhere in its prose — or echoed a request id containing
+ * those digits — resent a paid request. What counts now:
+ *   - `error.httpStatus` in {429, 502, 503, 504} (providers stamp the real one);
+ *   - a typed `error.code` of a transient transport failure (NETWORK, and the
+ *     bare fetch failures TypeError names).
+ * The message text stays in the log and nowhere else.
+ *
+ * Errors carrying `noRetry === true` are never retried regardless of status:
+ * this is how typed delivery outcomes (DELIVERY_AMBIGUOUS from proxy.autoFetch)
+ * opt out — the request may have reached the provider, and a resend could bill
+ * it twice.
  */
+const RETRYABLE_HTTP_STATUSES = new Set([429, 502, 503, 504]);
+const RETRYABLE_ERROR_CODES = new Set(['NETWORK', 'FAILED_TO_FETCH', 'CORS']);
+
+function isRetryableError(e) {
+    const status = Number.isSafeInteger(e?.httpStatus) ? e.httpStatus : null;
+    if (status !== null) return RETRYABLE_HTTP_STATUSES.has(status);
+    const code = String(e?.code || '').toUpperCase();
+    return RETRYABLE_ERROR_CODES.has(code);
+}
+
 export async function callWithRetry(fn, label, mode = 'network', signal = null) {
     const s = state.settings;
-    // Retryable: transient network failures. Timeout excluded intentionally (see jsdoc).
-    const retryable = /429|502|503|504|network|Failed to fetch|CORS/i;
     const throwIfAborted = () => {
         if (signal?.aborted) throw new DOMException('Aborted', 'AbortError');
     };
@@ -653,7 +668,7 @@ export async function callWithRetry(fn, label, mode = 'network', signal = null) 
             lastErr = e;
             if (signal?.aborted) throw new DOMException('Aborted', 'AbortError');
             log(`${label} attempt ${attempt + 1}: ${e.message}`);
-            if (e?.noRetry === true || !retryable.test(e.message) || attempt === s.maxRetries) break;
+            if (e?.noRetry === true || !isRetryableError(e) || attempt === s.maxRetries) break;
             await wait(s.retryDelay * Math.pow(2, attempt));
         }
     }

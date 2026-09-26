@@ -65,12 +65,18 @@ export async function generateText(p, systemPrompt, userPrompt, onStatus, signal
         if (e?.noRetry) throw e;
         error('gemini.generateText: сетевая ошибка', url, e.message);
         if (/Timeout \(/.test(e?.message || '')) throw e;
-        throw new Error(`Gemini Text API недоступен: ${e.message}`);
+        // Типизированный код вместо текста — ретрай решается по code/httpStatus
+        // (см. openai.generateText).
+        const wrapped = new Error(`Gemini Text API недоступен: ${e.message}`);
+        wrapped.code = 'NETWORK';
+        throw wrapped;
     });
 
     if (!resp.ok) {
-        const e = await resp.text().catch(() => '');
-        throw new Error(`Gemini Text HTTP ${resp.status}: ${e.slice(0, 300)}`);
+        const body = await resp.text().catch(() => '');
+        const httpError = new Error(`Gemini Text HTTP ${resp.status}: ${body.slice(0, 300)}`);
+        httpError.httpStatus = Number.isSafeInteger(resp.status) ? resp.status : null;
+        throw httpError;
     }
 
     const { text } = await readResponseBody(resp);

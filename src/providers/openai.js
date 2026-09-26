@@ -60,12 +60,19 @@ export async function generateText(p, systemPrompt, userPrompt, onStatus, signal
         if (e?.noRetry) throw e;
         error('openai.generateText: network error', url, e.message);
         if (/Timeout \(/.test(e?.message || '')) throw e;
-        throw new Error(`Text API is unavailable: ${e.message}`);
+        // Typed code, not prose: callWithRetry decides retryability from
+        // `code`/`httpStatus`, and a message that merely mentions "network"
+        // must not be enough to resend a paid request.
+        const wrapped = new Error(`Text API is unavailable: ${e.message}`);
+        wrapped.code = 'NETWORK';
+        throw wrapped;
     });
 
     if (!resp.ok) {
         const responseText = await resp.text().catch(() => '');
-        throw new Error(`Text API HTTP ${resp.status}: ${responseText.slice(0, 300)}`);
+        const httpError = new Error(`Text API HTTP ${resp.status}: ${responseText.slice(0, 300)}`);
+        httpError.httpStatus = Number.isSafeInteger(resp.status) ? resp.status : null;
+        throw httpError;
     }
 
     const { text } = await readResponseBody(resp);

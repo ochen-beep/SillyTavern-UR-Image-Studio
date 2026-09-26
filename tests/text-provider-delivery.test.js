@@ -36,6 +36,19 @@ function phantomCorsFetch(sent) {
     });
 }
 
+/**
+ * Мок: разведка отвечает 200, платный POST — HTTP-ошибкой. Статус должен доехать
+ * до ошибки как httpStatus: callWithRetry решает ретрай по нему, а не по тексту.
+ */
+function httpErrorFetch(status) {
+    return mockFetch((_url, options = {}) => {
+        if (String(options.method || 'GET').toUpperCase() === 'POST') {
+            return { ok: false, status, text: async () => 'overloaded' };
+        }
+        return { ok: true, status: 200, json: async () => ({ data: [] }) };
+    });
+}
+
 for (const [provider, modulePath, profile] of [
     ['openai', '../src/providers/openai.js', { endpoint: 'https://api.delivery.test/v1', apiKey: 'k', model: 'm' }],
     ['gemini', '../src/providers/gemini.js', { endpoint: 'https://api.delivery.test', apiKey: 'k', model: 'gemini-x' }],
@@ -56,6 +69,33 @@ for (const [provider, modulePath, profile] of [
             assert.equal(posts.length, 1, 'платный POST уходит ровно один раз — без прокси-фолбэка');
             assert.equal(gets.length, 1, 'перед POST должна быть одна разведка (/models)');
             assert.ok(gets[0].url.endsWith('/models'), `разведка бьёт в /models, а не в ${gets[0].url}`);
+        } finally {
+            restore();
+        }
+    });
+
+    test(`${provider}.generateText: HTTP-ошибка несёт httpStatus, а не только текст`, async () => {
+        const restore = httpErrorFetch(503);
+        try {
+            const { generateText } = await import(modulePath);
+            await assert.rejects(
+                generateText(profile, 's', 'u', () => {}, null),
+                e => e?.httpStatus === 503,
+                'статус ответа должен лежать на ошибке, а не только в её сообщении',
+            );
+        } finally {
+            restore();
+        }
+    });
+
+    test(`${provider}.generateText: сетевой обрыв помечен кодом NETWORK`, async () => {
+        const restore = mockFetch(() => { throw new TypeError('Failed to fetch'); });
+        try {
+            const { generateText } = await import(modulePath);
+            await assert.rejects(
+                generateText(profile, 's', 'u', () => {}, null),
+                e => e?.code === 'NETWORK',
+            );
         } finally {
             restore();
         }
