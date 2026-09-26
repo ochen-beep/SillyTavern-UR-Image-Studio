@@ -1269,6 +1269,13 @@ class DragHandler {
       equalizePoints(this.startPan, this.pswp.currSlide.pan);
     }
 
+    // URIS patch: drag начался, пока лента ещё доезжала после предыдущего
+    // свайпа (stopAll ниже замораживает её на середине). Пороги в end()
+    // считают смещение от ЦЕЛЕВОЙ позиции нового слайда, и недолёт середины
+    // анимации всегда трактуется как «вернуться назад» — второй быстрый
+    // свайп терялся, пока лента не доедет. Запоминаем старт из-под анимации:
+    // решающий бросок в end() навигирует и с недолёта.
+    this._dragStartedDuringSettle = Math.abs(this.pswp.mainScroll.x - this.pswp.mainScroll.getCurrSlideX()) > 1;
     this.pswp.animations.stopAll();
   }
 
@@ -1336,11 +1343,14 @@ class DragHandler {
       //   and velocity is close to 0
       //
 
-      if (velocity.x < -MIN_NEXT_SLIDE_SPEED && currentSlideVisibilityRatio < 0 || velocity.x < 0.1 && currentSlideVisibilityRatio < -0.5) {
+      // URIS patch: `|| this._dragStartedDuringSettle` в скоростных ветках —
+      // бросок, начатый из-под доезжающей ленты, навигирует без требования
+      // пересечь порог видимости (см. комментарий в start()).
+      if (velocity.x < -MIN_NEXT_SLIDE_SPEED && (currentSlideVisibilityRatio < 0 || this._dragStartedDuringSettle) || velocity.x < 0.1 && currentSlideVisibilityRatio < -0.5) {
         // Go to next slide
         indexDiff = 1;
         velocity.x = Math.min(velocity.x, 0);
-      } else if (velocity.x > MIN_NEXT_SLIDE_SPEED && currentSlideVisibilityRatio > 0 || velocity.x > -0.1 && currentSlideVisibilityRatio > 0.5) {
+      } else if (velocity.x > MIN_NEXT_SLIDE_SPEED && (currentSlideVisibilityRatio > 0 || this._dragStartedDuringSettle) || velocity.x > -0.1 && currentSlideVisibilityRatio > 0.5) {
         // Go to prev slide
         indexDiff = -1;
         velocity.x = Math.max(velocity.x, 0);
@@ -2177,7 +2187,15 @@ class Gestures {
     this.drag = new DragHandler(this);
     this.zoomLevels = new ZoomHandler(this);
     this.tapHandler = new TapHandler(this);
-    pswp.on('bindEvents', () => {
+    // URIS patch: жесты биндим на 'afterInit' (синхронный конец init), а не на
+    // 'bindEvents' — тот диспатчится только из openingAnimationEnd, и всю
+    // анимацию открытия (250мс + ожидание декода плейсхолдера) у просмотрщика
+    // НЕ БЫЛО слушателей pointerdown/move/up: свайп сразу после тапа по
+    // карточке физически никуда не попадал. Слушатели навсегда одни —
+    // двойного биндинга нет; жест во время анимации перехватывает гард
+    // isOpen в onPointerDown (см. finishOpening), который мгновенно доигрывает
+    // открытие и отдаёт жест обычному пайплайну.
+    pswp.on('afterInit', () => {
       pswp.events.add(pswp.scrollWrap, 'click',
       /** @type EventListener */
       this._onClick.bind(this));
@@ -2262,8 +2280,18 @@ class Gestures {
     } = this; // if PhotoSwipe is opening or closing
 
     if (!pswp.opener.isOpen) {
-      e.preventDefault();
-      return;
+      // URIS patch: жест во время анимации ОТКРЫТИЯ не глотаем — мгновенно
+      // доигрываем открытие (снимаем переходы, пишем финальные стили, шлём
+      // конечные события) и отдаём жест обычному пайплайну. Иначе свайп
+      // сразу после тапа по карточке умирал до конца showAnimationDuration.
+      // Закрытие не трогаем: там контракт мёртвого тапа
+      // (style.css .uris-pswp-closing), тапы должны уходить странице.
+      if (pswp.opener.isOpening) {
+        pswp.opener.finishOpening();
+      } else {
+        e.preventDefault();
+        return;
+      }
     }
 
     if (pswp.dispatch('pointerDown', {
@@ -6123,6 +6151,30 @@ class Opener {
 
       (_pswp$currSlide = pswp.currSlide) === null || _pswp$currSlide === void 0 || _pswp$currSlide.applyCurrentZoomPan();
     }
+  }
+  /**
+   * URIS patch: мгновенно доиграть анимацию открытия. Вызывается из
+   * gestures.onPointerDown, когда палец пришёл раньше, чем анимация
+   * отыграла. stopAll() снимает CSS-transition (destroy убирает
+   * transition-стиль, кадр остаётся в инлайн-стилях), _duration = 0
+   * переключает _animateTo на прямую запись финальных стилей, а
+   * _onAnimationComplete расставляет флаги, шлёт openingAnimationEnd и
+   * возвращает контейнеру обычный overflow/width. Всё синхронно, в одном
+   * кадре — вспышки начального состояния нет.
+   */
+
+  finishOpening() {
+    if (!this.isOpening) {
+      return;
+    }
+
+    const {
+      pswp
+    } = this;
+    pswp.animations.stopAll();
+    this._duration = 0;
+    this._animateToOpenState();
+    this._onAnimationComplete();
   }
   /** @private */
 
