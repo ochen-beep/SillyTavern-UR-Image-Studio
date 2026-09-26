@@ -78,3 +78,34 @@ test('hidden startup can activate Generate without rendering a tab body', async 
     assert.equal(getActiveTab(), 'generate');
     assert.equal(body.children.length, 0);
 });
+
+test('a rejected tab render is recorded in the error pool instead of vanishing', async () => {
+    // Раньше catch(() => {}) глотал отказ async-рендера: пользователь видел
+    // пустую вкладку и не имел ни одной записи о причине.
+    const { state, defaultSettings } = await import('../src/core.js');
+    const { registerTab, setActiveTab } = await import('../src/ui/tabs.js');
+    const { listUrisErrors, clearUrisErrors } = await import('../src/error-pool.js');
+
+    clearUrisErrors();
+    state.settings = { ...defaultSettings };
+    const tabs = fakeDoc.document.createElement('div');
+    tabs.id = 'urisTabs';
+    const body = fakeDoc.document.createElement('div');
+    body.id = 'urisBody';
+    fakeDoc.root.appendChild(tabs);
+    fakeDoc.root.appendChild(body);
+
+    registerTab({
+        id: 'broken',
+        label: 'Broken',
+        render: () => Promise.reject(new Error('layout exploded')),
+    });
+
+    assert.equal(setActiveTab('broken', { persist: false }), true);
+    await new Promise(resolve => setTimeout(resolve, 0));
+
+    const recorded = listUrisErrors();
+    assert.equal(recorded.length, 1, 'отказ рендера должен оставить запись в пуле');
+    assert.match(recorded[0].message, /layout exploded/);
+    clearUrisErrors();
+});

@@ -3,7 +3,8 @@
  * Floating window tab framework: API, References, Generate, Gallery, Templates.
  * Each tab registers {id, label, render} and receives a root element on activation.
  */
-import { state, saveSettings } from '../core.js';
+import { state, saveSettings, error } from '../core.js';
+import { recordUrisError } from '../error-pool.js';
 
 const registry = [];
 let _active = null;
@@ -66,7 +67,13 @@ export function setActiveTab(id, { persist = true, render = true } = {}) {
             : fn => setTimeout(fn, 0);
         if (result && typeof result.then === 'function') {
             // Async render: wait for layout to settle before restoring.
-            result.then(() => raf(restore)).catch(() => {});
+            result.then(() => raf(restore)).catch(e => {
+                // A swallowed rejection left the user with an empty tab and no
+                // trace of why. The pool is the durable record (the header INFO
+                // badge); the console line stays for the developer.
+                error(`render tab "${id}":`, e);
+                recordUrisError({ scope: 'UI', message: `Вкладка «${tab.label}» не отрисовалась: ${e?.message || e}` });
+            });
         } else {
             raf(restore);
         }
