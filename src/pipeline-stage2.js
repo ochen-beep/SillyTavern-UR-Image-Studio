@@ -421,7 +421,11 @@ export async function runStage2ForDraft(input, onStatus = () => {}, signal, opts
                     outcome: cancelled ? 'cancelled' : (failure ? 'error' : 'ready'),
                     durationMs: startedAt ? Date.now() - startedAt : null,
                 });
-                emitStage2Event('uris:stage2-end', { requestId: activeRequestId, chatId, msgId });
+                emitStage2Event('uris:stage2-end', {
+                    requestId: activeRequestId, chatId, msgId,
+                    outcome: cancelled ? 'cancelled' : (failure ? 'error' : 'success'),
+                    error: failure && !cancelled ? (failure.message || '') : '',
+                });
             }
         }
         if (releaseNext) {

@@ -12,6 +12,7 @@ import { hashMessage } from './generation-drafts.js';
 import { resolveChatConfigSnapshot } from './pipeline-config.js';
 import { runStage2ForDraft } from './pipeline-stage2.js';
 import { STUDIO_CHAT_ID } from './studio-scope.js';
+import { noteQueued, noteFinished } from './ui/queue-log.js';
 
 // ── Queue: explicit source identity and action ──
 
@@ -87,9 +88,23 @@ function deepFreeze(value) {
  */
 export function enqueueGeneration(item) {
     return new Promise((resolve, reject) => {
-        state.queue.push({ item, resolve, reject });
+        const entry = { item, resolve, reject, queueId: uid() };
+        state.queue.push(entry);
+        noteQueued({ id: entry.queueId, label: queueLabel(item) });
         processQueue();
     });
+}
+
+let _queueSeq = 0;
+
+function uid() {
+    _queueSeq += 1;
+    return `q${_queueSeq}`;
+}
+
+/** Подпись строки очереди: пост, из которого пришла генерация. */
+function queueLabel(item) {
+    return item?.chatId === STUDIO_CHAT_ID ? 'Студия' : `Пост #${Number(item?.msgId) + 1}`;
 }
 
 async function processQueue() {
@@ -99,7 +114,8 @@ async function processQueue() {
 
     try {
         while (state.queue.length && !state.queueAbort.signal.aborted) {
-            const { item, resolve, reject } = state.queue.shift();
+            const { item, resolve, reject, queueId } = state.queue.shift();
+            state.runningQueueId = queueId;
             try {
                 const ctx = getCtx();
                 // Studio items keep the text captured at enqueue time: there is
@@ -130,9 +146,11 @@ async function processQueue() {
                 entry = await runStage2ForDraft(input, (s) => { log('Q:', s); }, state.queueAbort.signal,
                     item.submission ? { submission: item.submission } : {});
                 recordDiagnosticEvent({ event: 'queue-complete', stage: 'queue', chatHash: hashDiagnosticId(item.chatId), msgId: item.msgId, outcome: 'completed' });
+                noteFinished(queueId, 'success');
                 resolve(entry);
             } catch (e) {
                 if (e.name === 'AbortError') {
+                    noteFinished(queueId, 'cancelled');
                     reject(new DOMException('Aborted by user', 'AbortError'));
                     // A whole-queue stop aborts the shared controller; a per-item
                     // cancel (abortGeneration on this item's ownController) does
@@ -141,6 +159,7 @@ async function processQueue() {
                     continue;
                 }
                 error('Q item failed:', e.message);
+                noteFinished(queueId, 'error', e.message || '');
                 recordDiagnosticEvent({ event: e.name === 'AbortError' ? 'queue-abort' : 'queue-error', level: e.name === 'AbortError' ? 'log' : 'error', stage: 'queue', chatHash: hashDiagnosticId(item.chatId), msgId: item.msgId, outcome: e.name === 'AbortError' ? 'cancelled' : 'error', details: { errorName: e?.name || null } });
                 reject(e);
             }
@@ -148,8 +167,10 @@ async function processQueue() {
     } finally {
         state.queueRunning = false;
         state.queueAbort = null;
+        state.runningQueueId = null;
         // Reject remaining tasks
         for (const remaining of state.queue) {
+            noteFinished(remaining.queueId, 'cancelled');
             remaining.reject(new DOMException('Queue stopped', 'AbortError'));
         }
         state.queue = [];
