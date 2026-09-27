@@ -922,6 +922,17 @@ test('renderGenerateMarkup renders pool-only whitelist and no slot controls', ()
     assert.doesNotMatch(markup, /urisRefsSlots|charSlot|userSlot|NPC whitelist/);
 });
 
+test('whitelist renders folder groups above a merged actions row with direct chips', async () => {
+    const src = await readFile(new URL('../src/ui/tab-generate-refs.js', import.meta.url), 'utf8');
+    // Direct cards live inside the actions row: the separate "Отдельные карточки"
+    // group (header + "нет" placeholder) cost an extra UI line even when empty.
+    assert.doesNotMatch(src, /uris-refs-whitelist-direct/);
+    // Folder groups come first; the actions row opens with the direct chips and
+    // closes with both add tiles.
+    assert.match(src, /\$\{folderGroups\.join\(''\)\}<div class="uris-refs-whitelist-actions">\$\{directMarkup\}/);
+    assert.match(src, /uris-add-extra[\s\S]*?uris-add-folder/);
+});
+
 test('reference library source has aliases editor but no role or keywords editor', async () => {
     const src = await readFile(new URL('../src/ui/tab-references.js', import.meta.url), 'utf8');
     assert.match(src, /uris-ed-aliases/);

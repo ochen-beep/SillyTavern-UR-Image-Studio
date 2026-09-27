@@ -1001,23 +1001,27 @@
     flex: 0 0 auto;
     flex-wrap: wrap;
     gap: 6px;
+    align-items: flex-start;
     width: 100%;
     margin: 2px 0 0;
+}
+/* Отдельные карточки живут в этой же строке; когда выше есть группы папок —
+   строка отделяется тем же пунктиром, что раньше был у группы карточек. */
+.uris-refs-whitelist-actions:not(:first-child) {
+    margin-top: 10px;
+    padding-top: 8px;
+    border-top: 1px dashed rgba(255,255,255,.1);
 }
 .uris-refs-whitelist-actions .uris-refs-add-tile {
     width: 56px;
     min-width: 56px;
     min-height: 56px;
-    aspect-ratio: 1;
+    aspect-ratio: 3 / 4;
     padding: 0;
     font-size: calc(22px * var(--uris-font-scale, 1));
     gap: 0;
 }
-.uris-refs-whitelist-direct {
-    margin-top: 10px;
-    padding-top: 8px;
-    border-top: 1px dashed rgba(255,255,255,.1);
-}
+.uris-refs-whitelist-group:first-child { margin-top: 2px; }
 .uris-ref-stale { opacity: .7; }
 .uris-folder-remove {
     min-width: 26px;

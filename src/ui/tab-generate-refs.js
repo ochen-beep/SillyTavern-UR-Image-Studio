@@ -326,11 +326,9 @@ async function renderWhitelistChips(root, chatRefs) {
     const folderGroups = [];
     const directRefs = chatRefs.referenceIds.map(id => byId.get(id) || { id, missing: true });
     directRefs.forEach(ref => displayedIds.add(ref.id));
+    // Отдельные карточки рисуются внутри строки actions (после папок): отдельная
+    // группа с заголовком стоила лишней строки интерфейса даже когда пустела.
     const directMarkup = directRefs.map(ref => ref.missing ? renderStaleRef(ref.id) : renderChip(ref, true)).join('');
-    const directGroup = `<div class="uris-refs-whitelist-group uris-refs-whitelist-direct">
-        <div class="uris-refs-whitelist-group-head"><span>Отдельные карточки</span></div>
-        <div class="uris-refs-whitelist-group-cards">${directMarkup || '<small class="uris-refs-empty">нет</small>'}</div>
-    </div>`;
 
     for (const folderId of selectedFolderIds) {
         const folder = folders.find(item => item.id === folderId);
@@ -345,10 +343,10 @@ async function renderWhitelistChips(root, chatRefs) {
     for (const folderId of staleFolders) {
         folderGroups.push(`<div class="uris-refs-whitelist-group uris-ref-stale" data-folder-id="${escapeHtml(folderId)}"><div class="uris-refs-whitelist-group-head"><span>${escapeHtml(folderId)} (папка не найдена)</span><button type="button" class="uris-folder-remove" data-folder-id="${escapeHtml(folderId)}" title="Убрать" aria-label="Убрать папку"><i class="fa-solid fa-xmark"></i></button></div></div>`);
     }
-    host.innerHTML = `<div class="uris-refs-whitelist-actions">
+    host.innerHTML = `${folderGroups.join('')}<div class="uris-refs-whitelist-actions">${directMarkup}
         <button class="uris-refs-add-tile uris-add-extra" title="Добавить референс в whitelist" aria-label="Добавить референс в whitelist"><i class="fa-solid fa-plus"></i></button>
         <button class="uris-refs-add-tile uris-add-folder" title="Добавить папку в whitelist" aria-label="Добавить папку в whitelist"><i class="fa-solid fa-folder-plus"></i></button>
-    </div>${directGroup}${folderGroups.join('')}`;
+    </div>`;
 
     host.querySelector('.uris-add-extra')?.addEventListener('click', async () => {
         const current = getChatRefs().referenceIds;
