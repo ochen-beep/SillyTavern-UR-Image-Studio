@@ -4,7 +4,7 @@
 // красная, отмена не подсвечивается ни тем ни другим.
 import { test, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
-import { noteQueued, noteRunning, noteFinished, listQueueLog, queueBadgeCount, clearQueueLog } from '../src/ui/queue-log.js';
+import { noteQueued, noteRunning, noteFinished, listQueueLog, queueBadgeCount, clearQueueLog, hasLiveQueueLane, laneFromSource } from '../src/ui/queue-log.js';
 
 beforeEach(() => clearQueueLog({ all: true }));
 
@@ -49,4 +49,61 @@ test('очистка убирает завершённое и оставляет
     const log = listQueueLog();
     assert.deepEqual(log.map(row => row.id), ['live']);
     assert.equal(queueBadgeCount(), 1);
+});
+
+// ── Лейны: пачечная очередь vs ручные/авто/внешние ──
+
+test('lane по умолчанию manual, pipeline-queue помечает очередь явно', () => {
+    noteQueued({ id: 'm1', label: 'Пост #1' });
+    noteQueued({ id: 'q1', label: 'Пост #2', lane: 'queue' });
+    const byId = Object.fromEntries(listQueueLog().map(row => [row.id, row]));
+    assert.equal(byId.m1.lane, 'manual');
+    assert.equal(byId.q1.lane, 'queue');
+});
+
+test('hasLiveQueueLane — только живые строки пачечной очереди', () => {
+    assert.equal(hasLiveQueueLane(), false);
+    noteQueued({ id: 'm1', label: 'Пост #1' });
+    noteQueued({ id: 'a1', label: 'Пост #2', lane: 'auto' });
+    assert.equal(hasLiveQueueLane(), false, 'ручные и авто живые строки не очередь');
+    noteQueued({ id: 'q1', label: 'Пост #3', lane: 'queue' });
+    assert.equal(hasLiveQueueLane(), true);
+    noteRunning('q1');
+    assert.equal(hasLiveQueueLane(), true, 'выполняющийся элемент очереди — живой');
+    noteFinished('q1', 'success');
+    assert.equal(hasLiveQueueLane(), false, 'завершённая строка не очередь');
+    noteQueued({ id: 'q2', label: 'Пост #4', lane: 'queue' });
+    noteFinished('q2', 'cancelled');
+    assert.equal(hasLiveQueueLane(), false, 'отменённая строка не очередь');
+});
+
+// Вытеснение при MAX_ROWS не должно выбрасывать живые строки, пока есть
+// завершённые: иначе бейдж недосчитывает, а noteFinished вытесненных — no-op.
+test('вытеснение при переполнении убирает сначала завершённые', () => {
+    for (let i = 0; i < 48; i++) noteQueued({ id: `w${i}`, label: `Пост #${i}` });
+    noteQueued({ id: 'd1', label: 'Пост #48' });
+    noteFinished('d1', 'success');
+    noteQueued({ id: 'd2', label: 'Пост #49' });
+    noteFinished('d2', 'success');
+    assert.equal(listQueueLog().length, 50);
+    noteQueued({ id: 'w48', label: 'Пост #50' });
+    const ids = listQueueLog().map(row => row.id);
+    assert.equal(listQueueLog().length, 50);
+    assert.ok(!ids.includes('d1'), 'старейшая завершённая вытеснена первой');
+    assert.ok(ids.includes('d2'), 'более свежая завершённая пока жива');
+    assert.ok(ids.includes('w0'), 'живая waiting-строка не вытеснена');
+    noteQueued({ id: 'w49', label: 'Пост #51' });
+    const ids2 = listQueueLog().map(row => row.id);
+    assert.ok(!ids2.includes('d2'), 'следующая завершённая вытесняется следующей');
+    assert.ok(ids2.includes('w0') && ids2.includes('w49'), 'все живые живы');
+    assert.equal(queueBadgeCount(), 50, 'цифра бейджа не недосчитывает');
+});
+
+// ── Маппинг source события stage2-start на лейн синтезируемой строки ──
+
+test('laneFromSource: auto, external:*, остальное manual', () => {
+    assert.equal(laneFromSource('auto'), 'auto');
+    assert.equal(laneFromSource('external:my-extension'), 'external');
+    assert.equal(laneFromSource('manual'), 'manual');
+    assert.equal(laneFromSource(undefined), 'manual');
 });

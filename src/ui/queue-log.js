@@ -9,11 +9,16 @@
  *
  * Цифра бейджа считает живое: waiting + running. Завершённое остаётся в
  * ленте до очистки, чтобы было видно, что получилось.
+ *
+ * Каждая строка помнит свой лейн (lane): 'queue' — пачечная очередь,
+ * 'manual' — ручная отправка/галерейный реген, 'auto' — авто-конвейер и
+ * инлайн, 'external' — мостовые вызовы. По лейну панель бейджа решает,
+ * показывать ли «Остановить очередь» (hasLiveQueueLane).
  */
 
 const MAX_ROWS = 50;
 
-/** @type {Array<{id:string, label:string, status:'waiting'|'running'|'done', tone:'ok'|'fail'|null, detail:string, ts:number}>} */
+/** @type {Array<{id:string, label:string, lane:string, status:'waiting'|'running'|'done', tone:'ok'|'fail'|null, detail:string, ts:number}>} */
 let _rows = [];
 
 function emit() {
@@ -24,13 +29,24 @@ function emit() {
 
 /**
  * Поставить генерацию в журнал. Повторный вызов с тем же id не плодит строку.
- * @param {{id:string, label:string}} input
+ * @param {{id:string, label:string, lane?:'queue'|'manual'|'auto'|'external'}} input
  */
-export function noteQueued({ id, label }) {
+export function noteQueued({ id, label, lane = 'manual' }) {
     if (!id || _rows.some(row => row.id === id)) return;
-    _rows.push({ id: String(id), label: String(label || 'Генерация'), status: 'waiting', tone: null, detail: '', ts: Date.now() });
-    if (_rows.length > MAX_ROWS) _rows.shift();
+    _rows.push({ id: String(id), label: String(label || 'Генерация'), lane, status: 'waiting', tone: null, detail: '', ts: Date.now() });
+    evictOldest();
     emit();
+}
+
+/**
+ * Вытеснение при переполнении: сначала завершённые строки, живые — только
+ * когда завершённых не осталось. Иначе бейдж недосчитывает живое, а
+ * noteFinished вытесненных живых становится no-op.
+ */
+function evictOldest() {
+    if (_rows.length <= MAX_ROWS) return;
+    const doneIndex = _rows.findIndex(row => row.status === 'done');
+    _rows.splice(doneIndex === -1 ? 0 : doneIndex, 1);
 }
 
 /** Генерация началась: строка переходит из «ждёт» в «выполняется». */
@@ -66,6 +82,24 @@ export function listQueueLog() {
 /** Сколько генераций ещё живы: ждут или выполняются. */
 export function queueBadgeCount() {
     return _rows.filter(row => row.status !== 'done').length;
+}
+
+/** Живёт ли хоть одна задача пачечной очереди (панель бейджа показывает по этому «Остановить очередь»). */
+export function hasLiveQueueLane() {
+    return _rows.some(row => row.lane === 'queue' && row.status !== 'done');
+}
+
+/**
+ * Лейн синтезируемой строки по source события uris:stage2-start.
+ * Строки пачечной очереди заводит сам pipeline-queue (lane 'queue'), поэтому
+ * source 'queue' сюда не попадает — окно его пропускает.
+ * @param {string|undefined} source
+ * @returns {'manual'|'auto'|'external'}
+ */
+export function laneFromSource(source) {
+    if (source === 'auto') return 'auto';
+    if (typeof source === 'string' && source.startsWith('external:')) return 'external';
+    return 'manual';
 }
 
 /** Убрать завершённое. То, что ещё в работе, остаётся — его не стереть кнопкой. */

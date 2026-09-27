@@ -7,7 +7,7 @@
 import { state, getCtx, escapeHtml, error, warn, VALID_ASPECT_RATIOS, VALID_IMAGE_SIZES, abortGeneration } from '../core.js';
 import { notifyStage1Ready } from '../events.js';
 import { POST_FILTER, navigatePosts, getPostInfo, setFilter, setCurrentMsgId, getLastPostIndex } from '../post-navigator.js';
-import { runStage1ForDraft, enqueueGeneration, createQueueItem, stopQueue, buildCandidates } from '../pipeline.js';
+import { runStage1ForDraft, enqueueGeneration, createQueueItem, buildCandidates } from '../pipeline.js';
 import { getGenerationDraft, updateGenerationDraft, hashMessage, normalizeTemplateSelection, resolveDraftTemplateId } from '../generation-drafts.js';
 import { listTemplates } from '../prompt-templates.js';
 import { patchChatConfig, loadChatConfig } from '../chat-binding.js';
@@ -43,7 +43,7 @@ import {
     addStage2Includes,
     getSnapshotReferencePolicy,
 } from './tab-generate-refs.js';
-import { updateQueueStatus, setCancelState, syncCancelState, bindAbortUI, unbindAbortUI } from './generation-lifecycle-ui.js';
+import { setCancelState, syncCancelState, bindAbortUI, unbindAbortUI } from './generation-lifecycle-ui.js';
 
 // ── Prompt-first pure view helpers ──
 
@@ -243,9 +243,6 @@ export function renderGenerateMarkup(vm) {
                     <div class="uris-refs-panel-extras" id="urisRefsWhitelist"></div>
                 </div>
             </div>
-
-
-            <div class="uris-queue-status" id="urisQueueStatus"></div>
         </div>`;
 }
 
@@ -858,8 +855,6 @@ export async function submitCurrentGeneration(root, deps = {}) {
         // enqueue time, not before the submission snapshot was resolved.
         const wasBusy = state.queueRunning || state.queue.length > 0;
         const queued = enqueueFn(item);
-        const generateRoot = getGenerateRoot();
-        if (generateRoot) updateQueueStatus(generateRoot);
         toastr?.info(wasBusy ? 'Добавлено в очередь' : 'Генерация началась');
         queued.then(entry => {
             if (!entry) return;
@@ -887,9 +882,6 @@ export async function submitCurrentGeneration(root, deps = {}) {
                 recordUrisError({ scope: 'Генерация', message: e?.message || String(e), context: e?.urisContext || null });
                 toastr?.error(e?.message || String(e));
             }
-        }).finally(() => {
-            const generateRoot = getGenerateRoot();
-        if (generateRoot) updateQueueStatus(generateRoot);
         });
     } catch (e) {
         error('Generate action:', e?.message || e);
@@ -936,4 +928,4 @@ export {
     refreshReferencePanel,
     getSnapshotReferencePolicy,
 } from './tab-generate-refs.js';
-export { updateQueueStatus, setCancelState, syncCancelState, bindAbortUI, unbindAbortUI } from './generation-lifecycle-ui.js';
+export { setCancelState, syncCancelState, bindAbortUI, unbindAbortUI } from './generation-lifecycle-ui.js';

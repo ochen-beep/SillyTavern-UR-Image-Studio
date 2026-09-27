@@ -1,43 +1,13 @@
 // @ts-check
 /**
- * Generate tab lifecycle chrome: queue status line, the in-flight "Остановить"
- * button, and the singleton window listeners fed by uris:stage{1,2}-start/end.
+ * Generate tab lifecycle chrome: the in-flight "Остановить" button (per-post
+ * cancel) and the singleton window listeners fed by uris:stage{1,2}-start/end.
+ * Queue-wide status and controls live in the floating window's QUEUE badge
+ * panel (window.js + queue-log.js) — the old inline status line is gone.
  * Extracted from tab-generate.js (v0.9.5 split).
  */
 import { state, abortGeneration } from '../core.js';
-import { stopQueue } from '../pipeline-queue.js';
 import { activeScope, getGenerateRoot } from './tab-generate-scope.js';
-
-/**
- * Update the queue status text displayed in the Generate tab.
- * Renders a «Остановить» button while the queue has pending/running work so
- * the already-imported stopQueue() is reachable from the UI (it aborts the
- * shared queue controller and every active generation).
- * @param {HTMLElement} root
- */
-export function updateQueueStatus(root) {
-    const el = root.querySelector('#urisQueueStatus');
-    if (!el) return;
-    const n = state.queue.length;
-    if (n || state.queueRunning) {
-        // «Пропустить» is shown only while a specific queue item is in flight
-        // (runningQueueRequestId, tracked via the uris:stage2-start/end events);
-        // it cancels just that item, so the queue continues with the next one.
-        const skipBtn = state.runningQueueRequestId
-            ? ` <button type="button" class="uris-queue-skip" id="urisSkipItem" title="Отменить текущую задачу и продолжить очередь">Пропустить</button>`
-            : '';
-        el.innerHTML = `<span>В очереди: ${n}</span> <button type="button" class="uris-queue-stop" id="urisStopQueue" title="Остановить все задачи очереди">Остановить</button>${skipBtn}`;
-        el.querySelector('#urisStopQueue')?.addEventListener('click', () => {
-            stopQueue();
-            updateQueueStatus(root);
-        });
-        el.querySelector('#urisSkipItem')?.addEventListener('click', () => {
-            if (state.runningQueueRequestId) abortGeneration(state.runningQueueRequestId);
-        });
-    } else {
-        el.textContent = '';
-    }
-}
 
 /**
  * Toggle the in-flight "Остановить" button without a full re-render. The editor
@@ -101,7 +71,6 @@ function onGenerationStart(ev) {
         if (msgId === scope.msgId && chatId === scope.chatId) {
             setCancelState(getGenerateRoot(), requestId, true);
         }
-        updateQueueStatus(getGenerateRoot());
     }
 }
 
@@ -131,7 +100,6 @@ function onGenerationEnd(ev) {
                 else setCancelState(getGenerateRoot(), null, false);
             }
         }
-        updateQueueStatus(getGenerateRoot());
     }
 }
 
@@ -148,7 +116,6 @@ export function syncCancelState(root) {
     const { chatId, msgId } = activeScope(root);
     const requestId = msgId != null ? latestInflight(_inflightByScope.get(inflightKey(chatId, msgId))) : undefined;
     setCancelState(root, requestId, Boolean(requestId));
-    updateQueueStatus(root);
 }
 
 export function bindAbortUI() {

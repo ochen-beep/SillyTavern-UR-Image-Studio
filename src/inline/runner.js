@@ -156,6 +156,7 @@ export async function processJob({ msgId, idx, type, desc }, operation = null) {
     state.activeGenerations.set(requestId, controller);
     const startedAt = Date.now();
     recordDiagnosticEvent({ event: 'inline-start', requestId, details: { msgId, idx, type } });
+    emitInline('uris:inline-start', { requestId, msgId });
     const descHash = stableHash(`${type}|${desc}`);
     // Живой pending сразу: сохранённый requestId — единственный способ для
     // planScan отличить работающую генерацию от осиротевшей. Без него задача,
@@ -271,6 +272,9 @@ export function queueInlineJob(job) {
     if (job.msgId >= 0) upsertItem(job.msgId, { idx: job.idx, type: job.type,
         descHash: stableHash(`${job.type}|${job.desc}`), status: 'pending',
         requestId: operation.requestId, createdAt: Date.now() });
+    // Журнал очереди (бейдж QUEUE): строка рождается «ждёт» ещё в автолейне и
+    // переходит в «выполняется» только когда processJob реально стартует.
+    emitInline('uris:inline-queued', { requestId: operation.requestId, msgId: job.msgId });
     return enqueueAutoLane(() => processJob(job, operation));
 }
 

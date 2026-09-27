@@ -7,7 +7,8 @@ import { exportDiagnosticDump } from '../diagnostic-dump.js';
 import { listUrisErrors, clearUrisErrors, formatUrisError, recordUrisError } from '../error-pool.js';
 import { listPendingBrowserRequests, discardPendingBrowserRequest, clearPendingBrowserRequests } from '../browser-image-recovery.js';
 import { bindTabBarScroll } from './tab-bar-scroll.js';
-import { listQueueLog, queueBadgeCount, clearQueueLog, noteQueued, noteRunning, noteFinished } from './queue-log.js';
+import { listQueueLog, queueBadgeCount, clearQueueLog, noteQueued, noteRunning, noteFinished, hasLiveQueueLane, laneFromSource } from './queue-log.js';
+import { stopQueue } from '../pipeline-queue.js';
 
 const WIN_ID = 'urisWindow';
 export function isMobileViewport() { return window.innerWidth <= 768; }
@@ -436,8 +437,15 @@ function renderQueuePanel(winEl) {
             return `<div class="uris-error-row uris-queue-row${tone}"><span>${escapeHtml(row.label)} — ${QUEUE_STATUS_TEXT[row.status] || ''}</span>${detail}</div>`;
         }).join('')
         : '<div class="uris-error-row uris-error-empty">Очередь пуста</div>';
-    panel.innerHTML = `<div class="uris-error-panel-actions"><button type="button" class="uris-btn uris-btn-ghost" id="urisQueueClear">Очистить завершённые</button></div>
+    // «Остановить очередь» живёт здесь (единственное место очереди в UI после
+    // слияния со статус-строкой вкладки): гасит пачечную очередь — текущая
+    // задача отменяется, ожидающие отклоняются. Ручные/авто-генерации не трогает.
+    const stopBtn = hasLiveQueueLane()
+        ? '<button type="button" class="uris-btn uris-btn-ghost" id="urisQueueStopLane" title="Отменить текущую задачу и ожидающие задачи пачечной очереди">Остановить очередь</button>'
+        : '';
+    panel.innerHTML = `<div class="uris-error-panel-actions">${stopBtn}<button type="button" class="uris-btn uris-btn-ghost" id="urisQueueClear">Очистить завершённые</button></div>
         <section class="uris-error-section"><h3>Генерации</h3><div class="uris-error-rows">${body}</div></section>`;
+    panel.querySelector('#urisQueueStopLane')?.addEventListener('click', () => stopQueue());
     panel.querySelector('#urisQueueClear')?.addEventListener('click', () => clearQueueLog());
 }
 
@@ -446,8 +454,10 @@ function renderQueuePanel(winEl) {
  * прячется, когда живых нет. Лента помнит и завершённые: успех зелёным,
  * неудача красным, отмена без заливки.
  *
- * Пакетная очередь пишет в журнал сама. Ручные и авто-генерации в неё не
- * попадают, поэтому их строки заводятся здесь по событиям старта и финиша.
+ * Пакетная очередь пишет в журнал сама (строки с лейном 'queue', включая
+ * переход waiting → running через onStart элемента). Остальные пути
+ * синтезируются здесь по событиям старта и финиша: ручные/авто stage2,
+ * инлайн-задачи (uris:inline-*), мостовые вызовы (source external:*).
  */
 function bindQueueBadge(el) {
     const badge = el.querySelector('#urisQueueBadge');
@@ -469,14 +479,37 @@ function bindQueueBadge(el) {
             renderQueuePanel(el);
         }
     };
+    const postLabel = (msgId, fallback = 'Генерация') => {
+        const post = Number(msgId);
+        return Number.isFinite(post) && post >= 0 ? `Пост #${post + 1}` : fallback;
+    };
     const onStart = (ev) => {
         const detail = ev.detail || {};
+        // Очередь уже завела свою строку (lane 'queue') в enqueueGeneration.
         if (!detail.requestId || detail.source === 'queue') return;
-        const post = Number(detail.msgId);
-        noteQueued({ id: detail.requestId, label: Number.isFinite(post) ? `Пост #${post + 1}` : 'Генерация' });
+        noteQueued({ id: detail.requestId, label: postLabel(detail.msgId), lane: laneFromSource(detail.source) });
         noteRunning(detail.requestId);
     };
     const onEnd = (ev) => {
+        const detail = ev.detail || {};
+        if (!detail.requestId) return;
+        const outcome = detail.outcome === 'error' ? 'error' : detail.outcome === 'cancelled' ? 'cancelled' : 'success';
+        noteFinished(detail.requestId, outcome, detail.error || '');
+    };
+    const onInlineQueued = (ev) => {
+        const detail = ev.detail || {};
+        if (!detail.requestId) return;
+        noteQueued({ id: detail.requestId, label: postLabel(detail.msgId, 'Инлайн'), lane: 'auto' });
+    };
+    const onInlineStart = (ev) => {
+        const detail = ev.detail || {};
+        if (!detail.requestId) return;
+        // noteQueued идемпотентен по id: прямой processJob без queued-события
+        // всё равно попадёт в ленту, а задвоения не будет.
+        noteQueued({ id: detail.requestId, label: postLabel(detail.msgId, 'Инлайн'), lane: 'auto' });
+        noteRunning(detail.requestId);
+    };
+    const onInlineEnd = (ev) => {
         const detail = ev.detail || {};
         if (!detail.requestId) return;
         const outcome = detail.outcome === 'error' ? 'error' : detail.outcome === 'cancelled' ? 'cancelled' : 'success';
@@ -493,6 +526,9 @@ function bindQueueBadge(el) {
         window.addEventListener('uris:queue', sync);
         window.addEventListener('uris:stage2-start', onStart);
         window.addEventListener('uris:stage2-end', onEnd);
+        window.addEventListener('uris:inline-queued', onInlineQueued);
+        window.addEventListener('uris:inline-start', onInlineStart);
+        window.addEventListener('uris:inline-end', onInlineEnd);
         document.addEventListener('click', event => {
             if (!panel.hidden && !panel.contains(event.target) && event.target !== badge) {
                 panel.hidden = true;

@@ -568,9 +568,6 @@
 .uris-gen-actions { display: flex; gap: 6px; flex-wrap: wrap; }
 .uris-gen-actions button { flex: 1; }
 .uris-gen-actions .uris-btn-primary { flex: 2; }
-.uris-queue-status { font-size: var(--uris-font-sm); color: var(--uris-text-mut); display: flex; align-items: center; gap: 8px; }
-.uris-queue-stop { background: var(--uris-surface-btn); border: 1px solid var(--uris-border-soft); color: var(--uris-text-mut); border-radius: 4px; padding: 1px 8px; font-size: var(--uris-font-sm); cursor: pointer; }
-.uris-queue-stop:hover { background: var(--uris-surface-btn-hover); border-color: var(--uris-border); color: var(--uris-text-strong); }
 
 /* Server-request recovery notices emitted by tab-generate. State is encoded by
    the available actions: no action = checking, Resume = not submitted, and a

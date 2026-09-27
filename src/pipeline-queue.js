@@ -12,7 +12,7 @@ import { hashMessage } from './generation-drafts.js';
 import { resolveChatConfigSnapshot } from './pipeline-config.js';
 import { runStage2ForDraft } from './pipeline-stage2.js';
 import { STUDIO_CHAT_ID } from './studio-scope.js';
-import { noteQueued, noteFinished } from './ui/queue-log.js';
+import { noteQueued, noteRunning, noteFinished } from './ui/queue-log.js';
 
 // ── Queue: explicit source identity and action ──
 
@@ -90,7 +90,7 @@ export function enqueueGeneration(item) {
     return new Promise((resolve, reject) => {
         const entry = { item, resolve, reject, queueId: uid() };
         state.queue.push(entry);
-        noteQueued({ id: entry.queueId, label: queueLabel(item) });
+        noteQueued({ id: entry.queueId, label: queueLabel(item), lane: 'queue' });
         processQueue();
     });
 }
@@ -115,7 +115,6 @@ async function processQueue() {
     try {
         while (state.queue.length && !state.queueAbort.signal.aborted) {
             const { item, resolve, reject, queueId } = state.queue.shift();
-            state.runningQueueId = queueId;
             try {
                 const ctx = getCtx();
                 // Studio items keep the text captured at enqueue time: there is
@@ -143,8 +142,15 @@ async function processQueue() {
                 let entry;
                 // The queue only carries submission snapshots; the auto
                 // full-pipeline runs in the autolane (pipeline-stage1.js).
+                // onStart fires when the run truly starts (past the per-post
+                // chain): the лента row flips waiting → running then, not at
+                // dequeue — a queued item may still wait behind a manual
+                // generation on the same post.
                 entry = await runStage2ForDraft(input, (s) => { log('Q:', s); }, state.queueAbort.signal,
-                    item.submission ? { submission: item.submission } : {});
+                    {
+                        ...(item.submission ? { submission: item.submission } : {}),
+                        onStart: () => noteRunning(queueId),
+                    });
                 recordDiagnosticEvent({ event: 'queue-complete', stage: 'queue', chatHash: hashDiagnosticId(item.chatId), msgId: item.msgId, outcome: 'completed' });
                 noteFinished(queueId, 'success');
                 resolve(entry);
@@ -160,14 +166,13 @@ async function processQueue() {
                 }
                 error('Q item failed:', e.message);
                 noteFinished(queueId, 'error', e.message || '');
-                recordDiagnosticEvent({ event: e.name === 'AbortError' ? 'queue-abort' : 'queue-error', level: e.name === 'AbortError' ? 'log' : 'error', stage: 'queue', chatHash: hashDiagnosticId(item.chatId), msgId: item.msgId, outcome: e.name === 'AbortError' ? 'cancelled' : 'error', details: { errorName: e?.name || null } });
+                recordDiagnosticEvent({ event: 'queue-error', level: 'error', stage: 'queue', chatHash: hashDiagnosticId(item.chatId), msgId: item.msgId, outcome: 'error', details: { errorName: e?.name || null } });
                 reject(e);
             }
         }
     } finally {
         state.queueRunning = false;
         state.queueAbort = null;
-        state.runningQueueId = null;
         // Reject remaining tasks
         for (const remaining of state.queue) {
             noteFinished(remaining.queueId, 'cancelled');

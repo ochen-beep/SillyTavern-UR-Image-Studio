@@ -86,6 +86,96 @@ afterEach(() => {
     coreState.currentChatId = null;
 });
 
+// Контрактный пин (зелёный и до, и после правок): таймаут транспорта — НЕ
+// отмена. fetchWithTimeout бросает обычный Error('Timeout (Ns)'), внешний
+// сигнал не aborted, поэтому элемент очереди завершается ошибкой (tone fail,
+// сообщение таймаута в ленте и тосте), а не «отменена».
+test('a transport timeout is an error in the queue feed, not a cancel', async () => {
+    const restore = mockFetch((url) => {
+        if (String(url).endsWith('/images/generations')) {
+            throw new Error('Timeout (120s)');
+        }
+        throw new Error(`unexpected ${url}`);
+    });
+    try {
+        const { createQueueItem, enqueueGeneration } = await import('../src/pipeline-queue.js');
+        const { listQueueLog, clearQueueLog } = await import('../src/ui/queue-log.js');
+        clearQueueLog({ all: true });
+        const item = await createQueueItem({
+            chatId: 'test-chat', msgId: 0, messageText: 'A cat.',
+            requestedAction: 'current-prompt-stage2', templateId: null,
+            submission: { prompt: 'PT', aspectRatio: '1:1', imageSize: '1K', quality: 'auto',
+                references: { includedIds: [], excludedIds: [], revision: 0 } },
+        });
+        await assert.rejects(() => enqueueGeneration(item), /Timeout \(120s\)/);
+        const [row] = listQueueLog();
+        assert.equal(row.status, 'done');
+        assert.equal(row.tone, 'fail', 'таймаут красный, а не нейтральная отмена');
+        assert.match(row.detail, /Timeout \(120s\)/, 'сообщение таймаута видно в ленте');
+    } finally {
+        restore();
+    }
+});
+
+// Лента (queue-log): строка очереди живёт полный цикл waiting → running → done.
+// Раньше noteRunning для queueId никто не звал — строка висела «ждёт» до финиша.
+test('лента: элемент очереди проходит waiting → running → done', async () => {
+    let releaseFirst;
+    const gate = new Promise(resolve => { releaseFirst = resolve; });
+    let entered = 0;
+    let resolveFirstEntered;
+    const firstEntered = new Promise(resolve => { resolveFirstEntered = resolve; });
+    const restore = mockFetch((url, options) => {
+        if (String(url).endsWith('/images/generations')) {
+            entered += 1;
+            const isFirst = entered === 1;
+            if (isFirst) resolveFirstEntered();
+            return (async () => {
+                if (isFirst) await gate;
+                return { ok: true, status: 200, json: async () => ({ data: [{ b64_json: 'b3JkZXI=' }] }) };
+            })();
+        }
+        if (String(url) === '/api/images/upload') {
+            return { ok: true, status: 200, json: async () => ({ path: 'user/images/UR%20Image%20Studio/q-log.png' }) };
+        }
+        throw new Error(`unexpected ${url}`);
+    });
+    try {
+        const { createQueueItem, enqueueGeneration } = await import('../src/pipeline-queue.js');
+        const { listQueueLog, clearQueueLog } = await import('../src/ui/queue-log.js');
+        clearQueueLog({ all: true });
+        const mk = () => createQueueItem({
+            chatId: 'test-chat', msgId: 0, messageText: 'A cat.',
+            requestedAction: 'current-prompt-stage2', templateId: null,
+            submission: { prompt: 'PL', aspectRatio: '1:1', imageSize: '1K', quality: 'auto',
+                references: { includedIds: [], excludedIds: [], revision: 0 } },
+        });
+        const p1 = enqueueGeneration(await mk());
+        const p2 = enqueueGeneration(await mk());
+        await firstEntered; // onStart первого уже сработал — fetch ушёл
+        let byId = Object.fromEntries(listQueueLog().map(row => [row.id, row]));
+        const ids = Object.keys(byId);
+        assert.equal(ids.length, 2);
+        assert.ok(ids.every(id => byId[id].lane === 'queue'), 'строки очереди помечены лейном queue');
+        const [first, second] = ids;
+        assert.equal(byId[first].status, 'running');
+        assert.equal(byId[second].status, 'waiting');
+
+        releaseFirst();
+        await p1;
+        byId = Object.fromEntries(listQueueLog().map(row => [row.id, row]));
+        assert.equal(byId[first].status, 'done');
+        assert.equal(byId[first].tone, 'ok');
+        await p2;
+        byId = Object.fromEntries(listQueueLog().map(row => [row.id, row]));
+        assert.equal(byId[second].status, 'done');
+        assert.equal(byId[second].tone, 'ok');
+    } finally {
+        restore();
+        releaseFirst?.();
+    }
+});
+
 test('createQueueItem validates and deep-freezes the submission snapshot', async () => {
     const { createQueueItem } = await import('../src/pipeline-queue.js');
     const submission = {
