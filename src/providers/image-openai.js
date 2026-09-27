@@ -2,6 +2,7 @@
 import { trace } from '../core.js';
 import { summarizeReference } from '../references.js';
 import { endpointBase, imageResultFromValue, providerError, readJsonResponse, referencesFor, requireInvocation, assertEncodedReferenceCount, diagnosticRequestOptions, ASPECT_SIZES } from './image-base.js';
+import { resolveWireGeometry, resolveWireQuality } from '../wire-params.js';
 
 // Map all VALID_ASPECT_RATIOS (core.js) to OpenAI-compatible image sizes. The
 // shared table lives in image-base.js (same vocabulary as Pollinations). The
@@ -9,14 +10,21 @@ import { endpointBase, imageResultFromValue, providerError, readJsonResponse, re
 // used to omit `size` entirely, so the provider picked an aspect freely
 // (often 9:16) and the user's choice was silently ignored.
 //
+// This table is now only the FALLBACK for gateways that publish no per-model
+// manifest. When the route carries the model's own vocabulary
+// (route.capabilities.imageSizes / supportedParameters — NanoGpt, OpenRouter),
+// resolveWireGeometry (wire-params.js) picks the wire parameter from the
+// manifest instead: model-specific WxH resolutions for Seedream, literal
+// aspect strings for seedream-v5.0-pro, `aspect_ratio` for nano-banana. A new
+// gateway that publishes a manifest therefore needs no code change here.
+//
 // Two size taxonomies exist and are NOT interchangeable:
 //   - gpt-image-*: 1024x1024 | 1536x1024 | 1024x1536 (+ auto). 1792x1024 is
 //     rejected by strict gateways.
 //   - dall-e-3:    1024x1024 | 1792x1024 | 1024x1792. 1536x1024 does not
 //     exist → HTTP 400 "invalid size".
 // The family is derived from the model id; unknown families use the
-// gpt-image table (the current gateway mainstream). Unmapped ratios still
-// omit `size` and surface a paramWarning.
+// gpt-image table (the current gateway mainstream).
 const ASPECT_SIZES_DALLE = new Map([
   ['1:1', '1024x1024'],
   // Landscape (dall-e-3's only wide slot)
@@ -56,7 +64,12 @@ function isDalleModel(route) {
  */
 function wireQuality(route, quality) {
   if (typeof quality !== 'string' || !quality) return undefined;
-  if (!isDalleModel(route)) return QUALITY_VALUES.has(quality) ? quality : undefined;
+  if (!isDalleModel(route)) {
+    // 'auto' is deliberately omitted (resolveWireQuality): it IS the provider
+    // default, and gateways exist that reject the explicit value outright
+    // (apihub 400 "quality is not supported", observed 2026-09).
+    return resolveWireQuality(route, quality, QUALITY_VALUES);
+  }
   if (quality === 'auto') return undefined;
   return DALLE_QUALITY_MAP.get(quality);
 }
@@ -68,8 +81,14 @@ function sizesForRoute(route) {
   return isDalleModel(route) ? ASPECT_SIZES_DALLE : ASPECT_SIZES;
 }
 
-function generationBody(route, request) {
-  const size = sizesForRoute(route).get(request?.aspectRatio);
+/** Manifest-first wire geometry for the requested aspect ratio. */
+function wireGeometry(route, request) {
+  return resolveWireGeometry({ route, aspectRatio: request?.aspectRatio, fallbackTable: sizesForRoute(route) });
+}
+
+function generationBody(route, request, geometry = wireGeometry(route, request)) {
+  const size = geometry.param === 'size' ? geometry.value : undefined;
+  const aspectRatio = geometry.param === 'aspect_ratio' ? geometry.value : undefined;
   const quality = wireQuality(route, request?.quality);
   // output_format is intentionally omitted: gpt-image-1 defaults to PNG on
   // OpenAI, and other providers (Imagen proxies, etc.) may reject or ignore
@@ -80,7 +99,14 @@ function generationBody(route, request) {
   // 'response_format'" on strict gateways). GPT Image always
   // returns base64 anyway, and `parse` below accepts both b64_json and url, so
   // omitting it is strictly safer across providers.
-  return { model: route.modelId, prompt: String(request?.prompt || ''), n: 1, ...(size ? { size } : {}), ...(quality ? { quality } : {}) };
+  return {
+    model: route.modelId,
+    prompt: String(request?.prompt || ''),
+    n: 1,
+    ...(size ? { size } : {}),
+    ...(aspectRatio ? { aspect_ratio: aspectRatio } : {}),
+    ...(quality ? { quality } : {}),
+  };
 }
 
 // input_fidelity is documented ONLY for gpt-image-1. Sending it to any other
@@ -132,8 +158,12 @@ function formData(route, request, references) {
   form.append('prompt', String(request?.prompt || ''));
   form.append('n', '1');
   // No response_format: GPT Image rejects it (see generationBody).
-  const size = sizesForRoute(route).get(request?.aspectRatio);
-  if (size) form.append('size', size);
+  // Edits stay on the `size` parameter only: `aspect_ratio` is verified for
+  // the generations path (NanoGpt 2026-09), unverified for /images/edits, and
+  // strict gateways reject unknown members on edits — so the geometry reaches
+  // the wire as a size whenever the model speaks one.
+  const geometry = wireGeometry(route, request);
+  if (geometry.param === 'size') form.append('size', geometry.value);
   const quality = wireQuality(route, request?.quality);
   if (quality) form.append('quality', quality);
   if (GPT_IMAGE_MODEL.test(String(route.modelId || ''))) form.append('input_fidelity', 'high');
@@ -147,7 +177,7 @@ function formData(route, request, references) {
 // proxy, so it is the dialect to pick for providers that send no CORS headers.
 // Selected per connection via `editProtocol: 'json'`.
 function editJsonBody(route, request, references) {
-  const size = sizesForRoute(route).get(request?.aspectRatio);
+  const geometry = wireGeometry(route, request);
   const quality = wireQuality(route, request?.quality);
   const body = {
     model: route.modelId,
@@ -155,7 +185,7 @@ function editJsonBody(route, request, references) {
     n: 1,
     images: references.map(ref => ({ image_url: ref.dataUrl })),
   };
-  if (size) body.size = size;
+  if (geometry.param === 'size') body.size = geometry.value;
   if (quality) body.quality = quality;
   if (GPT_IMAGE_MODEL.test(String(route.modelId || ''))) body.input_fidelity = 'high';
   return body;
@@ -225,16 +255,17 @@ function shouldFallbackToProxyJson(error, connection) {
 }
 
 /**
- * Warnings for parameters this API cannot carry: an unmapped aspect ratio or a
- * quality it does not know are dropped from the body today — surface that as a
- * warning instead of letting the user's selection silently vanish. 'auto' is
- * not a dropped value: it resolves to "omit the parameter", which the provider
- * then fills with its own default, so it never warns.
+ * Warnings for parameters this API cannot carry: an aspect ratio the manifest
+ * and the static table both refuse, or a quality value the model does not
+ * know, is dropped from the body today — surface that as a warning instead of
+ * letting the user's selection silently vanish. 'auto' is not a dropped
+ * value: it resolves to "omit the parameter", which the provider then fills
+ * with its own default, so it never warns.
  */
 function paramWarnings(route, request) {
   const warnings = [];
-  if (request?.aspectRatio && !sizesForRoute(route).get(request.aspectRatio)) {
-    warnings.push({ feature: 'Стороны', details: `соотношение ${request.aspectRatio} не поддерживается OpenAI Images API — параметр size опущен` });
+  if (request?.aspectRatio && wireGeometry(route, request).param === null) {
+    warnings.push({ feature: 'Стороны', details: `соотношение ${request.aspectRatio} не поддерживается ни манифестом модели, ни таблицей шлюза — геометрия не передана, размер выберет провайдер` });
   }
   if (request?.quality && request.quality !== 'auto' && wireQuality(route, request.quality) === undefined) {
     warnings.push({ feature: 'Quality', details: `значение «${request.quality}» не поддерживается этой моделью — параметр опущен` });
@@ -296,7 +327,9 @@ export async function generateOpenAIImage(input) {
       }
     }
   } else {
-    response = await transport.requestJson(generationUrl(endpoint), diagnosticRequestOptions({ method: 'POST', headers: { ...headers, 'Content-Type': 'application/json' }, body: JSON.stringify(generationBody(route, request)), signal }, diagnostic, { bodyKind: 'json', wireFields: ['model', 'prompt', 'n', ...(request?.aspectRatio ? ['size'] : []), ...(request?.quality ? ['quality'] : [])] }), route, connection.timeoutMs);
+    const geometry = wireGeometry(route, request);
+    const payload = generationBody(route, request, geometry);
+    response = await transport.requestJson(generationUrl(endpoint), diagnosticRequestOptions({ method: 'POST', headers: { ...headers, 'Content-Type': 'application/json' }, body: JSON.stringify(payload), signal }, diagnostic, { bodyKind: 'json', parameterSource: geometry.source, wireFields: ['model', 'prompt', 'n', ...(payload.size ? ['size'] : []), ...(payload.aspect_ratio ? ['aspect_ratio'] : []), ...(payload.quality ? ['quality'] : [])] }), route, connection.timeoutMs);
   }
   return { ...parse(await readJsonResponse(response, 'OpenAI Images')), warnings: paramWarnings(route, request) };
 }
