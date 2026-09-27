@@ -18,7 +18,7 @@
  * This is independent of URIS image connections. Image connections live
  * separately in src/connections.js and do not touch this module.
  */
-import { getCtx, extractTextFromResponse, log, warn } from './core.js';
+import { getCtx, extractTextFromResponse, log, warn, withDeadline } from './core.js';
 import { recordFromProfile, recordFromProfileError } from './netdump.js';
 import { getDiagnosticSessionId, hashDiagnosticId } from './diagnostic-events.js';
 
@@ -96,7 +96,12 @@ export async function getProfileDetails(profileId) {
 
 // ── Profile source: generate ──
 
-export async function generateWithProfile(profileIdOrName, systemPrompt, userPrompt, signal = null, requestId = null) {
+// Профильный путь идёт через ST-сервер (ConnectionManagerRequestService) мимо
+// fetchWithTimeout — единственный платный вызов без собственного дедлайна.
+// 5 минут — дефолт провайдеров custom-пути (providers/*.js: p.timeoutMs ?? 300000).
+const STAGE1_PROFILE_TIMEOUT_MS = 300000;
+
+export async function generateWithProfile(profileIdOrName, systemPrompt, userPrompt, signal = null, requestId = null, opts = {}) {
     const ctx = getCtx();
 
     if (!profileIdOrName) {
@@ -131,9 +136,16 @@ export async function generateWithProfile(profileIdOrName, systemPrompt, userPro
     let response;
     try {
         const _t0 = performance.now();
-        response = await ctx.ConnectionManagerRequestService.sendRequest(
-            profile.id, messages, undefined,
-            { stream: false, signal: signal || null, extractData: true, includePreset: false, includeInstruct: false }
+        // Дедлайн обязателен: ST-сервер не ограничивает время sendRequest, без
+        // обёртки зависший профильный запрос висел бы вечно. Внешняя отмена
+        // (signal) проходит насквозь и сильнее дедлайна.
+        response = await withDeadline(
+            opts.timeoutMs ?? STAGE1_PROFILE_TIMEOUT_MS,
+            signal || null,
+            (deadlineSignal) => ctx.ConnectionManagerRequestService.sendRequest(
+                profile.id, messages, undefined,
+                { stream: false, signal: deadlineSignal, extractData: true, includePreset: false, includeInstruct: false },
+            ),
         );
         // Network dumper: the profile path Stage1 goes through the ST server, bypassing
         // fetchWithTimeout — so we record it here. Non-blocking.

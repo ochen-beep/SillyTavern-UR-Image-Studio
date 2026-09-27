@@ -233,7 +233,6 @@ export const defaultSettings = Object.freeze({
     historyRich: true,         // store objects instead of strings in history
     maxRetries: 0,
     retryDelay: 1000,
-    generationTimeout: 300000,   // 5 min: GPT-image regularly takes 80–280s
     historyLimit: 20,
     galleryLimit: 0,           // 0 = no limit
     windowGeometry: null,      // {left,top,width,height}
@@ -817,6 +816,49 @@ export async function fetchWithTimeout(url, options = {}, timeoutMs = 120000) {
         throw e;
     }
 }
+/**
+ * Hard deadline for requests that bypass fetchWithTimeout (the Stage 1 profile
+ * path runs through the ST server, which has no deadline of its own). The run
+ * receives its own AbortSignal that fires at expiry, and the deadline surfaces
+ * the SAME error shape fetchWithTimeout produces — a plain Error('Timeout (Ns)')
+ * — so callers classify timeout vs user-abort uniformly (an AbortError means
+ * the external signal fired; a Timeout error means the deadline did).
+ * @template T
+ * @param {number} timeoutMs
+ * @param {AbortSignal|null} signal external cancellation, wins over the deadline
+ * @param {(signal: AbortSignal) => Promise<T>} run
+ * @returns {Promise<T>}
+ */
+export function withDeadline(timeoutMs, signal, run) {
+    const controller = new AbortController();
+    if (signal) {
+        if (signal.aborted) controller.abort();
+        else signal.addEventListener('abort', () => controller.abort(), { once: true });
+    }
+    let timedOut = false;
+    const timeoutError = () => {
+        const limit = timeoutMs >= 1000 ? `${Math.round(timeoutMs / 1000)}s` : `${timeoutMs}ms`;
+        return new Error(`Timeout (${limit})`);
+    };
+    let rejectDeadline;
+    const deadlinePromise = new Promise((_, reject) => { rejectDeadline = reject; });
+    // Не ронять процесс необработанным rejection, когда run успел раньше.
+    deadlinePromise.catch(() => {});
+    const timer = setTimeout(() => {
+        timedOut = true;
+        controller.abort();
+        rejectDeadline(timeoutError());
+    }, Math.max(0, Number(timeoutMs) || 0));
+    const work = Promise.resolve().then(() => run(controller.signal)).catch((e) => {
+        if (signal?.aborted) throw new DOMException('Aborted', 'AbortError');
+        if (timedOut && e?.name === 'AbortError') throw timeoutError();
+        throw e;
+    });
+    // Дедлайн может обогнать отказ самого run-а — держим его rejection обработанным.
+    work.catch(() => {});
+    return Promise.race([work, deadlinePromise]).finally(() => clearTimeout(timer));
+}
+
 // Lenient JSON parsing for text-LLM responses (model may wrap JSON in ```json blocks or text)
 export function parseInstructionJson(raw) {
     const dec = decodeEntities(raw || '');
