@@ -10,6 +10,7 @@
 import { state, getCtx, log, warn, error } from './core.js';
 import { recordDiagnosticEvent, hashDiagnosticId } from './diagnostic-events.js';
 import { loadChatConfig, applyChatConfigToState } from './chat-binding.js';
+import { cancelForeignQueueItems } from './pipeline-queue.js';
 import { POST_FILTER, setFilter, getLastPostIndex, setCurrentMsgId, isGenerationEligible } from './post-navigator.js';
 
 let _bound = false;
@@ -143,6 +144,10 @@ export function bindEvents(handlers) {
         // Fresh snapshot — the ctx captured by bindEvents() has a permanently
         // stale (empty) chatId (see triggerIfMatches above).
         state.currentChatId = getCtx().chatId;
+        // Ожидающие задачи очереди чужого чата всё равно отклонил бы stale-гвард
+        // по одной с ошибкой на каждую — гасим их сразу одним уведомлением.
+        const cancelledForeign = cancelForeignQueueItems(state.currentChatId);
+        if (cancelledForeign > 0) toastr?.info(`Очередь: отменены задачи другого чата (${cancelledForeign})`);
         const i = getLastPostIndex();
         if (i != null) setCurrentMsgId(i);
         log('CHAT_CHANGED, last post', state.currentMsgId);

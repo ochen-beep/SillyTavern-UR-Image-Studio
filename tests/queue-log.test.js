@@ -107,3 +107,17 @@ test('laneFromSource: auto, external:*, остальное manual', () => {
     assert.equal(laneFromSource('manual'), 'manual');
     assert.equal(laneFromSource(undefined), 'manual');
 });
+
+// Retry-снапшот: упавшая строка пачечной очереди носит всё нужное для
+// повторной отправки (кнопка «Повторить» в панели бейджа).
+test('retry-снапшот проходит в строку ленты, у остальных его нет', () => {
+    const retry = { chatId: 'c1', msgId: 1, messageText: 'A cat.', templateId: null,
+        submission: { prompt: 'P', aspectRatio: null, imageSize: null, quality: null,
+            references: { includedIds: [], excludedIds: [], revision: 0 } } };
+    noteQueued({ id: 'q1', label: 'Пост #2', lane: 'queue', retry });
+    const [row] = listQueueLog();
+    assert.deepEqual(row.retry, retry);
+    noteQueued({ id: 'm1', label: 'Пост #3' });
+    const mrow = listQueueLog().find(r => r.id === 'm1');
+    assert.equal(mrow.retry, null, 'ручные строки не предлагают повтор');
+});

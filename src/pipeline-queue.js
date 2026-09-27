@@ -90,7 +90,22 @@ export function enqueueGeneration(item) {
     return new Promise((resolve, reject) => {
         const entry = { item, resolve, reject, queueId: uid() };
         state.queue.push(entry);
-        noteQueued({ id: entry.queueId, label: queueLabel(item), lane: 'queue' });
+        // retry-снапшот для кнопки «Повторить» в ленте: поля пересборки item.
+        // messageText для обычного поста сюда не попадает (item его не хранит) —
+        // resubmitQueueRow читает живой чат, чтобы хэш-гвард осталась честной;
+        // студийный текст сцены хранится в самом item.
+        noteQueued({
+            id: entry.queueId,
+            label: queueLabel(item),
+            lane: 'queue',
+            retry: Object.freeze({
+                chatId: item.chatId,
+                msgId: item.msgId,
+                messageText: item.messageText ?? '',
+                templateId: item.templateId,
+                submission: item.submission,
+            }),
+        });
         processQueue();
     });
 }
@@ -191,4 +206,71 @@ async function processQueue() {
  */
 export function stopQueue() {
     state.queueAbort?.abort();
+}
+
+/**
+ * Снять одну ожидающую задачу очереди (крестик в ленте панели QUEUE).
+ * Выполняющийся или неизвестный id — no-op: выполняющийся уже вне state.queue,
+ * его отмена — «Пропустить»-семантика через abortGeneration(requestId).
+ * @param {string} queueId
+ * @returns {boolean} true, если ожидающий элемент был найден и снят
+ */
+export function cancelQueuedItem(queueId) {
+    const index = state.queue.findIndex(entry => entry.queueId === queueId);
+    if (index === -1) return false;
+    const [entry] = state.queue.splice(index, 1);
+    noteFinished(entry.queueId, 'cancelled');
+    entry.reject(new DOMException('Queue stopped', 'AbortError'));
+    return true;
+}
+
+/**
+ * Гасить ожидающие элементы чужого чата одним действием — вызов из
+ * CHAT_CHANGED: одно уведомление вместо N ошибок stale-гварда по мере прогона.
+ * Выполняющийся элемент не трогается (его проверка уже пройдена, платный
+ * запрос в полёте), студийные элементы не привязаны к чату и переживают
+ * переключение. Отклонение — 'Queue stopped' AbortError: сабмиттер молчит,
+ * общий тост делает вызывающий код.
+ * @param {string} currentChatId чат, в который переключился пользователь
+ * @returns {number} сколько ожидающих элементов отменено
+ */
+export function cancelForeignQueueItems(currentChatId) {
+    const foreign = state.queue.filter(({ item }) =>
+        item.chatId !== STUDIO_CHAT_ID && item.chatId !== currentChatId);
+    if (!foreign.length) return 0;
+    const ids = new Set(foreign.map(entry => entry.queueId));
+    state.queue = state.queue.filter(entry => !ids.has(entry.queueId));
+    for (const { queueId, reject } of foreign) {
+        noteFinished(queueId, 'cancelled');
+        reject(new DOMException('Queue stopped', 'AbortError'));
+    }
+    recordDiagnosticEvent({
+        event: 'queue-cancel-foreign-chat', level: 'warn', stage: 'queue',
+        chatHash: hashDiagnosticId(currentChatId),
+        details: { count: foreign.length },
+    });
+    return foreign.length;
+}
+
+/**
+ * Повторить упавшую задачу из ленты: пересобрать item из сохранённого снапшота
+ * строки и поставить в очередь. Конфиг чата резолвится заново на момент
+ * повтора (актуальное подключение), текст сообщения для обычного поста читается
+ * живым — гварды stale-chat/message-changed работают как у первой отправки.
+ * @param {{chatId:string,msgId:number,messageText:string,templateId:string|null,submission:object}} retry
+ * @returns {Promise<object|null>}
+ */
+export async function resubmitQueueRow(retry) {
+    const messageText = retry.chatId === STUDIO_CHAT_ID
+        ? String(retry.messageText || '')
+        : (getCtx().chat?.[retry.msgId]?.mes || '');
+    const item = await createQueueItem({
+        chatId: retry.chatId,
+        msgId: retry.msgId,
+        messageText,
+        requestedAction: 'current-prompt-stage2',
+        templateId: retry.templateId,
+        submission: retry.submission,
+    });
+    return enqueueGeneration(item);
 }

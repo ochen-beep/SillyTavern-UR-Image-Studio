@@ -1878,6 +1878,10 @@
 .uris-queue-row small { flex: 1 1 100%; }
 .uris-queue-ok { background: color-mix(in srgb, var(--uris-accent) 28%, transparent); }
 .uris-queue-fail { background: color-mix(in srgb, var(--uris-err, #b34141) 32%, transparent); }
+.uris-queue-row-cancel { margin-left: auto; flex: 0 0 auto; background: none; border: none; color: var(--uris-text-mut); font-size: calc(15px * var(--uris-font-scale, 1)); line-height: 1; cursor: pointer; padding: 0 2px; }
+.uris-queue-row-cancel:hover { color: var(--uris-err, #b34141); }
+.uris-queue-row-retry { margin-left: auto; flex: 0 0 auto; background: var(--uris-surface-btn); border: 1px solid var(--uris-border-soft); color: var(--uris-text-mut); border-radius: 4px; padding: 1px 8px; font-size: var(--uris-font-sm); cursor: pointer; }
+.uris-queue-row-retry:hover { background: var(--uris-surface-btn-hover); border-color: var(--uris-border); color: var(--uris-text-strong); }
 .uris-pending-discard { margin-left: auto; flex: 0 0 auto; font-size: calc(13px * var(--uris-font-scale, 1)); }
 .uris-error-panel-actions { display: flex; justify-content: flex-end; margin-bottom: 8px; }
 

@@ -18,7 +18,7 @@
 
 const MAX_ROWS = 50;
 
-/** @type {Array<{id:string, label:string, lane:string, status:'waiting'|'running'|'done', tone:'ok'|'fail'|null, detail:string, ts:number}>} */
+/** @type {Array<{id:string, label:string, lane:string, status:'waiting'|'running'|'done', tone:'ok'|'fail'|null, detail:string, ts:number, retry:object|null}>} */
 let _rows = [];
 
 function emit() {
@@ -29,11 +29,12 @@ function emit() {
 
 /**
  * Поставить генерацию в журнал. Повторный вызов с тем же id не плодит строку.
- * @param {{id:string, label:string, lane?:'queue'|'manual'|'auto'|'external'}} input
+ * `retry` — снапшот для кнопки «Повторить» у упавшей строки (только очередь).
+ * @param {{id:string, label:string, lane?:'queue'|'manual'|'auto'|'external', retry?:object|null}} input
  */
-export function noteQueued({ id, label, lane = 'manual' }) {
+export function noteQueued({ id, label, lane = 'manual', retry = null }) {
     if (!id || _rows.some(row => row.id === id)) return;
-    _rows.push({ id: String(id), label: String(label || 'Генерация'), lane, status: 'waiting', tone: null, detail: '', ts: Date.now() });
+    _rows.push({ id: String(id), label: String(label || 'Генерация'), lane, status: 'waiting', tone: null, detail: '', ts: Date.now(), retry: retry || null });
     evictOldest();
     emit();
 }

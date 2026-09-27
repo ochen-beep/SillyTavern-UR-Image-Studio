@@ -619,6 +619,7 @@ export function bindGenerate(root) {
     });
     promptEl?.addEventListener('input', () => {
         const scope = activeScope(root);
+        syncGenerateEnabled(root);
         autosave.schedule({
             chatId: scope.chatId,
             msgId: scope.msgId,
@@ -780,6 +781,19 @@ export function bindGenerate(root) {
         await applyReferenceCorrection(root, candidateId, include);
     });
 
+}
+
+/**
+ * Live state of the «Сгенерировать» button: an empty prompt keeps it disabled,
+ * a non-empty one enables it — without waiting for a tab re-render (render
+ * sets disabled from the draft at render time only).
+ * @param {HTMLElement|null} root
+ */
+export function syncGenerateEnabled(root) {
+    const btn = root?.querySelector?.('#urisGenerateImage');
+    const promptEl = root?.querySelector?.('#urisPrompt');
+    if (!btn || !promptEl) return;
+    btn.disabled = !String(promptEl.value || '').trim();
 }
 
 /**

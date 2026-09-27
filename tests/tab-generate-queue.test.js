@@ -60,3 +60,27 @@ test('the Generate tab no longer renders a queue status line', async () => {
         core.state.currentMsgId = null;
     }
 });
+
+// Кнопка «Сгенерировать» оживает по вводу без ре-рендера вкладки: render
+// ставит disabled по черновику на момент рендера, набранный текст должен
+// включать кнопку сразу.
+test('syncGenerateEnabled: пустой промпт — disabled, непустой — enabled', async () => {
+    const { syncGenerateEnabled } = await import('../src/ui/tab-generate.js');
+    const root = document.createElement('div');
+    root.innerHTML = '<textarea id="urisPrompt"></textarea><button id="urisGenerateImage" disabled type="button"></button>';
+    syncGenerateEnabled(root);
+    assert.equal(root.querySelector('#urisGenerateImage').disabled, true, 'пусто — disabled');
+    root.querySelector('#urisPrompt').value = '  cat  ';
+    syncGenerateEnabled(root);
+    assert.equal(root.querySelector('#urisGenerateImage').disabled, false, 'текст — enabled');
+    root.querySelector('#urisPrompt').value = '   ';
+    syncGenerateEnabled(root);
+    assert.equal(root.querySelector('#urisGenerateImage').disabled, true, 'пробелы — disabled');
+});
+
+test('syncGenerateEnabled безопасен без кнопки или промпта', async () => {
+    const { syncGenerateEnabled } = await import('../src/ui/tab-generate.js');
+    const root = document.createElement('div');
+    assert.doesNotThrow(() => syncGenerateEnabled(root));
+    assert.doesNotThrow(() => syncGenerateEnabled(null));
+});

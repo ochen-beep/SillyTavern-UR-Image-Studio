@@ -8,7 +8,7 @@ import { listUrisErrors, clearUrisErrors, formatUrisError, recordUrisError } fro
 import { listPendingBrowserRequests, discardPendingBrowserRequest, clearPendingBrowserRequests } from '../browser-image-recovery.js';
 import { bindTabBarScroll } from './tab-bar-scroll.js';
 import { listQueueLog, queueBadgeCount, clearQueueLog, noteQueued, noteRunning, noteFinished, hasLiveQueueLane, laneFromSource } from './queue-log.js';
-import { stopQueue } from '../pipeline-queue.js';
+import { stopQueue, cancelQueuedItem, resubmitQueueRow } from '../pipeline-queue.js';
 
 const WIN_ID = 'urisWindow';
 export function isMobileViewport() { return window.innerWidth <= 768; }
@@ -434,7 +434,15 @@ function renderQueuePanel(winEl) {
         ? rows.slice().reverse().map(row => {
             const tone = row.tone === 'ok' ? ' uris-queue-ok' : row.tone === 'fail' ? ' uris-queue-fail' : '';
             const detail = row.detail ? `<small>${escapeHtml(row.detail)}</small>` : '';
-            return `<div class="uris-error-row uris-queue-row${tone}"><span>${escapeHtml(row.label)} — ${QUEUE_STATUS_TEXT[row.status] || ''}</span>${detail}</div>`;
+            // Действия строки: крестик у ожидающих задач очереди, «Повторить»
+            // у её упавших (снапшот отправки хранится в строке).
+            let action = '';
+            if (row.lane === 'queue' && row.status === 'waiting') {
+                action = `<button type="button" class="uris-queue-row-cancel" data-queue-cancel="${escapeHtml(row.id)}" title="Отменить эту задачу" aria-label="Отменить задачу ${escapeHtml(row.label)}">×</button>`;
+            } else if (row.lane === 'queue' && row.status === 'done' && row.tone === 'fail' && row.retry) {
+                action = '<button type="button" class="uris-queue-row-retry" data-queue-retry="' + escapeHtml(row.id) + '" title="Отправить задачу ещё раз с тем же снапшотом">Повторить</button>';
+            }
+            return `<div class="uris-error-row uris-queue-row${tone}"><span>${escapeHtml(row.label)} — ${QUEUE_STATUS_TEXT[row.status] || ''}</span>${detail}${action}</div>`;
         }).join('')
         : '<div class="uris-error-row uris-error-empty">Очередь пуста</div>';
     // «Остановить очередь» живёт здесь (единственное место очереди в UI после
@@ -447,11 +455,19 @@ function renderQueuePanel(winEl) {
         <section class="uris-error-section"><h3>Генерации</h3><div class="uris-error-rows">${body}</div></section>`;
     panel.querySelector('#urisQueueStopLane')?.addEventListener('click', () => stopQueue());
     panel.querySelector('#urisQueueClear')?.addEventListener('click', () => clearQueueLog());
+    panel.querySelectorAll('[data-queue-cancel]').forEach(btn => btn.addEventListener('click', () => {
+        cancelQueuedItem(btn.getAttribute('data-queue-cancel'));
+    }));
+    panel.querySelectorAll('[data-queue-retry]').forEach(btn => btn.addEventListener('click', () => {
+        const row = listQueueLog().find(r => r.id === btn.getAttribute('data-queue-retry'));
+        if (row?.retry) resubmitQueueRow(row.retry);
+    }));
 }
 
 /**
- * Бейдж QUEUE рядом с INFO. Цифра — живые генерации (ждут или выполняются),
- * прячется, когда живых нет. Лента помнит и завершённые: успех зелёным,
+ * Бейдж QUEUE рядом с INFO. Цифра — живые генерации (ждут или выполняются);
+ * сам бейдж виден, пока в ленте есть строки (завершённые с «Повторить» должны
+ * оставаться достижимыми). Лента помнит и завершённые: успех зелёным,
  * неудача красным, отмена без заливки.
  *
  * Пакетная очередь пишет в журнал сама (строки с лейном 'queue', включая
@@ -465,7 +481,10 @@ function bindQueueBadge(el) {
     if (!badge || !panel) return;
     const sync = () => {
         const count = queueBadgeCount();
-        badge.hidden = count === 0;
+        // Бейдж виден, пока в ленте есть хоть что-то: при живых=0 упавшие
+        // строки с «Повторить» остались бы недостижимы ровно тогда, когда
+        // нужны. Цифра при этом считает только живое (ждут + выполняются).
+        badge.hidden = listQueueLog().length === 0;
         badge.setAttribute('aria-expanded', String(!panel.hidden));
         el.querySelector('#urisQueueCount').textContent = String(count);
         if (!panel.hidden) {

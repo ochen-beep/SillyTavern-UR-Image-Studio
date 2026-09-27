@@ -330,3 +330,194 @@ test('a submission item still rejects when the chat switched before its turn', a
         releaseFirst?.();
     }
 });
+
+// ── Отмена/повтор отдельных задач (панель бейджа QUEUE) ──
+
+// Смена чата: ожидающие элементы чужого чата гасятся одним действием (одно
+// уведомление вместо N ошибок), выполняющийся элемент не трогаем — его
+// проверка уже пройдена и платный запрос в полёте. Студийные элементы не
+// привязаны к чату и переживают переключение.
+test('cancelForeignQueueItems гасит только чужие ожидающие элементы', async () => {
+    let releaseFirst;
+    const gate = new Promise(resolve => { releaseFirst = resolve; });
+    let entered = 0;
+    let resolveFirstEntered;
+    const firstEntered = new Promise(resolve => { resolveFirstEntered = resolve; });
+    const restore = mockFetch((url) => {
+        if (String(url).endsWith('/images/generations')) {
+            entered += 1;
+            const isFirst = entered === 1;
+            if (isFirst) resolveFirstEntered();
+            return (async () => {
+                if (isFirst) await gate;
+                return { ok: true, status: 200, json: async () => ({ data: [{ b64_json: 'b3JkZXI=' }] }) };
+            })();
+        }
+        if (String(url) === '/api/images/upload') {
+            return { ok: true, status: 200, json: async () => ({ path: 'user/images/UR%20Image%20Studio/q-foreign.png' }) };
+        }
+        throw new Error(`unexpected ${url}`);
+    });
+    try {
+        const { createQueueItem, enqueueGeneration, cancelForeignQueueItems } = await import('../src/pipeline-queue.js');
+        const { listQueueLog, clearQueueLog } = await import('../src/ui/queue-log.js');
+        const { STUDIO_CHAT_ID } = await import('../src/studio-scope.js');
+        clearQueueLog({ all: true });
+        const mk = (chatId, messageText, prompt) => createQueueItem({
+            chatId, msgId: 0, messageText,
+            requestedAction: 'current-prompt-stage2', templateId: null,
+            submission: { prompt, aspectRatio: '1:1', imageSize: '1K', quality: 'auto',
+                references: { includedIds: [], excludedIds: [], revision: 0 } },
+        });
+        const p1 = enqueueGeneration(await mk('test-chat', 'A cat.', 'P1')); // стартует, висит на gate
+        const p2 = enqueueGeneration(await mk('test-chat', 'A cat.', 'P2')); // ждёт
+        const p3 = enqueueGeneration(await mk(STUDIO_CHAT_ID, 'studio scene', 'PS')); // ждёт
+        await firstEntered;
+        const [p1Id, p2Id, p3Id] = listQueueLog().map(r => r.id);
+
+        const cancelled = cancelForeignQueueItems('other-chat');
+        assert.equal(cancelled, 1, 'только один ожидающий элемент чужого чата');
+        await assert.rejects(p2, (e) => e?.name === 'AbortError' && e?.message === 'Queue stopped');
+        const after = Object.fromEntries(listQueueLog().map(r => [r.id, r]));
+        assert.equal(after[p2Id].status, 'done');
+        assert.equal(after[p2Id].tone, null, 'отмена без тона');
+        assert.equal(after[p1Id].status, 'running', 'выполняющийся элемент не тронут');
+        assert.equal(after[p3Id].status, 'waiting', 'студийный элемент переживает смену чата');
+        assert.equal(cancelForeignQueueItems('test-chat'), 0, 'свой чат — no-op');
+
+        releaseFirst();
+        await p1;
+        await p3; // студийный доходит до выполнения после освобождения очереди
+        assert.equal(listQueueLog().find(r => r.id === p3Id).tone, 'ok');
+    } finally {
+        restore();
+        releaseFirst?.();
+    }
+});
+
+// Крестик в ленте: снять одну ожидающую задачу, не трогая выполняющуюся.
+test('cancelQueuedItem снимает одну ожидающую задачу', async () => {
+    let releaseFirst;
+    const gate = new Promise(resolve => { releaseFirst = resolve; });
+    let entered = 0;
+    let resolveFirstEntered;
+    const firstEntered = new Promise(resolve => { resolveFirstEntered = resolve; });
+    const restore = mockFetch((url) => {
+        if (String(url).endsWith('/images/generations')) {
+            entered += 1;
+            const isFirst = entered === 1;
+            if (isFirst) resolveFirstEntered();
+            return (async () => {
+                if (isFirst) await gate;
+                return { ok: true, status: 200, json: async () => ({ data: [{ b64_json: 'b3JkZXI=' }] }) };
+            })();
+        }
+        if (String(url) === '/api/images/upload') {
+            return { ok: true, status: 200, json: async () => ({ path: 'user/images/UR%20Image%20Studio/q-cancel-one.png' }) };
+        }
+        throw new Error(`unexpected ${url}`);
+    });
+    try {
+        const { createQueueItem, enqueueGeneration, cancelQueuedItem } = await import('../src/pipeline-queue.js');
+        const { listQueueLog, clearQueueLog } = await import('../src/ui/queue-log.js');
+        clearQueueLog({ all: true });
+        const mk = (prompt) => createQueueItem({
+            chatId: 'test-chat', msgId: 0, messageText: 'A cat.',
+            requestedAction: 'current-prompt-stage2', templateId: null,
+            submission: { prompt, aspectRatio: '1:1', imageSize: '1K', quality: 'auto',
+                references: { includedIds: [], excludedIds: [], revision: 0 } },
+        });
+        const p1 = enqueueGeneration(await mk('P1'));
+        const p2 = enqueueGeneration(await mk('P2'));
+        await firstEntered;
+        const waiting = listQueueLog().find(r => r.status === 'waiting');
+        assert.equal(cancelQueuedItem(waiting.id), true);
+        await assert.rejects(p2, (e) => e?.name === 'AbortError' && e?.message === 'Queue stopped');
+        const row = listQueueLog().find(r => r.id === waiting.id);
+        assert.equal(row.status, 'done');
+        assert.equal(row.tone, null);
+        assert.equal(cancelQueuedItem(waiting.id), false, 'повторная отмена — no-op');
+        assert.equal(cancelQueuedItem('q999'), false, 'неизвестный id — no-op');
+        releaseFirst();
+        await p1;
+    } finally {
+        restore();
+        releaseFirst?.();
+    }
+});
+
+// «Повторить» в ленте: пересборка item из снапшота строки. Для обычного поста
+// текст сообщения читается СВЕЖИМ на момент повтора (хэш-гвард остаётся
+// честной), для студии — сохранённый текст сцены.
+test('resubmitQueueRow пересобирает item и выполняет повтор', async () => {
+    let failNext = true;
+    const bodies = [];
+    const restore = mockFetch((url) => {
+        if (String(url).endsWith('/images/generations')) {
+            if (failNext) throw new Error('gateway boom');
+            bodies.push('ok');
+            return { ok: true, status: 200, json: async () => ({ data: [{ b64_json: 'b3JkZXI=' }] }) };
+        }
+        if (String(url) === '/api/images/upload') {
+            return { ok: true, status: 200, json: async () => ({ path: 'user/images/UR%20Image%20Studio/q-retry.png' }) };
+        }
+        throw new Error(`unexpected ${url}`);
+    });
+    try {
+        const { createQueueItem, enqueueGeneration, resubmitQueueRow } = await import('../src/pipeline-queue.js');
+        const { listQueueLog, clearQueueLog } = await import('../src/ui/queue-log.js');
+        clearQueueLog({ all: true });
+        const item = await createQueueItem({
+            chatId: 'test-chat', msgId: 0, messageText: 'A cat.',
+            requestedAction: 'current-prompt-stage2', templateId: null,
+            submission: { prompt: 'PR', aspectRatio: '1:1', imageSize: '1K', quality: 'auto',
+                references: { includedIds: [], excludedIds: [], revision: 0 } },
+        });
+        await assert.rejects(enqueueGeneration(item), /gateway boom/);
+        const [row] = listQueueLog();
+        assert.equal(row.tone, 'fail');
+        assert.ok(row.retry, 'у упавшей строки есть снапшот повтора');
+        assert.equal(row.retry.submission.prompt, 'PR');
+        assert.equal(row.retry.messageText, '', 'у обычного поста текст не хранится в item — resubmit читает живой чат');
+        failNext = false;
+        const entry = await resubmitQueueRow(row.retry);
+        assert.ok(entry, 'повтор доходит до галерейной записи');
+        assert.equal(bodies.length, 1);
+    } finally {
+        restore();
+    }
+});
+
+test('resubmitQueueRow: студийная строка повторяется с сохранённым текстом сцены', async () => {
+    let failNext = true;
+    const restore = mockFetch((url) => {
+        if (String(url).endsWith('/images/generations')) {
+            if (failNext) throw new Error('studio boom');
+            return { ok: true, status: 200, json: async () => ({ data: [{ b64_json: 'b3JkZXI=' }] }) };
+        }
+        if (String(url) === '/api/images/upload') {
+            return { ok: true, status: 200, json: async () => ({ path: 'user/images/UR%20Image%20Studio/q-retry-studio.png' }) };
+        }
+        throw new Error(`unexpected ${url}`);
+    });
+    try {
+        const { createQueueItem, enqueueGeneration, resubmitQueueRow } = await import('../src/pipeline-queue.js');
+        const { listQueueLog, clearQueueLog } = await import('../src/ui/queue-log.js');
+        const { STUDIO_CHAT_ID } = await import('../src/studio-scope.js');
+        clearQueueLog({ all: true });
+        const item = await createQueueItem({
+            chatId: STUDIO_CHAT_ID, msgId: 0, messageText: 'studio scene',
+            requestedAction: 'current-prompt-stage2', templateId: null,
+            submission: { prompt: 'PS', aspectRatio: '1:1', imageSize: '1K', quality: 'auto',
+                references: { includedIds: [], excludedIds: [], revision: 0 } },
+        });
+        await assert.rejects(enqueueGeneration(item), /studio boom/);
+        const [row] = listQueueLog();
+        assert.equal(row.retry.messageText, 'studio scene', 'студийный текст сцены сохранён в снапшоте');
+        failNext = false;
+        const entry = await resubmitQueueRow(row.retry);
+        assert.ok(entry);
+    } finally {
+        restore();
+    }
+});
