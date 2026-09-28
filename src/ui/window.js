@@ -2,10 +2,10 @@
 /**
  * Floating window: mount, drag (by header), resize (corner handle), mobile overlay.
  */
-import { state, saveSettings, escapeHtml, error, showConfirmModal } from '../core.js';
+import { state, saveSettings, escapeHtml, error } from '../core.js';
 import { exportDiagnosticDump } from '../diagnostic-dump.js';
 import { listUrisErrors, clearUrisErrors, formatUrisError, markUrisErrorsSeen, countUnreadUrisErrors, hasUnreadHardUrisErrors, reportFailure, URIS_SCOPES } from '../error-pool.js';
-import { listPendingBrowserRequests, discardPendingBrowserRequest, clearPendingBrowserRequests } from '../browser-image-recovery.js';
+import { listPendingBrowserRequests, discardPendingBrowserRequest } from '../browser-image-recovery.js';
 import { bindTabBarScroll } from './tab-bar-scroll.js';
 import { listQueueLog, queueBadgeCount, clearQueueLog, noteQueued, noteRunning, noteFinished, hasLiveQueueLane, laneFromSource } from './queue-log.js';
 import { stopQueue, cancelQueuedItem, resubmitQueueRow } from '../pipeline-queue.js';
@@ -386,10 +386,43 @@ function pendingStatusLabel(item) {
     return labels[item?.status] || item?.status || 'неизвестный статус';
 }
 
+/** Провенанс recovery-записи: когда, из какого поста и какой моделью. */
+function pendingRowContext(item) {
+    const parts = [];
+    const created = Date.parse(item?.createdAt);
+    if (Number.isFinite(created)) {
+        // Запись может висеть днями — без даты «14:32» не имеет смысла.
+        parts.push(new Date(created).toLocaleString([], { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }));
+    }
+    // Number(null) === 0: без явной проверки null студийные записи (без поста)
+    // получили бы фальшивое «пост #1».
+    const rawMsgId = item?.sourceMsgId;
+    const msgId = Number(rawMsgId);
+    if (rawMsgId !== null && rawMsgId !== undefined && rawMsgId !== '' && Number.isFinite(msgId) && msgId >= 0) parts.push(`пост #${msgId + 1}`);
+    if (item?.modelId) parts.push(String(item.modelId));
+    return parts.join(' · ');
+}
+
+/**
+ * Recovery-строка: статус + провенанс вместо голого UUID. Мелким текстом —
+ * только текст ошибки (например CORS-объяснение): он и есть причина читать
+ * строку; requestId не информативен и в диагностический дамп попадает всегда.
+ */
 function renderPendingRows(items) {
-    return items.length
-        ? items.slice().reverse().map(item => `<div class="uris-error-row"><span><strong>${escapeHtml(pendingStatusLabel(item))}</strong><small>${escapeHtml(item.error || item.requestId || item.id || '')}</small></span><button type="button" class="uris-btn uris-btn-ghost uris-pending-discard" data-pending-id="${escapeHtml(item.id)}" title="Удалить запись без повторной отправки" aria-label="Удалить запись без повторной отправки">×</button></div>`).join('')
-        : '<div class="uris-error-row uris-error-empty">Нет записей</div>';
+    return items.slice().reverse().map(item => {
+        const context = pendingRowContext(item);
+        const detail = item?.error ? `<small>${escapeHtml(item.error)}</small>` : '';
+        return `<div class="uris-error-row uris-pending-row"><span><strong>${escapeHtml(pendingStatusLabel(item))}</strong>${context ? ` · ${escapeHtml(context)}` : ''}</span>${detail}<button type="button" class="uris-btn uris-btn-ghost uris-pending-discard" data-pending-id="${escapeHtml(item.id)}" title="Удалить запись без повторной отправки" aria-label="Удалить запись без повторной отправки">×</button></div>`;
+    }).join('');
+}
+
+/**
+ * Бейдж держат только записи с деньгами под угрозой (исход POST неизвестен).
+ * «Не отправлен» — до провайдера не дошло, восстанавливать нечего: строка
+ * живёт в панели, но бейдж не зажигает и хранится лишь сутки.
+ */
+function recoveryBadgeCount(pending) {
+    return (pending || []).filter(item => item?.status !== 'notStarted').length;
 }
 
 // Подпись содержимого панели: события (текст/время/счётчик/тон) + recovery.
@@ -427,7 +460,7 @@ function composeBadgeTitle(unread, pending) {
 }
 
 /** Шов для node-тестов: чистые функции бейджа без DOM. */
-export const _testErrorBadge = { pluralRu, composeBadgeTitle };
+export const _testErrorBadge = { pluralRu, composeBadgeTitle, pendingRowContext, pendingStatusLabel, recoveryBadgeCount };
 
 function renderErrorPanel(winEl, errors, pending = []) {
     const panel = winEl?.querySelector?.('#urisErrorPanel');
@@ -444,14 +477,19 @@ function renderErrorPanel(winEl, errors, pending = []) {
             return `<div class="uris-error-row${tone}">${escapeHtml(formatUrisError(entry))}</div>`;
         }).join('')
         : '<div class="uris-error-row uris-error-empty">Ошибок текущей сессии нет</div>';
-    const preDispatch = pending.filter(item => item.status === 'notStarted');
-    const uncertain = pending.filter(item => item.status !== 'notStarted');
+    const preDispatch = pending.filter(item => item.status === 'notStarted').reverse();
+    const uncertain = pending.filter(item => item.status !== 'notStarted').reverse();
+    // Recovery — одна секция и только когда есть записи: пустые заглушки
+    // («Нет записей») — шум без содержания. Сначала записи с деньгами под
+    // угрозой (исход POST неизвестен), затем «не отправлен».
+    const recoverySection = pending.length
+        ? `<section class="uris-error-section"><h3>Незавершённые запросы</h3><div class="uris-error-rows">${renderPendingRows([...uncertain, ...preDispatch])}</div></section>`
+        : '';
     // Действия вынесены наверх: панели с записями могут быть длинными, кнопки
-    // не должны требовать прокрутки.
-    panel.innerHTML = `<div class="uris-error-panel-actions"><button type="button" class="uris-btn uris-btn-ghost" id="urisErrorClear">Очистить события</button><button type="button" class="uris-btn uris-btn-ghost" id="urisPendingClear">Удалить recovery</button></div>
-        <section class="uris-error-section"><h3>Ошибки текущей сессии</h3><div class="uris-error-rows">${errorRows}</div></section>
-        <section class="uris-error-section"><h3>Результат/сохранение не завершено</h3><div class="uris-error-rows">${renderPendingRows(uncertain)}</div></section>
-        <section class="uris-error-section"><h3>Неотправленные операции</h3><div class="uris-error-rows">${renderPendingRows(preDispatch)}</div></section>`;
+    // не должны требовать прокрутки. Массовая очистка recovery осталась в
+    // настройках («Очистить всю диагностику»), здесь — только крестик на строке.
+    panel.innerHTML = `<div class="uris-error-panel-actions"><button type="button" class="uris-btn uris-btn-ghost" id="urisErrorClear">Очистить события</button></div>
+        <section class="uris-error-section"><h3>Ошибки текущей сессии</h3><div class="uris-error-rows">${errorRows}</div></section>${recoverySection}`;
     panel.scrollTop = scrollTop;
     panel.querySelector('#urisErrorClear')?.addEventListener('click', () => {
         // sync придёт событием uris:errors из clearUrisErrors — как у
@@ -463,16 +501,6 @@ function renderErrorPanel(winEl, errors, pending = []) {
         try { await discardPendingBrowserRequest(button.dataset.pendingId); }
         catch (e) { error('discard pending:', e); reportFailure({ scope: URIS_SCOPES.recovery, message: e?.message || String(e) }); }
     }));
-    panel.querySelector('#urisPendingClear')?.addEventListener('click', async () => {
-        try {
-            const confirmed = await showConfirmModal('Удалить все незавершённые recovery-записи?\n\nЭто не повторяет запросы и удаляет только локальные записи о неопределённом результате.');
-            if (!confirmed) return;
-            await clearPendingBrowserRequests();
-        } catch (e) {
-            error('clear pending:', e);
-            reportFailure({ scope: URIS_SCOPES.recovery, message: e?.message || String(e) });
-        }
-    });
 }
 
 const QUEUE_STATUS_TEXT = { waiting: 'ждёт', running: 'выполняется', done: 'готово' };
@@ -639,18 +667,19 @@ function bindErrorPool(el) {
         const pending = await listPendingBrowserRequests();
         const errors = listUrisErrors();
         if (seq !== refreshSeq || (el.isConnected === false)) return;
-        // Цифра — только новости: непрочитанные события + незакрытый recovery.
-        // Видимость — инвентарь (как у QUEUE-бейджа: виден, пока в ленте есть
-        // строки): просмотренное остаётся достижимым, но бейдж гаснет.
+        // Цифра — новое: непрочитанные события + recovery с деньгами под
+        // угрозой. Видимость — инвентарь (как у QUEUE-бейджа: виден, пока
+        // есть что показать), просмотренное гаснет классом --seen. Записи
+        // «не отправлен» (денег нет) не держат бейдж вовсе.
         const unread = countUnreadUrisErrors();
-        const total = errors.length + pending.length;
+        const atRisk = recoveryBadgeCount(pending);
         const dot = el.querySelector('#urisErrorDot');
-        badge.hidden = total === 0;
-        badge.classList.toggle('uris-error-badge--seen', total > 0 && unread === 0);
-        badge.title = composeBadgeTitle(unread, pending.length);
+        badge.hidden = errors.length === 0 && atRisk === 0;
+        badge.classList.toggle('uris-error-badge--seen', unread === 0 && atRisk === 0 && (errors.length > 0 || pending.length > 0));
+        badge.title = composeBadgeTitle(unread, atRisk);
         if (dot) dot.hidden = !hasUnreadHardUrisErrors();
         badge.setAttribute('aria-expanded', String(!panel.hidden));
-        el.querySelector('#urisErrorCount').textContent = String(unread + pending.length);
+        el.querySelector('#urisErrorCount').textContent = String(unread + atRisk);
         if (!panel.hidden) renderErrorPanel(el, errors, pending);
     };
     badge.addEventListener('click', async event => {

@@ -70,7 +70,8 @@ test('generation context is stored and rendered in the row', () => {
 
     assert.deepEqual(entry.context, { post: 42, connection: 'Novita Card', model: 'sd-xl' });
     const formatted = formatUrisError(entry);
-    assert.match(formatted, /пост #42/);
+    // Пост 1-based, как в QUEUE-бейдже (msgId 42 — это «пост #43» для человека).
+    assert.match(formatted, /пост #43/);
     assert.match(formatted, /«Novita Card»/);
     assert.match(formatted, /sd-xl/);
 });

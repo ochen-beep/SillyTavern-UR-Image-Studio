@@ -109,7 +109,9 @@ export function formatUrisError(entry) {
     const count = entry.count > 1 ? ` ×${entry.count}` : '';
     const context = entry.context || {};
     const parts = [
-        context.post !== undefined && context.post !== null && context.post !== '' ? `пост #${context.post}` : '',
+        // 1-based, как в QUEUE-бейдже: один и тот же пост не должен
+        // нумероваться по-разному в двух панелях.
+        context.post !== undefined && context.post !== null && context.post !== '' ? `пост #${Number(context.post) + 1}` : '',
         context.connection ? `«${context.connection}»` : '',
         context.model || '',
     ].filter(Boolean);

@@ -6,6 +6,9 @@ const KEY = 'uris_pending_images';
 const BROWSER_KIND = 'browserRequest';
 const MAX_PENDING_BROWSER_REQUESTS = 50;
 const PENDING_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
+// «Не отправлен» — запрос до провайдера не дошёл, денег нет: страховке
+// нечего хранить неделю, сутки достаточно.
+const PENDING_NOT_STARTED_MS = 24 * 60 * 60 * 1000;
 const ACTIVE_PENDING_STATUSES = new Set(['notStarted', 'dispatchingUnknown', 'resultReceived']);
 
 function lf() { return SillyTavern.libs.localforage; }
@@ -53,7 +56,8 @@ function isRetainedPending(item, now = Date.now()) {
     if (!item.createdAt) return true;
     const createdAt = Date.parse(item.createdAt);
     if (!Number.isFinite(createdAt)) return true;
-    return now - createdAt <= PENDING_RETENTION_MS;
+    const retentionMs = item.status === 'notStarted' ? PENDING_NOT_STARTED_MS : PENDING_RETENTION_MS;
+    return now - createdAt <= retentionMs;
 }
 
 function retainPendingRecords(records, now = Date.now()) {

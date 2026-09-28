@@ -1906,6 +1906,10 @@
 .uris-queue-row-retry { margin-left: auto; flex: 0 0 auto; background: var(--uris-surface-btn); border: 1px solid var(--uris-border-soft); color: var(--uris-text-mut); border-radius: 4px; padding: 1px 8px; font-size: var(--uris-font-sm); cursor: pointer; }
 .uris-queue-row-retry:hover { background: var(--uris-surface-btn-hover); border-color: var(--uris-border); color: var(--uris-text-strong); }
 .uris-pending-discard { margin-left: auto; flex: 0 0 auto; font-size: calc(13px * var(--uris-font-scale, 1)); }
+/* Recovery-строка: статус+контекст первой строкой, текст ошибки — полной
+   строкой ниже (без wrap узкая панель жмёт ошибку в колонку в 5 слов). */
+.uris-pending-row { flex-wrap: wrap; }
+.uris-pending-row small { padding-left: 2px; }
 .uris-error-panel-actions { display: flex; justify-content: flex-end; margin-bottom: 8px; }
 
 @media (max-width: 768px) {
