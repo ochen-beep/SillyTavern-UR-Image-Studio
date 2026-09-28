@@ -41,6 +41,8 @@ const { listPendingBrowserRequests, getPendingBrowserRequest, getPendingBrowserR
 const getPendingImages = listPendingBrowserRequests;
 const { listDiagnosticEvents, resetDiagnosticEventsForTests } = await import('../src/diagnostic-events.js');
 const { generateImageRequest } = await import('../src/image-api.js');
+const { _resetDeliveryEvidenceForTests } = await import('../src/delivery-evidence.js');
+const connectionsFacade = await import('../src/connections.js');
 
 after(() => { globalThis.fetch = originalFetch; });
 
@@ -69,6 +71,7 @@ function request(overrides = {}) {
 beforeEach(async () => {
     store.clear();
     for (const key of Object.keys(extensionSettings)) delete extensionSettings[key];
+    _resetDeliveryEvidenceForTests();
     fetchCalls.length = 0;
     providerResponse = jsonResponse({ data: [{ b64_json: 'cmVhZHk=' }] });
     await createConnection(connection());
@@ -172,17 +175,114 @@ test('missing browser-local key fails before a provider request with an actionab
     assert.equal(fetchCalls.length, 0);
 });
 
-test('paid browser network failure keeps dispatchingUnknown with one direct attempt and typed ambiguity', async () => {
+test('auto delivery: a direct POST failure with a dead preflight probes OPTIONS and, with the proxy unreachable, surfaces the proxy hint while recording the broken-direct experience', async () => {
     providerResponse = new TypeError('Failed to fetch');
     await assert.rejects(
         () => generateImageRequest('browser-image', request()),
-        error => error?.code === 'IMAGE_DELIVERY_AMBIGUOUS' && /outcome is uncertain/i.test(error.message),
+        /CORS-прокси SillyTavern недоступен/,
     );
     const pending = await getPendingImages();
     assert.equal(pending.length, 1);
     assert.equal(pending[0].status, 'dispatchingUnknown');
-    assert.equal(fetchCalls.filter(call => call.url === 'https://images.example/v1/images/generations').length, 1);
-    assert.equal(fetchCalls.some(call => call.url.includes('/proxy/')), false);
+    const generationCalls = fetchCalls.filter(call => call.url === 'https://images.example/v1/images/generations');
+    assert.equal(generationCalls.filter(call => call.options?.method === 'POST').length, 1, 'ровно одна прямая попытка платного POST');
+    assert.equal(generationCalls.some(call => call.options?.method === 'OPTIONS'), true, 'preflight-оракул должен был провернуть OPTIONS');
+    assert.equal(fetchCalls.some(call => call.options?.method === 'POST' && call.url.includes('/proxy/')), false, 'прокси недоступен — попытка спасения не доходит до POST');
+    // Опыт записи: прямая помечена сломанной — следующая «Авто»-генерация пойдёт через прокси.
+    const conn = await connectionsFacade.getConnection('browser-image');
+    assert.ok(conn.deliveryEvidence?.directBrokenAt, 'опыт о сломанной прямой должен быть записан');
+});
+
+test('auto delivery: dead preflight with a working ST proxy rescues the generation in the same call', async () => {
+    const calls = [];
+    const standardFetch = globalThis.fetch;
+    globalThis.fetch = async (url, options = {}) => {
+        const urlStr = String(url);
+        const viaProxy = urlStr.startsWith('/proxy/');
+        const realUrl = viaProxy ? decodeURIComponent(urlStr.slice('/proxy/'.length)) : urlStr;
+        calls.push({ url: realUrl, options, viaProxy });
+        if (viaProxy && realUrl === 'https://example.com') return { ok: true, status: 200, text: async () => '' };
+        if (realUrl === 'https://images.example/v1/images/generations') {
+            if (viaProxy) return jsonResponse({ data: [{ b64_json: 'cmVzY3VlZA==' }] });
+            throw new TypeError('Failed to fetch');
+        }
+        if (options.method === 'OPTIONS') throw new TypeError('Failed to fetch');
+        if (realUrl === '/api/images/upload') return jsonResponse({ path: 'user/images/UR%20Image%20Studio/rescued.png' });
+        throw new Error(`Forbidden network call: ${options.method || 'GET'} ${urlStr}`);
+    };
+    try {
+        const result = await generateImageRequest('browser-image', request({ requestId: 'req_oracle_rescue_0001' }));
+        assert.equal(result.kind, 'dataUrl');
+        const sequence = calls.filter(call => call.url.endsWith('/v1/images/generations')).map(call => ({ viaProxy: call.viaProxy, method: call.options?.method }));
+        assert.deepEqual(sequence, [
+            { viaProxy: false, method: 'POST' },
+            { viaProxy: false, method: 'OPTIONS' },
+            { viaProxy: true, method: 'POST' },
+        ], 'прямой POST → OPTIONS-оракул → спасение через прокси, один платный запрос суммарно');
+        // Опыт записи: прямая помечена сломанной — следующая генерация пойдёт через прокси сразу.
+        // Запись fire-and-forget — коротко дождёмся персиста.
+        let evidenceConn = await connectionsFacade.getConnection('browser-image');
+        for (let i = 0; i < 40 && !evidenceConn?.deliveryEvidence?.directBrokenAt; i++) {
+            await new Promise(resolve => setTimeout(resolve, 5));
+            evidenceConn = await connectionsFacade.getConnection('browser-image');
+        }
+        assert.ok(evidenceConn?.deliveryEvidence?.directBrokenAt);
+    } finally {
+        globalThis.fetch = standardFetch;
+    }
+});
+
+test('auto delivery: a fresh broken-direct experience routes the next generation through the proxy without a doomed direct attempt', async () => {
+    await connectionsFacade.saveConnection({
+        id: 'browser-image',
+        deliveryEvidence: { host: 'images.example', directBrokenAt: new Date(Date.now()).toISOString(), ts: new Date(Date.now()).toISOString() },
+    });
+    const calls = [];
+    const standardFetch = globalThis.fetch;
+    globalThis.fetch = async (url, options = {}) => {
+        const urlStr = String(url);
+        const viaProxy = urlStr.startsWith('/proxy/');
+        const realUrl = viaProxy ? decodeURIComponent(urlStr.slice('/proxy/'.length)) : urlStr;
+        calls.push({ url: realUrl, options, viaProxy });
+        if (viaProxy && realUrl === 'https://example.com') return { ok: true, status: 200, text: async () => '' };
+        if (viaProxy && realUrl === 'https://images.example/v1/images/generations') {
+            return jsonResponse({ data: [{ b64_json: 'cHJveHk=' }] });
+        }
+        if (realUrl === '/api/images/upload') return jsonResponse({ path: 'user/images/UR%20Image%20Studio/via-proxy.png' });
+        throw new Error(`unexpected fetch ${options.method || 'GET'} ${urlStr}`);
+    };
+    try {
+        const result = await generateImageRequest('browser-image', request({ requestId: 'req_ladder_proxy_0001' }));
+        assert.equal(result.kind, 'dataUrl');
+        const providerCalls = calls.filter(call => call.url.endsWith('/v1/images/generations'));
+        assert.equal(providerCalls.length, 1, 'ровно одна попытка к провайдеру');
+        assert.equal(providerCalls[0].viaProxy, true, 'опыт сломанной прямой должен увести POST на прокси без повторного фейла');
+    } finally {
+        globalThis.fetch = standardFetch;
+    }
+});
+
+test('auto delivery: a direct success clears the broken verdict and stamps directOkAt', async () => {
+    await connectionsFacade.saveConnection({
+        id: 'browser-image',
+        deliveryEvidence: { host: 'images.example', directBrokenAt: new Date(Date.now() - 31 * 60 * 1000).toISOString(), ts: new Date(Date.now() - 31 * 60 * 1000).toISOString() },
+    });
+    await generateImageRequest('browser-image', request({ requestId: 'req_direct_ok_0001' }));
+    const conn = await connectionsFacade.getConnection('browser-image');
+    // Нормализатор опускает пустые поля: «вердикта нет» = ключ отсутствует.
+    assert.ok(!conn.deliveryEvidence?.directBrokenAt, 'успешный прямой POST должен стирать вердикт «сломана»');
+    assert.ok(conn.deliveryEvidence?.directOkAt, 'и фиксировать рабочий прямой путь');
+});
+
+test('explicit-direct delivery never probes OPTIONS and keeps the typed ambiguity', async () => {
+    await connectionsFacade.saveConnection({ id: 'browser-image', overrides: { delivery: 'direct' } });
+    providerResponse = new TypeError('Failed to fetch');
+    await assert.rejects(
+        () => generateImageRequest('browser-image', request()),
+        error => error?.code === 'IMAGE_DELIVERY_AMBIGUOUS' && /исход неизвестен/i.test(error.message),
+    );
+    const generationCalls = fetchCalls.filter(call => call.url === 'https://images.example/v1/images/generations');
+    assert.deepEqual(generationCalls.map(call => call.options?.method), ['POST'], 'явный приказ «Только напрямую» — никаких OPTIONS и прокси');
 });
 
 test('provider HTTP errors do not retry a paid generation and remain reviewable', async () => {
@@ -214,7 +314,7 @@ test('browser pending recovery exposes status and explicit discard only', async 
     });
     assert.equal(await discardPendingBrowserRequest(pending[0].id), true);
     assert.deepEqual(await listPendingBrowserRequests(), []);
-    assert.equal(fetchCalls.filter(call => call.url === 'https://images.example/v1/images/generations').length, 1);
+    assert.equal(fetchCalls.filter(call => call.url === 'https://images.example/v1/images/generations' && call.options?.method === 'POST').length, 1);
 });
 
 test('browser dispatch preserves a captured route through normalization and does not resubmit it', async () => {

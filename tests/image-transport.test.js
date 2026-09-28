@@ -128,8 +128,10 @@ test('fetchImageRoute does not resubmit an ambiguous paid JSON POST', async () =
     try {
         await assert.rejects(
             () => fetchImageRoute('https://images.example/v1/generations', { method: 'POST' }, route({ proxyEligible: false })),
-            error => error?.code === 'IMAGE_DELIVERY_AMBIGUOUS' && /outcome is uncertain/i.test(error.message),
+            error => error?.code === 'IMAGE_DELIVERY_AMBIGUOUS' && /исход неизвестен/i.test(error.message),
         );
+        // Без штампа deliveryPolicy (маршрут вне диспатч-потока) считается
+        // explicit-direct: оракул не запускается, только прямой POST.
         assert.deepEqual(calls.map(call => call.viaProxy), [false]);
     } finally { restore(); }
 });
@@ -204,7 +206,7 @@ test('fetchImageRoute reports typed ambiguous delivery when route policy disable
     try {
         await assert.rejects(
             () => fetchImageRoute('https://images.example/v1/generations', { method: 'POST' }, route({ proxyEligible: false })),
-            error => error?.code === 'IMAGE_DELIVERY_AMBIGUOUS' && /outcome is uncertain/i.test(error.message),
+            error => error?.code === 'IMAGE_DELIVERY_AMBIGUOUS' && /исход неизвестен/i.test(error.message),
         );
         assert.deepEqual(calls.map(call => call.viaProxy), [false]);
     } finally { restore(); }
@@ -391,4 +393,158 @@ test('fetchImageRoute allows proxy-first on a catalog-style proxyEligible:false 
         assert.equal(response.status, 200);
         assert.ok(calls.every(call => call.viaProxy === true), 'no call may go direct');
     } finally { restore(); }
+});
+
+// ── Preflight oracle (deliveryPolicy:'auto') ─────────────────────────────────
+//
+// An auto-policy JSON POST whose direct attempt died on a CORS/network error
+// verifies the "preflight blocked it → nothing was sent" assumption with a
+// free OPTIONS probe. Dead preflight → one provably-safe proxy re-dispatch in
+// the same call. Alive/unknown preflight → IMAGE_DELIVERY_AMBIGUOUS, as before.
+// Routes without the stamp (built outside browserDeliveryRoute) keep the old
+// behavior — the oracle never fires for them.
+
+const ORACLE_ROUTE = () => route({ deliveryPolicy: 'auto' });
+
+test('oracle: dead preflight rescues an auto-policy POST through the proxy in the same call', async () => {
+    const calls = [];
+    const restore = mockFetch((url, options, viaProxy) => {
+        calls.push({ url, options, viaProxy });
+        if (viaProxy && url === 'https://example.com') return { ok: true, status: 200, text: async () => '' };
+        if (options.method === 'OPTIONS') throw new TypeError('Failed to fetch');
+        if (!viaProxy) throw new TypeError('Failed to fetch');
+        return { ok: true, status: 200, json: async () => ({ data: [{ b64_json: 'aGk=' }] }) };
+    });
+    try {
+        const response = await fetchImageRoute('https://no-cors.example/v1/images/generations', {
+            method: 'POST', headers: { Authorization: 'Bearer key' }, body: '{"prompt":"cat"}',
+        }, ORACLE_ROUTE(), 45_000);
+        assert.equal(response.status, 200);
+        const sequence = calls.map(call => ({ viaProxy: call.viaProxy, method: call.options?.method }));
+        assert.deepEqual(sequence, [
+            { viaProxy: false, method: 'POST' },
+            { viaProxy: false, method: 'OPTIONS' },
+            { viaProxy: true, method: 'GET' },
+            { viaProxy: true, method: 'POST' },
+        ], 'direct POST → OPTIONS probe → proxy availability probe → proxy POST');
+    } finally { restore(); }
+});
+
+test('oracle: readable 200 on OPTIONS means the POST died mid-flight — ambiguous, no re-send', async () => {
+    const calls = [];
+    const restore = mockFetch((url, options, viaProxy) => {
+        calls.push({ url, options, viaProxy });
+        if (options.method === 'OPTIONS') return { ok: true, status: 200 };
+        throw new TypeError('Failed to fetch');
+    });
+    try {
+        await assert.rejects(
+            () => fetchImageRoute('https://images.example/v1/generations', {
+                method: 'POST', body: '{"prompt":"cat"}',
+            }, ORACLE_ROUTE()),
+            error => error?.code === 'IMAGE_DELIVERY_AMBIGUOUS',
+        );
+        assert.deepEqual(calls.map(call => call.options?.method), ['POST', 'OPTIONS']);
+        assert.ok(calls.every(call => call.viaProxy === false), 'no proxy traffic may happen');
+    } finally { restore(); }
+});
+
+test('oracle: readable 404 on OPTIONS is still a dead preflight (browsers require ok) — rescue fires', async () => {
+    const calls = [];
+    const restore = mockFetch((url, options, viaProxy) => {
+        calls.push({ url, options, viaProxy });
+        if (viaProxy && url === 'https://example.com') return { ok: true, status: 200, text: async () => '' };
+        if (options.method === 'OPTIONS') return { ok: false, status: 404 };
+        if (!viaProxy) throw new TypeError('Failed to fetch');
+        return { ok: true, status: 200, json: async () => ({ data: [{ b64_json: 'aGk=' }] }) };
+    });
+    try {
+        const response = await fetchImageRoute('https://odd-gateway.example/v1/images/generations', {
+            method: 'POST', body: '{"prompt":"cat"}',
+        }, ORACLE_ROUTE());
+        assert.equal(response.status, 200);
+        assert.ok(calls.some(call => call.viaProxy && call.options?.method === 'POST'), 'the rescued POST must go through the proxy');
+    } finally { restore(); }
+});
+
+test('oracle: OPTIONS timeout must not decide — ambiguous without a re-send', async () => {
+    const calls = [];
+    const restore = mockFetch((url, options, viaProxy) => {
+        calls.push({ url, options, viaProxy });
+        if (options.method === 'OPTIONS') throw new Error('Таймаут (8с)');
+        throw new TypeError('Failed to fetch');
+    });
+    try {
+        await assert.rejects(
+            () => fetchImageRoute('https://images.example/v1/generations', {
+                method: 'POST', body: '{"prompt":"cat"}',
+            }, ORACLE_ROUTE()),
+            error => error?.code === 'IMAGE_DELIVERY_AMBIGUOUS',
+        );
+        assert.deepEqual(calls.map(call => call.options?.method), ['POST', 'OPTIONS']);
+    } finally { restore(); }
+});
+
+test('oracle: user abort during the probe propagates as AbortError', async () => {
+    const controller = new AbortController();
+    const calls = [];
+    const restore = mockFetch((url, options, viaProxy) => {
+        calls.push({ url, options, viaProxy });
+        if (options.method === 'OPTIONS') throw new DOMException('Aborted', 'AbortError');
+        throw new TypeError('Failed to fetch');
+    });
+    try {
+        await assert.rejects(
+            () => fetchImageRoute('https://images.example/v1/generations', {
+                method: 'POST', body: '{"prompt":"cat"}', signal: controller.signal,
+            }, ORACLE_ROUTE()),
+            error => error?.name === 'AbortError',
+        );
+        assert.deepEqual(calls.map(call => call.options?.method), ['POST', 'OPTIONS']);
+    } finally { restore(); }
+});
+
+test('oracle: explicit-direct policy never probes and never rescues', async () => {
+    const calls = [];
+    const restore = mockFetch((url, options, viaProxy) => {
+        calls.push({ url, options, viaProxy });
+        throw new TypeError('Failed to fetch');
+    });
+    try {
+        await assert.rejects(
+            () => fetchImageRoute('https://images.example/v1/generations', {
+                method: 'POST', body: '{"prompt":"cat"}',
+            }, route({ deliveryPolicy: 'explicit-direct' })),
+            error => error?.code === 'IMAGE_DELIVERY_AMBIGUOUS',
+        );
+        assert.deepEqual(calls.map(call => call.options?.method), ['POST'], 'no OPTIONS probe may fire for an explicit order');
+    } finally { restore(); }
+});
+
+test('oracle: a known-disabled ST proxy skips the rescue and stays ambiguous', async () => {
+    const { probeCorsProxy } = await import('../src/proxy.js');
+    const restore = mockFetch(() => ({ ok: false, status: 404, text: async () => 'CORS proxy is disabled.' }));
+    try {
+        // Prime the availability cache with a definitive negative.
+        await probeCorsProxy(true);
+        const calls = [];
+        const restoreProbe = mockFetch((url, options, viaProxy) => {
+            calls.push({ url, options, viaProxy });
+            if (viaProxy) return { ok: true, status: 200, text: async () => '' };
+            if (options.method === 'OPTIONS') throw new TypeError('Failed to fetch');
+            throw new TypeError('Failed to fetch');
+        });
+        try {
+            await assert.rejects(
+                () => fetchImageRoute('https://no-cors.example/v1/images/generations', {
+                    method: 'POST', body: '{"prompt":"cat"}',
+                }, ORACLE_ROUTE()),
+                error => error?.code === 'IMAGE_DELIVERY_AMBIGUOUS',
+            );
+            assert.deepEqual(calls.map(call => call.options?.method), ['POST', 'OPTIONS'], 'no proxy attempt may follow a known-disabled proxy');
+        } finally { restoreProbe(); }
+    } finally {
+        restore();
+        _resetCache();
+    }
 });

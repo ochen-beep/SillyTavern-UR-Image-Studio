@@ -59,16 +59,18 @@ const CONTRACTS_SET = new Set([
 // `request.delivery` stamp below.
 function editsDialect(connection, request = {}) {
   const stamped = request?.editDialect;
-  if (stamped === 'json' || stamped === 'multipart') return stamped;
+  if (stamped === 'json' || stamped === 'multipart' || stamped === 'img2img') return stamped;
   return connection?.editProtocol === 'json' ? 'json' : 'multipart';
 }
 
 const REFERENCE_MODE_BY_CONTRACT = {
   // OpenAI Images: JSON edits carry images[].image_url data URLs; multipart
-  // edits carry repeated binary `image` parts.
+  // edits carry repeated binary `image` parts; the img2img dialect carries
+  // generations+image[] data URLs (gateway extension, last chain rung).
   'openai-images': (refs, _route, connection, request) => {
     if (!refs.length) return 'none';
-    return editsDialect(connection, request) === 'json' ? 'json-data-url' : 'multipart';
+    const dialect = editsDialect(connection, request);
+    return dialect === 'json' ? 'json-data-url' : dialect === 'img2img' ? 'generations-image' : 'multipart';
   },
   // Chat Completions: references are multimodal image_url parts with data URLs.
   'chat-completions': refs => refs.length ? 'multimodal-data-url' : 'none',
@@ -86,7 +88,8 @@ const OPERATION_BY_CONTRACT = {
   // The edit dialect comes from the connection, not the model ID.
   'openai-images': (refs, _route, connection, request) => {
     if (!refs.length) return 'generate';
-    return editsDialect(connection, request) === 'json' ? 'edit-json' : 'edit-multipart';
+    const dialect = editsDialect(connection, request);
+    return dialect === 'json' ? 'edit-json' : dialect === 'img2img' ? 'edit-img2img' : 'edit-multipart';
   },
   'chat-completions': () => 'chat-image',
   'gemini-native': () => 'gemini-inline',
@@ -150,6 +153,10 @@ const NETWORK_ERROR_CODES = new Set([
   'MULTIPART_CORS_REQUIRED',
   'IMAGE_DELIVERY_AMBIGUOUS',
   'CATALOG_CORS_BLOCK',
+  // The ST /proxy/ itself is off or unreachable (proxy.js). Delivery failure,
+  // not materialize: classifying it as "generation succeeded, storage failed"
+  // would lie about a paid POST that may never have been sent.
+  'CORS_PROXY_UNAVAILABLE',
 ]);
 const INVALID_REQUEST_CODES = new Set([
   'INVALID_IMAGE_REQUEST',
@@ -293,6 +300,9 @@ export function referenceRejectionReason(error) {
         [/multipart is unsupported/i, 'multipart не принимается'],
         [/maximum (\d+) (?:image|reference|input)/i, 'превышен лимит референсов'],
         [/failed to parse (?:the )?(?:multipart )?edit request/i, 'шлюз не смог разобрать edit-запрос'],
+        // Наша типизированная исчерпанность диалектов (image-openai.js chain):
+        // доказанный факт «этот шлюз не принимает референсы из браузера».
+        [/Референсы на этом шлюзе недоступны из браузера/i, 'ни один диалект редактирования не принят шлюзом'],
     ];
     for (const [pattern, label] of patterns) {
         if (pattern.test(message)) return label;

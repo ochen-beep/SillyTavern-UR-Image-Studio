@@ -130,12 +130,18 @@ export async function proxiedFetch(url, options = {}, timeoutMs = 120000) {
     canProxyJsonRequest(options);
     const available = await probeCorsProxy(false, options.signal);
     if (!available) {
-        throw new Error(
+        // Typed code, not prose: capability-observer must classify this as a
+        // delivery failure (network-unknown), never as "materialize / the
+        // generation succeeded" — the POST may not have been paid for at all,
+        // and the user needs the enableCorsProxy hint, not a storage blame.
+        const error = new Error(
             'CORS-прокси SillyTavern недоступен: выключен в config.yaml ' +
             '(enableCorsProxy: true + перезапуск ST) или не отвечает. ' +
             'Включённый прокси подхватится автоматически в течение ~15 секунд — ' +
             'повторите запрос после перезапуска ST.',
         );
+        error.code = 'CORS_PROXY_UNAVAILABLE';
+        throw error;
     }
     // ST's /proxy/<url> forwards upstream bytes to the browser without
     // auto-decompressing them, and hides the upstream Content-Encoding header,

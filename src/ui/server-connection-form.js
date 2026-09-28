@@ -12,6 +12,7 @@ import { deleteConnection, saveConnection } from '../connections.js';
 import { getConnectionApiKey, setConnectionApiKey } from '../connection-store.js';
 import { probeConnection } from '../connect-probe.js';
 import { CONTRACTS, normalizeEndpoint, normalizeConnectionTimeoutMs, CONNECTION_TIMEOUT_DEFAULT_MS } from '../image-connection-schema.js';
+import { deliveryHintFor, editDialectHintFor, clearDeliveryEvidenceFor } from '../delivery-evidence.js';
 import { getProviderDescriptor } from '../provider-descriptors.js';
 import { validatePollinationsToken } from '../providers/image-pollinations.js';
 import { validateNaisteraToken } from '../providers/image-naistera.js';
@@ -84,6 +85,16 @@ function factsLine(draft) {
         : `${count} модел${count % 10 === 1 && count % 100 !== 11 ? 'ь' : 'ей'} (image не распознаны)`;
     const age = ageLabel(detected.checkedAt);
     const parts = [`✓ Подключено · ${modelsLabel} · ${auth} · ${delivery}`];
+    // POST-доставка (опыт реальных генераций) может расходиться с GET-фактом
+    // пробы: шлюз отвечает на прямой GET каталога, но режет прямой POST.
+    // Показываем только активный «сломан» — тихий прямой успех фактом не является.
+    if (deliveryHintFor(draft) === 'proxy' && draft?.deliveryEvidence?.directBrokenAt) {
+        parts.push(`POST: авто→прокси (прямая не отвечала ${ageLabel(draft.deliveryEvidence.directBrokenAt) || 'только что'})`);
+    }
+    // Выученный диалект редактирования (openai-images + референсы).
+    const editHint = editDialectHintFor(draft);
+    if (editHint === 'img2img-proxy') parts.push('Редактирование: авто→generations+image');
+    else if (editHint === 'json-proxy') parts.push('Редактирование: авто→JSON через прокси');
     if (detected.generationUnverified === true) parts.push('генерация не проверена');
     if (detected.partial === true) parts.push('каталог получен частично — поток оборвался');
     const evidence = draft?.model?.id ? draft.evidence?.[draft.model.id] : null;
@@ -190,9 +201,9 @@ export function renderServerConnectionForm(draft = {}, options = {}) {
             <details class="uris-advanced uris-server-advanced" ${advancedOpen ? 'open' : ''}>
                 <summary>Расширенные</summary>
                 <div class="uris-row"><label>Протокол</label><select class="text_pole uris-server-dialect" title="Как говорить с этим шлюзом. Авто определяет протокол по адресу и модели — меняйте только если Авто отправляет не тем протоколом.">${DIALECT_OPTIONS.map(([value, label]) => `<option value="${escapeHtml(value)}"${selected(value, overrides.dialect || '')}>${escapeHtml(label)}</option>`).join('')}</select></div>
-                <div class="uris-row"><label>Редактирование</label><select class="text_pole uris-server-edit-protocol" title="Диалект /v1/images/edits для референсов. Авто: multipart напрямую, JSON через прокси при CORS-блоке."><option value=""${selected('', overrides.editProtocol || '')}>Авто</option><option value="multipart"${selected('multipart', overrides.editProtocol || '')}>multipart/form-data</option><option value="json"${selected('json', overrides.editProtocol || '')}>JSON (base64)</option></select></div>
+                <div class="uris-row"><label>Редактирование</label><select class="text_pole uris-server-edit-protocol" title="Диалект /v1/images/edits для референсов. Авто: multipart напрямую; при CORS-блоке (доказанном OPTIONS-пробой) — JSON через прокси ST, затем generations+image (img2img); рабочий диалект запоминается на ~30 минут. JSON/img2img — принудительно один диалект."><option value=""${selected('', overrides.editProtocol || '')}>Авто</option><option value="multipart"${selected('multipart', overrides.editProtocol || '')}>multipart/form-data</option><option value="json"${selected('json', overrides.editProtocol || '')}>JSON (base64)</option></select></div>
                 <div class="uris-row"><label>Параметры изображений Chat Completions</label><select class="text_pole uris-server-chat-image-config" title="Как передавать пропорцию и размер картинки в Chat Completions. OpenRouter — image_config + modalities. new-api (релейные шлюзы) — extra_body.google.image_config: без него шлюз молча вернёт свой дефолтный формат. Авто — не отправлять (соотношение уйдёт с предупреждением)."><option value=""${selected('', overrides.chatCompletionsImageConfig || '')}>Авто (не отправлять)</option><option value="new-api"${selected('new-api', overrides.chatCompletionsImageConfig || '')}>extra_body.google.image_config (шлюзы на new-api)</option><option value="openrouter"${selected('openrouter', overrides.chatCompletionsImageConfig || '')}>image_config (OpenRouter-совместимый)</option></select></div>
-                <div class="uris-row"><label>Доставка</label><select class="text_pole uris-server-delivery" title="Авто: сначала напрямую, через прокси ST при CORS-блоке. «Через прокси» — всегда через SillyTavern (для шлюзов без CORS-заголовков). Отмена генерации при доставке через прокси не прерывает запрос у провайдера."><option value=""${selected('', overrides.delivery || '')}>Авто</option><option value="proxy"${selected('proxy', overrides.delivery || '')}>Через CORS-прокси ST</option><option value="direct"${selected('direct', overrides.delivery || '')}>Только напрямую</option></select></div>
+                <div class="uris-row"><label>Доставка</label><select class="text_pole uris-server-delivery" title="Авто: сначала напрямую; если прямая доставка не отвечала (или проба показала прокси) — через прокси ST, и следующие ~30 минут генерации идут через прокси без повторных неудач, пока прямая не проверится снова. «Через прокси» — всегда через SillyTavern. «Только напрямую» — никогда не проксировать. Отмена генерации при доставке через прокси не прерывает запрос у провайдера."><option value=""${selected('', overrides.delivery || '')}>Авто</option><option value="proxy"${selected('proxy', overrides.delivery || '')}>Через CORS-прокси ST</option><option value="direct"${selected('direct', overrides.delivery || '')}>Только напрямую</option></select></div>
                 ${overrides.delivery === 'proxy' ? '<div class="uris-server-warning">«Остановить» при доставке через прокси ST прекращает только ожидание: запрос у провайдера продолжится и будет оплачен (прокси SillyTavern не передаёт отмену).</div>' : ''}
                 <div class="uris-row"><label>Референсы</label><select class="text_pole uris-server-refs-mode"><option value="auto"${selected('auto', refsMode)}>Авто</option><option value="always"${selected('always', refsMode)}>Всегда отправлять</option><option value="never"${selected('never', refsMode)}>Никогда не отправлять</option></select></div>
                 <div class="uris-row"><label>Лимит референсов</label><input class="text_pole uris-server-refs-max" type="number" min="0" step="1" value="${overrides.maxRefs ?? ''}" placeholder="авто"></div>
@@ -275,6 +286,8 @@ function collectSavePayload(draft) {
         // Probe facts and per-model evidence survive card edits.
         detected: draft.detected || null,
         evidence: draft.evidence || {},
+        deliveryEvidence: draft.deliveryEvidence || null,
+        editDialectEvidence: draft.editDialectEvidence || null,
         // The v2 card no longer persists discovered route lists; detected.
         // modelIds is the single source for the model dropdown.
         routes: [],
@@ -412,6 +425,11 @@ export function bindServerConnectionForm(form, draft, dependencies = {}) {
     form.querySelector('.uris-server-forget')?.addEventListener('click', async () => {
         draft.detected = null;
         draft.evidence = {};
+        draft.deliveryEvidence = null;
+        draft.editDialectEvidence = null;
+        // Сброс и памяти доставки (в т.ч. in-memory кэшей модулей опыта) —
+        // следующая генерация заново исследует прямую доставку и диалекты.
+        await clearDeliveryEvidenceFor(draft.id);
         try {
             await update(collectSavePayload(draft));
             log('Connection facts reset', draft.id);

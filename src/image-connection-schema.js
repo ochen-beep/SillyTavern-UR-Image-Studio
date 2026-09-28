@@ -395,6 +395,47 @@ function normalizeConnectionExtraBody(value) {
     return stripSecrets(input);
 }
 
+// POST-delivery experience (delivery-evidence.js): what real generations proved
+// about the connection's direct path. Persisted verbatim per connection, so it
+// survives reloads and card edits; TTL freshness is a read-side concern
+// (deliveryHintFor), the schema only bounds the shape.
+function normalizeConnectionDeliveryEvidence(value) {
+    const input = plain(value);
+    const host = textOrNull(input.host);
+    if (!host || host.length > 253) return null;
+    const iso = v => {
+        const s = textOrNull(v);
+        return s && !Number.isNaN(Date.parse(s)) ? s : null;
+    };
+    return {
+        host,
+        ...(iso(input.directBrokenAt) ? { directBrokenAt: iso(input.directBrokenAt) } : {}),
+        ...(iso(input.directOkAt) ? { directOkAt: iso(input.directOkAt) } : {}),
+        ts: iso(input.ts) || new Date(0).toISOString(),
+    };
+}
+
+// Edit-dialect experience (delivery-evidence.js): which wire dialect accepted
+// references on this gateway (multipart blocked / JSON ok / generations+image
+// img2img ok). Same persistence discipline as deliveryEvidence.
+function normalizeConnectionEditDialectEvidence(value) {
+    const input = plain(value);
+    const host = textOrNull(input.host);
+    if (!host || host.length > 253) return null;
+    const iso = v => {
+        const s = textOrNull(v);
+        return s && !Number.isNaN(Date.parse(s)) ? s : null;
+    };
+    return {
+        host,
+        ...(iso(input.multipartBlockedAt) ? { multipartBlockedAt: iso(input.multipartBlockedAt) } : {}),
+        ...(iso(input.jsonOkAt) ? { jsonOkAt: iso(input.jsonOkAt) } : {}),
+        ...(iso(input.jsonRejectedAt) ? { jsonRejectedAt: iso(input.jsonRejectedAt) } : {}),
+        ...(iso(input.img2imgOkAt) ? { img2imgOkAt: iso(input.img2imgOkAt) } : {}),
+        ts: iso(input.ts) || new Date(0).toISOString(),
+    };
+}
+
 export function normalizeConnectionRecord(value = {}) {
     const rawInput = plain(value);
     const input = stripSecrets(rawInput);
@@ -450,6 +491,8 @@ export function normalizeConnectionRecord(value = {}) {
         detected,
         overrides,
         evidence: normalizeConnectionEvidence(input.evidence),
+        deliveryEvidence: normalizeConnectionDeliveryEvidence(input.deliveryEvidence),
+        editDialectEvidence: normalizeConnectionEditDialectEvidence(input.editDialectEvidence),
         extraBody: normalizeConnectionExtraBody(input.extraBody),
         // Legacy emissions stay in sync with overrides so the interim card and
         // browserDeliveryRoute keep working (Phase 2 replaces the card).

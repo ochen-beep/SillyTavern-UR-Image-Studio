@@ -4,6 +4,8 @@ import { state } from './core.js';
 import { resolveConnection } from './connections.js';
 import { resolveDispatchPlan } from './dispatch-plan.js';
 import { invokeImageProvider, validateImageProviderInvocation } from './image-provider-registry.js';
+import { isCorsProxyAvailable } from './proxy.js';
+import { deliveryHintFor } from './delivery-evidence.js';
 import { materializeImageResult, getCharacterImageFolder, makeThumbnailForPath } from './native-image-storage.js';
 import { addCard, updateCard } from './gallery-index.js';
 import { providerError } from './providers/image-base.js';
@@ -84,7 +86,22 @@ function browserDeliveryRoute(route, conn, hasReferences = false) {
     const multipartEdit = hasReferences
         && route?.generationContract === 'openai-images'
         && conn?.editProtocol !== 'json';
-    const useProxy = conn?.useCorsProxy === true
+    // Delivery policy for the paid POST. «Авто» is encoded by the ABSENCE of
+    // overrides.delivery (normalizeConnectionOverrides drops 'auto').
+    const policy = conn?.overrides?.delivery === 'proxy' || conn?.overrides?.delivery === 'direct'
+        ? conn.overrides.delivery
+        : '';
+    // «Авто» ladder (2026-09-28): learned POST experience first, then the
+    // probe's delivery fact, then the direct fast path. A fresh direct success
+    // outranks a stale probe verdict so «Авто» self-heals back to direct; a
+    // fresh ambiguous failure outranks everything short of an explicit order.
+    // A known-disabled ST proxy keeps «Авто» on direct — a guaranteed proxy
+    // error helps nobody, and the ambiguous error at least matches what the
+    // user would see without the learning layer.
+    const hint = deliveryHintFor(conn);
+    const autoProxyHint = hint ? hint === 'proxy' : conn?.detected?.delivery === 'proxy';
+    const autoWantsProxy = autoProxyHint && isCorsProxyAvailable() !== false;
+    const useProxy = (policy === 'proxy' || (policy === '' && autoWantsProxy))
         && route?.transport?.bodyKind === 'json'
         && !multipartEdit;
     return {
@@ -95,6 +112,10 @@ function browserDeliveryRoute(route, conn, hasReferences = false) {
             initialDelivery: useProxy ? 'proxy' : 'direct',
             allowProxyFallback: false,
             noResubmit: true,
+            // Who chose this path: an explicit user order or the «Авто» ladder.
+            // Only 'auto' makes the transport's preflight oracle (safe proxy
+            // rescue) eligible; explicit orders are never second-guessed.
+            deliveryPolicy: policy === 'proxy' ? 'explicit-proxy' : policy === 'direct' ? 'explicit-direct' : 'auto',
         },
     };
 }

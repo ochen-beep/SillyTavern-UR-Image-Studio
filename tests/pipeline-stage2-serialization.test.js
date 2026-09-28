@@ -217,8 +217,10 @@ test('browser generation logs network-unknown (never unsupported) on a CORS fail
     });
     await lfMock.setItem(`uris_api_key:${connId}`, 'test-key');
     let postCount = 0;
-    const restore = mockFetch(() => {
-        postCount += 1;
+    const restore = mockFetch((url, options, viaProxy) => {
+        // Считаем только платные POST к провайдеру: OPTIONS-проба оракула
+        // (2026-09-28) и GET-проба доступности /proxy/ бесплатны и не в счёт.
+        if (!viaProxy && options?.method === 'POST') postCount += 1;
         throw new TypeError('Failed to fetch');
     });
     const cap = captureCapabilityLog();

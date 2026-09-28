@@ -5,10 +5,18 @@
  * This module deliberately does not cache delivery strategy or modify the
  * persisted route. A paid image POST gets one direct request; explicitly safe
  * JSON routes may use proxy fallback after a no-response CORS/network failure.
+ * The one exception is the preflight oracle below: for an auto-policy JSON
+ * POST a CORS-masked failure is almost always a preflight refusal (nothing was
+ * sent), and instead of assuming that — the way image-openai.js's multipart→JSON
+ * fallback does — the oracle verifies it with a free OPTIONS probe and only
+ * then re-dispatches through /proxy/. Delivery experience recording goes
+ * through delivery-evidence.js as fire-and-forget telemetry, the same category
+ * as recordDiagnosticEvent: the transport itself stays stateless.
  */
 import { fetchWithTimeout, getCtx, trace } from './core.js'
 import { recordDiagnosticEvent } from './diagnostic-events.js';
-import { autoFetch, proxiedFetch, isCorsOrNetworkError } from './proxy.js';
+import { autoFetch, proxiedFetch, isCorsOrNetworkError, isCorsProxyAvailable } from './proxy.js';
+import { notePreflightOracleDead, noteDeliveryPostOutcome } from './delivery-evidence.js';
 
 function isAbortOrTimeout(error, signal) {
     return signal?.aborted
@@ -26,6 +34,16 @@ function transportFor(route, options = {}) {
     const proxyEligible = transport.proxyEligible;
     const directCors = transport.directCors;
     const allowProxyFallback = transport.allowProxyFallback !== false;
+    // Who chose the initial delivery: browserDeliveryRoute stamps 'auto' when
+    // the «Авто» ladder picked the path, 'explicit-direct'/'explicit-proxy'
+    // when the user ordered it on the card. Absent (routes built outside the
+    // dispatch flow — legacy records, tests) means explicit-direct: behavior
+    // stays exactly as before the oracle existed.
+    const deliveryPolicy = transport.deliveryPolicy === 'auto'
+        || transport.deliveryPolicy === 'explicit-direct'
+        || transport.deliveryPolicy === 'explicit-proxy'
+        ? transport.deliveryPolicy
+        : 'explicit-direct';
     // initialDelivery selects the transport a paid POST takes on its FIRST
     // attempt. 'proxy' is set by `browserDeliveryRoute` when the connection
     // opted into the ST CORS proxy AND the route is JSON-eligible; the request
@@ -62,7 +80,7 @@ function transportFor(route, options = {}) {
         throw new TypeError('Proxy-first delivery requires a JSON route (multipart cannot traverse the ST /proxy/).');
     }
 
-    return { bodyKind, proxyEligible, directCors, allowProxyFallback, noResubmit, initialDelivery };
+    return { bodyKind, proxyEligible, directCors, allowProxyFallback, noResubmit, initialDelivery, deliveryPolicy };
 }
 
 function proxyOptions(options) {
@@ -157,6 +175,12 @@ export async function fetchImageRoute(url, options = {}, route, timeoutMs = 1200
         // A Response, including a 4xx/5xx, proves the direct delivery path worked.
         const response = await fetchWithTimeout(url, wireOptions, timeoutMs);
         if (method === 'POST') recordDiagnosticEvent({ event: 'dispatch-response', stage: diagnostic?.stage || 'stage2', requestId: diagnostic?.requestId || null, attemptId: rootAttemptId, attemptIndex: attemptDiagnostic.attemptIndex, delivery: 'direct', bodyKind: transport.bodyKind, status: response?.status ?? null, outcome: 'response', durationMs: Date.now() - attemptStartedAt });
+        // Delivery fact (2026-09-28): a direct POST answered — the «Авто» ladder
+        // may clear its broken verdict. JSON POSTs only; multipart proves nothing
+        // about the JSON path, and proxy-first dispatches say nothing about it.
+        if (method === 'POST' && transport.bodyKind === 'json' && transport.initialDelivery !== 'proxy') {
+            noteDeliveryPostOutcome({ connId: diagnostic?.connId, endpoint: url, delivery: 'direct', ok: true }).catch(() => {});
+        }
         return response;
     } catch (error) {
         if (isAbortOrTimeout(error, options.signal)) {
@@ -174,9 +198,70 @@ export async function fetchImageRoute(url, options = {}, route, timeoutMs = 1200
         }
 
         if (!isCorsOrNetworkError(error)) throw error;
+
+        // ── Preflight oracle (2026-09-28) ──────────────────────────────────
+        // For an auto-policy JSON POST a CORS/network TypeError is almost
+        // always a preflight refusal: the Authorization/Content-Type headers
+        // force the browser to preflight, and a failed preflight means the
+        // request body never left the browser — so re-dispatching through the
+        // ST /proxy/ is provably free of double-billing. «Almost» is not
+        // «always» (a half-CORS server can pass preflight and then withhold
+        // ACAO from the POST response), so the assumption is verified with a
+        // free OPTIONS probe before the retry instead of being trusted:
+        //   dead   — OPTIONS itself failed or answered a readable non-2xx;
+        //            the automatic preflight would fail the same way → safe.
+        //   alive  — readable 2xx: preflight works, the POST died mid-flight;
+        //            outcome genuinely unknown → ambiguous, no re-send.
+        //   unknown— OPTIONS timed out or aborted → cannot decide → ambiguous.
+        // User cancellation during the probe propagates as AbortError. A known
+        // disabled ST proxy skips the rescue: a guaranteed proxy error helps
+        // nobody, and the ambiguous path at least records the failure.
+        if (method === 'POST' && transport.bodyKind === 'json' && transport.deliveryPolicy === 'auto') {
+            const verdict = await probePreflightDelivery(url, options.signal, timeoutMs);
+            if (verdict === 'dead' && isCorsProxyAvailable() !== false) {
+                const fallbackDiagnostic = {
+                    ...attemptDiagnostic,
+                    attemptId: attemptId(),
+                    attemptIndex: attemptDiagnostic.attemptIndex + 1,
+                    parentAttemptId: attemptDiagnostic.attemptId,
+                    delivery: 'proxy',
+                    phase: 'post',
+                    postDispatchState: 'sent-unknown',
+                };
+                recordDiagnosticEvent({
+                    event: 'dispatch-fallback', stage: diagnostic?.stage || 'stage2',
+                    requestId: diagnostic?.requestId || null, attemptId: fallbackDiagnostic.attemptId,
+                    attemptIndex: fallbackDiagnostic.attemptIndex, parentAttemptId: fallbackDiagnostic.parentAttemptId,
+                    delivery: 'proxy', bodyKind: 'json', outcome: 'dispatching',
+                    details: { reason: 'preflight-oracle' },
+                });
+                // Telemetry for the «Авто» ladder: the direct path is broken
+                // right now — the next generation should go proxy-first
+                // without re-paying for this discovery. Fire-and-forget.
+                if (diagnostic?.connId) {
+                    notePreflightOracleDead(diagnostic.connId, url).catch(() => {});
+                }
+                try {
+                    const fallbackStartedAt = Date.now();
+                    const response = await proxiedFetch(url, proxyOptions(withDiagnostic({ ...options }, fallbackDiagnostic, diagnostic?.role || 'generation', 'json')), timeoutMs);
+                    if (method === 'POST') recordDiagnosticEvent({ event: 'dispatch-response', stage: diagnostic?.stage || 'stage2', requestId: diagnostic?.requestId || null, attemptId: fallbackDiagnostic.attemptId, attemptIndex: fallbackDiagnostic.attemptIndex, parentAttemptId: fallbackDiagnostic.parentAttemptId, delivery: 'proxy', bodyKind: 'json', status: response?.status ?? null, outcome: 'response', durationMs: Date.now() - fallbackStartedAt, details: { reason: 'preflight-oracle' } });
+                    return response;
+                } catch (fallbackError) {
+                    if (method === 'POST') recordDiagnosticEvent({ event: 'dispatch-error', level: 'error', stage: diagnostic?.stage || 'stage2', requestId: diagnostic?.requestId || null, attemptId: fallbackDiagnostic.attemptId, attemptIndex: fallbackDiagnostic.attemptIndex, parentAttemptId: fallbackDiagnostic.parentAttemptId, delivery: 'proxy', bodyKind: 'json', outcome: fallbackError?.name === 'AbortError' ? 'abort' : 'network-unknown', details: { code: fallbackError?.code || null, reason: 'preflight-oracle' } });
+                    throw fallbackError;
+                }
+            }
+        }
+
         if (noResubmit || !transport.allowProxyFallback || !transport.proxyEligible || transport.directCors !== 'preferred') {
             if (method === 'POST') recordDiagnosticEvent({ event: 'dispatch-error', level: 'error', stage: diagnostic?.stage || 'stage2', requestId: diagnostic?.requestId || null, attemptId: rootAttemptId, attemptIndex: attemptDiagnostic.attemptIndex, delivery: 'direct', bodyKind: transport.bodyKind, outcome: 'network-unknown', durationMs: Date.now() - attemptStartedAt, details: { code: 'IMAGE_DELIVERY_AMBIGUOUS' } });
-            throw ambiguousDeliveryError(error);
+            // Delivery fact: the ambiguous outcome is itself the broken-direct
+            // signal for the «Авто» ladder. Recorded here — where the attempt's
+            // true shape is known — never by callers reading plan stamps.
+            if (method === 'POST' && transport.bodyKind === 'json') {
+                noteDeliveryPostOutcome({ connId: diagnostic?.connId, endpoint: url, delivery: 'direct', ok: false }).catch(() => {});
+            }
+            throw ambiguousDeliveryError(error, transport.deliveryPolicy);
         }
 
         const fallbackDiagnostic = {
@@ -212,8 +297,51 @@ function multipartCorsError(cause) {
     return error;
 }
 
-function ambiguousDeliveryError(cause) {
-    const error = new Error('Direct image request failed and its outcome is uncertain; this request will not be resent automatically.', { cause });
+/**
+ * Manual CORS-preflight probe: would the browser's automatic preflight for a
+ * POST to this URL succeed right now? A custom header makes the manual OPTIONS
+ * itself non-simple, so a gateway without generic OPTIONS handling fails it —
+ * exactly what the POST's preflight would do. Never billed; failures here
+ * cost one round trip.
+ *
+ * 'alive' requires a READABLE 2xx (CORS-satisfiable): a bare 200 without ACAO
+ * throws the same opaque TypeError as a dead route. A readable non-2xx means
+ * ACAO is present but the status would still fail the automatic preflight
+ * (browsers require ok) — that is 'dead'. A timeout or user abort must not
+ * decide ('unknown'): transient slowness is not proof of a blocked preflight.
+ *
+ * Exported for the adapter-level dialect chain (image-openai.js): a multipart
+ * edit that died on CORS may be retried as a different wire dialect only when
+ * the same proof exists.
+ *
+ * @param {string} url
+ * @param {AbortSignal|undefined} signal
+ * @param {number} timeoutMs — caller budget; the probe caps itself at 8s
+ * @returns {Promise<'dead'|'alive'|'unknown'>}
+ */
+export async function probePreflightDelivery(url, signal, timeoutMs) {
+    try {
+        const response = await fetchWithTimeout(url, {
+            method: 'OPTIONS',
+            headers: {
+                'Access-Control-Request-Method': 'POST',
+                'Access-Control-Request-Headers': 'authorization, content-type',
+            },
+            ...(signal ? { signal } : {}),
+        }, Math.min(timeoutMs, 8000));
+        return response.ok ? 'alive' : 'dead';
+    } catch (error) {
+        if (signal?.aborted || error?.name === 'AbortError') throw error;
+        if (/Таймаут/.test(error?.message || '')) return 'unknown';
+        return isCorsOrNetworkError(error) ? 'dead' : 'unknown';
+    }
+}
+
+function ambiguousDeliveryError(cause, policy = 'explicit-direct') {
+    const tail = policy === 'auto'
+        ? 'Повторите генерацию (кнопка «Повторить» в ленте очереди) — следующая попытка уйдёт через прокси SillyTavern: прямая доставка помечена нерабочей на ~30 минут.'
+        : 'Доставка ограничена настройкой «Только напрямую» — повтор пойдёт той же дорогой.';
+    const error = new Error(`Прямой запрос к провайдеру не получил ответа (CORS или обрыв связи), и его исход неизвестен — возможно, запрос уже обработан и будет оплачен, поэтому автоматически он не повторяется. ${tail}`, { cause });
     error.code = 'IMAGE_DELIVERY_AMBIGUOUS';
     return error;
 }

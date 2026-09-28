@@ -3,6 +3,9 @@ import { trace } from '../core.js';
 import { summarizeReference } from '../references.js';
 import { endpointBase, imageResultFromValue, providerError, readJsonResponse, referencesFor, requireInvocation, assertEncodedReferenceCount, diagnosticRequestOptions, ASPECT_SIZES } from './image-base.js';
 import { resolveWireGeometry, resolveWireQuality } from '../wire-params.js';
+import { isCorsProxyAvailable } from '../proxy.js';
+import { probePreflightDelivery } from '../image-transport.js';
+import { editDialectHintFor, noteEditDialectOutcome } from '../delivery-evidence.js';
 
 // Map all VALID_ASPECT_RATIOS (core.js) to OpenAI-compatible image sizes. The
 // shared table lives in image-base.js (same vocabulary as Pollinations). The
@@ -254,6 +257,177 @@ function shouldFallbackToProxyJson(error, connection) {
   return error?.code === 'MULTIPART_CORS_REQUIRED' && connection?.useCorsProxy === true;
 }
 
+// ── Edit dialect chain (2026-09-28) ─────────────────────────────────────────
+//
+// References on openai-images travel over /v1/images/edits, and multipart —
+// the classic dialect — is the one wire shape the ST /proxy/ cannot carry.
+// Under the 'auto' delivery policy the adapter walks three dialects and
+// remembers the winner per connection (editDialectEvidence, 30-min window):
+//   1. multipart /edits directly (OpenAI classic);
+//   2. JSON /edits through /proxy/ — for gateways implementing the
+//      application/json variant;
+//   3. /generations + image[] (img2img) through /proxy/ — pure JSON, observed
+//      working on apihub.agnes-ai.com (i2i tasks, 2026-09-28) for gateways
+//      whose /edits is multipart-only server-side.
+// Safety of each hop: 1→2 fires only on a preflight-proven unsent request
+// (OPTIONS oracle); 2→3 fires only after an HTTP response proved the gateway
+// REJECTED the JSON dialect rather than rendering it (auth/quota statuses are
+// not dialect facts and never fall through). Explicit orders are never
+// second-guessed: a pinned editProtocol or an explicit delivery keeps the
+// shipped single-dialect behavior.
+
+/** Auth/quota rejections say nothing about the wire dialect — never fall through on them. */
+function isDialectCandidate(error) {
+  const status = error?.httpStatus;
+  if (!Number.isSafeInteger(status)) return false;
+  return !(status === 401 || status === 402 || status === 403 || status === 429);
+}
+
+function editsExhaustedError(jsonError, imgError) {
+  const describe = (e) => Number.isSafeInteger(e?.httpStatus)
+    ? `HTTP ${e.httpStatus}${e?.message ? ` — ${String(e.message).slice(0, 180)}` : ''}`
+    : String(e?.message || e).slice(0, 180);
+  return providerError(
+    'EDITS_DIALECT_EXHAUSTED',
+    'Референсы на этом шлюзе недоступны из браузера: multipart-редактирование блокирует CORS, ' +
+    `JSON-диалект отвергнут (${describe(jsonError)}), img2img через generations отвергнут (${describe(imgError)}). ` +
+    'Варианты: сгенерировать без референсов, включить CORS у провайдера или использовать шлюз, ' +
+    'принимающий JSON/img2img-редактирование.',
+  );
+}
+
+/**
+ * img2img dialect: /v1/images/generations with the references as a JSON
+ * `image` array of data URLs. Not an OpenAI-standard member — it is the
+ * extension observed on apihub.agnes-ai.com (2026-09-28, i2i tasks) — so it
+ * only ever fires as the last rung of the auto chain, never as a first
+ * attempt.
+ */
+function generationsImageBody(route, request, references) {
+  const body = generationBody(route, request);
+  body.image = references.map(ref => ref.dataUrl);
+  return body;
+}
+
+function sendGenerationsImageEdit({ endpoint, route, request, references, transport, headers, signal, connection, diagnostic }) {
+  if (request && typeof request === 'object') {
+    request.editDialect = 'img2img';
+    request.delivery = 'proxy';
+  }
+  const geometry = wireGeometry(route, request);
+  const quality = wireQuality(route, request?.quality);
+  const payload = generationsImageBody(route, request, references);
+  const proxyRoute = {
+    ...route,
+    transport: { ...route.transport, initialDelivery: 'proxy', noResubmit: true, allowProxyFallback: false },
+  };
+  return transport.requestJson(
+    generationUrl(endpoint),
+    diagnosticRequestOptions(
+      { method: 'POST', headers: { ...headers, 'Content-Type': 'application/json' }, body: JSON.stringify(payload), signal },
+      diagnostic,
+      { bodyKind: 'json', attempt: 'img2img-fallback', wireFields: ['model', 'prompt', 'n', 'image', ...(payload.size ? ['size'] : []), ...(payload.quality ? ['quality'] : [])] },
+    ),
+    proxyRoute,
+    connection.timeoutMs,
+  );
+}
+
+/**
+ * Run one openai-images edit with references through the dialect chain.
+ * Returns the parsed provider payload; throws when every allowed dialect is
+ * exhausted (EDITS_DIALECT_EXHAUSTED) or on the first non-dialect error.
+ */
+async function dispatchEditWithDialectChain({ endpoint, route, request, references, transport, headers, signal, connection, diagnostic }) {
+  const auto = route?.transport?.deliveryPolicy === 'auto';
+  const note = (dialect, ok, rejectKind = null) => {
+    if (!diagnostic?.connId) return;
+    noteEditDialectOutcome({ connId: diagnostic.connId, endpoint, dialect, ok, rejectKind }).catch(() => {});
+  };
+  const readParsed = async response => ({ ...parse(await readJsonResponse(response, 'OpenAI Images')), warnings: paramWarnings(route, request) });
+  const runJsonLeg = async () => {
+    const parsed = await readParsed(await sendJsonEdit({ endpoint, route, request, references, transport, headers, signal, connection, diagnostic, proxyFirst: true }));
+    note('json', true);
+    return parsed;
+  };
+  const runImg2imgLeg = async previousError => {
+    try {
+      const parsed = await readParsed(await sendGenerationsImageEdit({ endpoint, route, request, references, transport, headers, signal, connection, diagnostic }));
+      note('img2img', true);
+      return parsed;
+    } catch (imgError) {
+      // Оборачиваем только HTTP-отказ (диалект отвергнут). Сетевой сбой или
+      // «200 без картинки» — честная ошибка самого img2img, не «диалекты
+      // исчерпаны».
+      if (!Number.isSafeInteger(imgError?.httpStatus)) throw imgError;
+      throw editsExhaustedError(previousError, imgError);
+    }
+  };
+
+  // Явный JSON-пин — shipped поведение без цепочки.
+  if (editProtocol(connection) === 'json') {
+    return await readParsed(await sendJsonEdit({ endpoint, route, request, references, transport, headers, signal, connection, diagnostic }));
+  }
+
+  const hint = auto ? editDialectHintFor(connection) : null;
+  // Опыт: img2img принимается — сразу он, без пересмотра мёртвых диалектов.
+  if (hint === 'img2img-proxy') {
+    return await readParsed(await sendGenerationsImageEdit({ endpoint, route, request, references, transport, headers, signal, connection, diagnostic }))
+      .then(parsed => { note('img2img', true); return parsed; });
+  }
+  // Опыт: JSON принимается — сразу JSON proxy-first; отвергнут → img2img.
+  if (hint === 'json-proxy') {
+    try {
+      return await runJsonLeg();
+    } catch (jsonError) {
+      if (!isDialectCandidate(jsonError)) throw jsonError;
+      return await runImg2imgLeg(jsonError);
+    }
+  }
+
+  // (1) multipart напрямую — классика OpenAI.
+  if (request && typeof request === 'object') request.editDialect = 'multipart';
+  const form = formData(route, request, references);
+  const encodedReferences = typeof form.getAll === 'function' ? form.getAll('image').length : references.length;
+  assertEncodedReferenceCount(references.length, encodedReferences, 'openai-multipart-images');
+  let multipartResponse;
+  try {
+    multipartResponse = await transport.requestMultipart(editUrl(endpoint), diagnosticRequestOptions({ method: 'POST', headers, body: form, signal }, diagnostic, { bodyKind: 'multipart', wireFields: ['model', 'prompt', 'n', 'image', ...(form.get('size') ? ['size'] : []), ...(form.get('quality') ? ['quality'] : []), ...(form.get('input_fidelity') ? ['input_fidelity'] : [])] }), route, connection.timeoutMs);
+  } catch (error) {
+    // Shipped путь: явный прокси-консент → JSON proxy-first (без оракула —
+    // историческое предположение «preflight-фейл = ничего не ушло»).
+    if (shouldFallbackToProxyJson(error, connection)) {
+      if (request && typeof request === 'object') request.delivery = 'proxy';
+      trace('openai-images: multipart blocked by preflight, retrying as JSON via proxy', {
+        rid: String(request?.requestId || '').slice(0, 8),
+        model: route.modelId,
+        op: 'edit-json-fallback',
+        refs: (request?.references || []).map(summarizeReference),
+      });
+      return await runJsonLeg();
+    }
+    if (error?.code !== 'MULTIPART_CORS_REQUIRED' || !auto) throw error;
+    // auto: доказываем «запрос не ушёл», прежде чем менять диалект.
+    const verdict = await probePreflightDelivery(editUrl(endpoint), signal, connection.timeoutMs ?? 120000);
+    if (verdict === 'alive') {
+      // Preflight живой: POST мог доехать и отрисоваться — исход неизвестен.
+      throw providerError('IMAGE_DELIVERY_AMBIGUOUS', 'Прямой multipart-запрос редактирования не получил ответа (CORS или обрыв связи), и его исход неизвестен — возможно, запрос уже обработан и будет оплачен, поэтому автоматически он не повторяется. Повторите генерацию или выберите «Редактирование: JSON» на карточке подключения.');
+    }
+    if (verdict !== 'dead' || isCorsProxyAvailable() === false) throw error;
+    note('multipart', false, 'preflight');
+    // (2) JSON /edits через прокси.
+    try {
+      return await runJsonLeg();
+    } catch (jsonError) {
+      if (!isDialectCandidate(jsonError)) throw jsonError;
+      // (3) generations + image через прокси.
+      return await runImg2imgLeg(jsonError);
+    }
+  }
+  note('multipart', true);
+  return await readParsed(multipartResponse);
+}
+
 /**
  * Warnings for parameters this API cannot carry: an aspect ratio the manifest
  * and the static table both refuse, or a quality value the model does not
@@ -293,43 +467,13 @@ export async function generateOpenAIImage(input) {
     refs: (request?.references || []).map(summarizeReference),
   });
   const headers = { Authorization: `Bearer ${apiKey}` };
-  let response;
   if (references.length) {
-    if (editProtocol(connection) === 'json') {
-      response = await sendJsonEdit({ endpoint, route, request, references, transport, headers, signal, connection, diagnostic });
-    } else {
-      // Multipart edit. When the direct multipart POST dies on the browser
-      // preflight (provider sends no CORS headers) and the connection opted
-      // into the ST CORS proxy, retry ONCE as JSON through /proxy/. Safe by
-      // construction: MULTIPART_CORS_REQUIRED means the body never reached the
-      // provider, so nothing was billed; the JSON retry then goes proxy-first
-      // with noResubmit, so there is exactly one paid attempt total.
-      if (request && typeof request === 'object') request.editDialect = 'multipart';
-      const form = formData(route, request, references);
-      const encodedReferences = typeof form.getAll === 'function' ? form.getAll('image').length : references.length;
-      assertEncodedReferenceCount(references.length, encodedReferences, 'openai-multipart-images');
-      try {
-        response = await transport.requestMultipart(editUrl(endpoint), diagnosticRequestOptions({ method: 'POST', headers, body: form, signal }, diagnostic, { bodyKind: 'multipart', wireFields: ['model', 'prompt', 'n', 'image', ...(form.get('size') ? ['size'] : []), ...(form.get('quality') ? ['quality'] : []), ...(form.get('input_fidelity') ? ['input_fidelity'] : [])] }), route, connection.timeoutMs);
-      } catch (error) {
-        if (!shouldFallbackToProxyJson(error, connection)) throw error;
-        // The JSON retry goes through /proxy/ (proxy-first) — stamp the actual
-        // delivery so the observer log reads edit-json / proxy, not the
-        // pre-dispatch plan (edit-multipart / direct). sendJsonEdit below
-        // re-stamps editDialect to 'json'.
-        if (request && typeof request === 'object') request.delivery = 'proxy';
-        trace('openai-images: multipart blocked by preflight, retrying as JSON via proxy', {
-          rid: String(request?.requestId || '').slice(0, 8),
-          model: route.modelId,
-          op: 'edit-json-fallback',
-          refs: (request?.references || []).map(summarizeReference),
-        });
-        response = await sendJsonEdit({ endpoint, route, request, references, transport, headers, signal, connection, diagnostic, proxyFirst: true });
-      }
-    }
-  } else {
-    const geometry = wireGeometry(route, request);
-    const payload = generationBody(route, request, geometry);
-    response = await transport.requestJson(generationUrl(endpoint), diagnosticRequestOptions({ method: 'POST', headers: { ...headers, 'Content-Type': 'application/json' }, body: JSON.stringify(payload), signal }, diagnostic, { bodyKind: 'json', parameterSource: geometry.source, wireFields: ['model', 'prompt', 'n', ...(payload.size ? ['size'] : []), ...(payload.aspect_ratio ? ['aspect_ratio'] : []), ...(payload.quality ? ['quality'] : [])] }), route, connection.timeoutMs);
+    // Цепочка диалектов редактирования (multipart → JSON → img2img) — уже
+    // возвращает разобранный payload с warnings.
+    return await dispatchEditWithDialectChain({ endpoint, route, request, references, transport, headers, signal, connection, diagnostic });
   }
+  const geometry = wireGeometry(route, request);
+  const payload = generationBody(route, request, geometry);
+  const response = await transport.requestJson(generationUrl(endpoint), diagnosticRequestOptions({ method: 'POST', headers: { ...headers, 'Content-Type': 'application/json' }, body: JSON.stringify(payload), signal }, diagnostic, { bodyKind: 'json', parameterSource: geometry.source, wireFields: ['model', 'prompt', 'n', ...(payload.size ? ['size'] : []), ...(payload.aspect_ratio ? ['aspect_ratio'] : []), ...(payload.quality ? ['quality'] : [])] }), route, connection.timeoutMs);
   return { ...parse(await readJsonResponse(response, 'OpenAI Images')), warnings: paramWarnings(route, request) };
 }
