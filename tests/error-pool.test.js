@@ -5,6 +5,9 @@ import {
     listUrisErrors,
     clearUrisErrors,
     formatUrisError,
+    markUrisErrorsSeen,
+    countUnreadUrisErrors,
+    hasUnreadHardUrisErrors,
 } from '../src/error-pool.js';
 
 test.beforeEach(() => {
@@ -92,4 +95,60 @@ test('dedup keeps post number in the key: same post collapses, different post do
     assert.notEqual(a, c);
     assert.equal(listUrisErrors().length, 2);
     assert.equal(c.context.post, 2);
+});
+
+test('level is stored only when warn', () => {
+    const warn = recordUrisError({ scope: 'Провайдер', message: 'aspect adjusted', level: 'warn' });
+    const hard = recordUrisError({ scope: 'Генерация', message: 'boom' });
+    assert.equal(warn.level, 'warn');
+    assert.equal('level' in hard, false);
+});
+
+test('unread counts entries recorded after the last markUrisErrorsSeen', () => {
+    recordUrisError({ message: 'one' });
+    recordUrisError({ message: 'two' });
+    assert.equal(countUnreadUrisErrors(), 2);
+
+    markUrisErrorsSeen();
+    assert.equal(countUnreadUrisErrors(), 0);
+
+    recordUrisError({ message: 'three' });
+    assert.equal(countUnreadUrisErrors(), 1);
+});
+
+test('dedupe bump makes a seen entry unread again', () => {
+    const entry = recordUrisError({ message: 'flaky' });
+    markUrisErrorsSeen();
+    assert.equal(countUnreadUrisErrors(), 0);
+
+    const bumped = recordUrisError({ message: 'flaky' });
+    assert.equal(bumped, entry);
+    assert.equal(countUnreadUrisErrors(), 1);
+});
+
+test('quiet entries never count as unread', () => {
+    recordUrisError({ message: 'provider hint', quiet: true });
+    assert.equal(countUnreadUrisErrors(), 0);
+    assert.equal(hasUnreadHardUrisErrors(), false);
+});
+
+test('hard flag distinguishes warn rows from errors', () => {
+    recordUrisError({ message: 'aspect adjusted', level: 'warn' });
+    assert.equal(countUnreadUrisErrors(), 1);
+    assert.equal(hasUnreadHardUrisErrors(), false);
+
+    recordUrisError({ message: 'boom' });
+    assert.equal(hasUnreadHardUrisErrors(), true);
+
+    markUrisErrorsSeen();
+    assert.equal(hasUnreadHardUrisErrors(), false);
+});
+
+test('clearUrisErrors resets the seen baseline', () => {
+    recordUrisError({ message: 'old' });
+    markUrisErrorsSeen();
+    clearUrisErrors();
+
+    recordUrisError({ message: 'fresh' });
+    assert.equal(countUnreadUrisErrors(), 1);
 });
