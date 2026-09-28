@@ -93,19 +93,23 @@ export function enqueueGeneration(item) {
         // retry-снапшот для кнопки «Повторить» в ленте: поля пересборки item.
         // messageText для обычного поста сюда не попадает (item его не хранит) —
         // resubmitQueueRow читает живой чат, чтобы хэш-гвард осталась честной;
-        // студийный текст сцены хранится в самом item.
+        // студийный текст сцены хранится в самом item. Тот же снапшот получает
+        // строка авто-повтора (autoRetryAmbiguous), если задача упадёт доставкой.
+        const retrySnapshot = Object.freeze({
+            chatId: item.chatId,
+            msgId: item.msgId,
+            messageText: item.messageText ?? '',
+            templateId: item.templateId,
+            submission: item.submission,
+        });
         noteQueued({
             id: entry.queueId,
             label: queueLabel(item),
             lane: 'queue',
-            retry: Object.freeze({
-                chatId: item.chatId,
-                msgId: item.msgId,
-                messageText: item.messageText ?? '',
-                templateId: item.templateId,
-                submission: item.submission,
-            }),
+            retry: retrySnapshot,
         });
+        state.queueRetrySnapshots = state.queueRetrySnapshots || new Map();
+        state.queueRetrySnapshots.set(entry.queueId, retrySnapshot);
         processQueue();
     });
 }
@@ -177,6 +181,28 @@ async function processQueue() {
                     // cancel (abortGeneration on this item's ownController) does
                     // not, so the queue continues with the next item.
                     if (state.queueAbort?.signal.aborted) break;
+                    continue;
+                }
+                // Opt-in auto-retry (2026-09-28): one automatic resubmission for
+                // IMAGE_DELIVERY_AMBIGUOUS only. By then the «Авто» ladder has
+                // recorded the broken direct path, so the retry goes through the
+                // ST proxy with no doomed direct attempt. Strictly once per item
+                // (retriedAmbiguous marker), queue-lane only (these carry the
+                // resubmit snapshot), and never for user aborts.
+                const { autoRetryAmbiguous } = state.settings;
+                if (autoRetryAmbiguous === true && e?.code === 'IMAGE_DELIVERY_AMBIGUOUS' && item.retriedAmbiguous !== true) {
+                    const retriedItem = { ...item, retriedAmbiguous: true };
+                    const retryQueueId = uid();
+                    state.queue.push({ item: retriedItem, resolve, reject, queueId: retryQueueId });
+                    noteFinished(queueId, 'error', `${e.message || ''} · авто-повтор поставлен в очередь`.trim());
+                    // Строке авто-повтора — тот же снапшот «Повторить»: если
+                    // откажется и она, у пользователя останется ручная кнопка.
+                    noteQueued({ id: retryQueueId, label: `${queueLabel(item)} · авто-повтор`, lane: 'queue', retry: state.queueRetrySnapshots?.get(queueId) || null });
+                    state.queueRetrySnapshots?.delete(queueId);
+                    recordDiagnosticEvent({
+                        event: 'queue-auto-retry', stage: 'queue', chatHash: hashDiagnosticId(item.chatId), msgId: item.msgId,
+                        details: { reason: 'IMAGE_DELIVERY_AMBIGUOUS', retryQueueId },
+                    });
                     continue;
                 }
                 error('Q item failed:', e.message);

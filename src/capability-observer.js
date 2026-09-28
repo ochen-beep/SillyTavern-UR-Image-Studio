@@ -152,6 +152,8 @@ export function classifyOperation(route, request, connection = {}) {
 const NETWORK_ERROR_CODES = new Set([
   'MULTIPART_CORS_REQUIRED',
   'IMAGE_DELIVERY_AMBIGUOUS',
+  // Текстовый собрат (proxy.js autoFetch) — единая семантика «исход неизвестен».
+  'DELIVERY_AMBIGUOUS',
   'CATALOG_CORS_BLOCK',
   // The ST /proxy/ itself is off or unreachable (proxy.js). Delivery failure,
   // not materialize: classifying it as "generation succeeded, storage failed"

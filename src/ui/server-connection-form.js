@@ -71,20 +71,22 @@ function ageLabel(iso) {
 
 function factsLine(draft) {
     const detected = draft?.detected;
-    if (!detected?.checkedAt) return 'Не проверено — нажмите «Проверить»';
-    const auth = detected.auth === 'x-goog-api-key' ? 'x-goog-api-key'
-        : detected.auth === 'pollinations-sk' ? 'Pollinations sk_'
-            : detected.auth === 'pollinations-public' ? 'публичный каталог'
-                : detected.auth === 'naistera-bearer' ? 'Naistera токен'
-                    : 'Bearer';
-    const delivery = detected.delivery === 'proxy' ? 'через прокси ST' : 'без прокси';
-    const count = Array.isArray(detected.modelIds) ? detected.modelIds.length : 0;
-    const imageCount = modelPartition(draft).imageModels.length;
-    const modelsLabel = imageCount > 0
-        ? `${imageCount} image-модел${imageCount % 10 === 1 && imageCount % 100 !== 11 ? 'ь' : 'ей'}${count > imageCount ? ` из ${count}` : ''}`
-        : `${count} модел${count % 10 === 1 && count % 100 !== 11 ? 'ь' : 'ей'} (image не распознаны)`;
-    const age = ageLabel(detected.checkedAt);
-    const parts = [`✓ Подключено · ${modelsLabel} · ${auth} · ${delivery}`];
+    const parts = [];
+    if (detected?.checkedAt) {
+        const auth = detected.auth === 'x-goog-api-key' ? 'x-goog-api-key'
+            : detected.auth === 'pollinations-sk' ? 'Pollinations sk_'
+                : detected.auth === 'pollinations-public' ? 'публичный каталог'
+                    : detected.auth === 'naistera-bearer' ? 'Naistera токен'
+                        : 'Bearer';
+        const delivery = detected.delivery === 'proxy' ? 'через прокси ST' : 'без прокси';
+        const count = Array.isArray(detected.modelIds) ? detected.modelIds.length : 0;
+        const imageCount = modelPartition(draft).imageModels.length;
+        const modelsLabel = imageCount > 0
+            ? `${imageCount} image-модел${imageCount % 10 === 1 && imageCount % 100 !== 11 ? 'ь' : 'ей'}${count > imageCount ? ` из ${count}` : ''}`
+            : `${count} модел${count % 10 === 1 && count % 100 !== 11 ? 'ь' : 'ей'} (image не распознаны)`;
+        const age = ageLabel(detected.checkedAt);
+        parts.push([`✓ Подключено · ${modelsLabel} · ${auth} · ${delivery}`, detected.generationUnverified === true ? 'генерация не проверена' : '', detected.partial === true ? 'каталог получен частично — поток оборвался' : '', age ? `проверено ${age}` : ''].filter(Boolean).join(' · '));
+    }
     // POST-доставка (опыт реальных генераций) может расходиться с GET-фактом
     // пробы: шлюз отвечает на прямой GET каталога, но режет прямой POST.
     // Показываем только активный «сломан» — тихий прямой успех фактом не является.
@@ -95,12 +97,10 @@ function factsLine(draft) {
     const editHint = editDialectHintFor(draft);
     if (editHint === 'img2img-proxy') parts.push('Редактирование: авто→generations+image');
     else if (editHint === 'json-proxy') parts.push('Редактирование: авто→JSON через прокси');
-    if (detected.generationUnverified === true) parts.push('генерация не проверена');
-    if (detected.partial === true) parts.push('каталог получен частично — поток оборвался');
     const evidence = draft?.model?.id ? draft.evidence?.[draft.model.id] : null;
     if (evidence?.refs === 'confirmed') parts.push(`референсы: подтверждены${Number.isInteger(evidence.n) ? ` (${evidence.n})` : ''}`);
     else if (evidence?.refs === 'rejected') parts.push(`референсы: отклонены${evidence.reason ? ` — ${evidence.reason}` : ''}`);
-    if (age) parts.push(`проверено ${age}`);
+    if (!parts.length) return 'Не проверено — нажмите «Проверить»';
     return parts.join(' · ');
 }
 
@@ -286,8 +286,10 @@ function collectSavePayload(draft) {
         // Probe facts and per-model evidence survive card edits.
         detected: draft.detected || null,
         evidence: draft.evidence || {},
-        deliveryEvidence: draft.deliveryEvidence || null,
-        editDialectEvidence: draft.editDialectEvidence || null,
+        // Опыт доставки/диалекта живёт браузер-локально (delivery-evidence.js);
+        // null вычищает легаси-поля старых записей при следующем сохранении.
+        deliveryEvidence: null,
+        editDialectEvidence: null,
         // The v2 card no longer persists discovered route lists; detected.
         // modelIds is the single source for the model dropdown.
         routes: [],
@@ -425,10 +427,8 @@ export function bindServerConnectionForm(form, draft, dependencies = {}) {
     form.querySelector('.uris-server-forget')?.addEventListener('click', async () => {
         draft.detected = null;
         draft.evidence = {};
-        draft.deliveryEvidence = null;
-        draft.editDialectEvidence = null;
-        // Сброс и памяти доставки (в т.ч. in-memory кэшей модулей опыта) —
-        // следующая генерация заново исследует прямую доставку и диалекты.
+        // Сброс и браузер-локальной памяти доставки/диалекта — следующая
+        // генерация заново исследует прямую доставку и диалекты с чистого листа.
         await clearDeliveryEvidenceFor(draft.id);
         try {
             await update(collectSavePayload(draft));

@@ -226,7 +226,7 @@ function sendJsonEdit({ endpoint, route, request, references, transport, headers
   const proxyRoute = proxyFirst
     ? {
         ...route,
-        transport: { ...route.transport, initialDelivery: 'proxy', noResubmit: true, allowProxyFallback: false },
+        transport: { ...route.transport, initialDelivery: 'proxy' },
       }
     : route;
   return transport.requestJson(
@@ -319,7 +319,7 @@ function sendGenerationsImageEdit({ endpoint, route, request, references, transp
   const payload = generationsImageBody(route, request, references);
   const proxyRoute = {
     ...route,
-    transport: { ...route.transport, initialDelivery: 'proxy', noResubmit: true, allowProxyFallback: false },
+    transport: { ...route.transport, initialDelivery: 'proxy' },
   };
   return transport.requestJson(
     generationUrl(endpoint),
@@ -330,6 +330,15 @@ function sendGenerationsImageEdit({ endpoint, route, request, references, transp
     ),
     proxyRoute,
     connection.timeoutMs,
+  );
+}
+
+function ambiguousMultipartEditError() {
+  return providerError(
+    'IMAGE_DELIVERY_AMBIGUOUS',
+    'Прямой multipart-запрос редактирования не получил ответа (CORS или обрыв связи), и его исход неизвестен — ' +
+    'возможно, запрос уже обработан и будет оплачен, поэтому автоматически он не повторяется. ' +
+    'Повторите генерацию или выберите «Редактирование: JSON» на карточке подключения.',
   );
 }
 
@@ -394,9 +403,12 @@ async function dispatchEditWithDialectChain({ endpoint, route, request, referenc
   try {
     multipartResponse = await transport.requestMultipart(editUrl(endpoint), diagnosticRequestOptions({ method: 'POST', headers, body: form, signal }, diagnostic, { bodyKind: 'multipart', wireFields: ['model', 'prompt', 'n', 'image', ...(form.get('size') ? ['size'] : []), ...(form.get('quality') ? ['quality'] : []), ...(form.get('input_fidelity') ? ['input_fidelity'] : [])] }), route, connection.timeoutMs);
   } catch (error) {
-    // Shipped путь: явный прокси-консент → JSON proxy-first (без оракула —
-    // историческое предположение «preflight-фейл = ничего не ушло»).
+    // Shipped путь: явный прокси-консент → JSON proxy-first. С 2026-09-28
+    // через тот же оракул, что и auto-цепочка: единый стандарт доказательства
+    // «multipart не ушёл» вместо исторического предположения.
     if (shouldFallbackToProxyJson(error, connection)) {
+      const verdict = await probePreflightDelivery(editUrl(endpoint), signal, connection.timeoutMs ?? 120000);
+      if (verdict !== 'dead' || isCorsProxyAvailable() === false) throw ambiguousMultipartEditError();
       if (request && typeof request === 'object') request.delivery = 'proxy';
       trace('openai-images: multipart blocked by preflight, retrying as JSON via proxy', {
         rid: String(request?.requestId || '').slice(0, 8),
@@ -411,7 +423,7 @@ async function dispatchEditWithDialectChain({ endpoint, route, request, referenc
     const verdict = await probePreflightDelivery(editUrl(endpoint), signal, connection.timeoutMs ?? 120000);
     if (verdict === 'alive') {
       // Preflight живой: POST мог доехать и отрисоваться — исход неизвестен.
-      throw providerError('IMAGE_DELIVERY_AMBIGUOUS', 'Прямой multipart-запрос редактирования не получил ответа (CORS или обрыв связи), и его исход неизвестен — возможно, запрос уже обработан и будет оплачен, поэтому автоматически он не повторяется. Повторите генерацию или выберите «Редактирование: JSON» на карточке подключения.');
+      throw ambiguousMultipartEditError();
     }
     if (verdict !== 'dead' || isCorsProxyAvailable() === false) throw error;
     note('multipart', false, 'preflight');

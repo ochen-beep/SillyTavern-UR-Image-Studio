@@ -231,18 +231,45 @@ test('chain: explicit-direct policy keeps the shipped single multipart attempt',
   } finally { /* no fetch mock to restore */ }
 });
 
-test('chain: shipped explicit-proxy fallback still works and is unchanged', async () => {
+test('chain: shipped explicit-proxy fallback goes through the same oracle (dead → JSON proxy)', async () => {
   const transport = scriptedTransport((url, options, kind) => {
     if (kind === 'multipart') throw Object.assign(new TypeError('Failed to fetch'), { code: 'MULTIPART_CORS_REQUIRED' });
     if (url.endsWith('/images/edits')) return jsonResponse({ data: [{ b64_json: 'c2hpcA==' }] });
     throw new Error(`unexpected ${url}`);
   });
-  const result = await invokeImageProvider({
-    endpoint: 'https://gw.example', apiKey: 'k', connection: connection({ useCorsProxy: true }),
-    route: route({ transport: { deliveryPolicy: 'explicit-proxy' } }), request: request(), transport,
+  const restore = mockFetch((_url, options) => {
+    if (options?.method === 'OPTIONS') throw new TypeError('Failed to fetch');
+    throw new Error('unexpected direct fetch');
   });
-  assert.equal(result.value, 'data:image/png;base64,c2hpcA==');
-  assert.deepEqual(transport.calls.map(c => c.kind), ['multipart', 'json'], 'исторический фолбэк без оракула сохранён');
+  try {
+    const result = await invokeImageProvider({
+      endpoint: 'https://gw.example', apiKey: 'k', connection: connection({ useCorsProxy: true }),
+      route: route({ transport: { deliveryPolicy: 'explicit-proxy' } }), request: request(), transport,
+    });
+    assert.equal(result.value, 'data:image/png;base64,c2hpcA==');
+    assert.deepEqual(transport.calls.map(c => c.kind), ['multipart', 'json'], 'исторический фолбэк сохранён, но за оракулом');
+  } finally { restore(); }
+});
+
+test('chain: shipped explicit-proxy fallback refuses when the oracle cannot prove non-delivery', async () => {
+  const transport = scriptedTransport((url, options, kind) => {
+    if (kind === 'multipart') throw Object.assign(new TypeError('Failed to fetch'), { code: 'MULTIPART_CORS_REQUIRED' });
+    throw new Error(`unexpected ${url}`);
+  });
+  const restore = mockFetch((_url, options) => {
+    if (options?.method === 'OPTIONS') return { ok: true, status: 200 };
+    throw new Error('unexpected direct fetch');
+  });
+  try {
+    await assert.rejects(
+      () => invokeImageProvider({
+        endpoint: 'https://gw.example', apiKey: 'k', connection: connection({ useCorsProxy: true }),
+        route: route({ transport: { deliveryPolicy: 'explicit-proxy' } }), request: request(), transport,
+      }),
+      error => error?.code === 'IMAGE_DELIVERY_AMBIGUOUS' && /multipart/.test(error.message),
+    );
+    assert.deepEqual(transport.calls.map(c => c.kind), ['multipart'], 'alive-оракул запрещает смену диалекта и для явной галочки');
+  } finally { restore(); }
 });
 
 test('chain: img2img body keeps geometry and omits input_fidelity', async () => {

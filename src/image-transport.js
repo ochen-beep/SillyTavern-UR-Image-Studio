@@ -3,15 +3,18 @@
  * Route-scoped browser transport for image requests.
  *
  * This module deliberately does not cache delivery strategy or modify the
- * persisted route. A paid image POST gets one direct request; explicitly safe
- * JSON routes may use proxy fallback after a no-response CORS/network failure.
- * The one exception is the preflight oracle below: for an auto-policy JSON
- * POST a CORS-masked failure is almost always a preflight refusal (nothing was
- * sent), and instead of assuming that — the way image-openai.js's multipart→JSON
- * fallback does — the oracle verifies it with a free OPTIONS probe and only
- * then re-dispatches through /proxy/. Delivery experience recording goes
- * through delivery-evidence.js as fire-and-forget telemetry, the same category
- * as recordDiagnosticEvent: the transport itself stays stateless.
+ * persisted route. A paid image POST gets one direct request; after a
+ * CORS/network failure there is exactly one safe escalation — the preflight
+ * oracle: for an auto-policy JSON POST a CORS-masked failure is almost always
+ * a preflight refusal (nothing was sent), and the oracle verifies that with a
+ * free OPTIONS probe before re-dispatching through /proxy/. Anything less
+ * provable throws the typed ambiguous error; delivery experience recording
+ * goes through delivery-evidence.js as fire-and-forget telemetry, the same
+ * category as recordDiagnosticEvent: the transport itself stays stateless.
+ * (2026-09-28 cleanup: the legacy proxyEligible/allowProxyFallback/noResubmit
+ * route flags and the never-reachable GET proxy fallback were removed —
+ * downloads go through autoFetch, catalogs through catalogRequest, and no
+ * adapter ever issued a JSON GET through this transport.)
  */
 import { fetchWithTimeout, getCtx, trace } from './core.js'
 import { recordDiagnosticEvent } from './diagnostic-events.js';
@@ -31,9 +34,7 @@ function transportFor(route, options = {}) {
     }
 
     const bodyKind = transport.bodyKind;
-    const proxyEligible = transport.proxyEligible;
     const directCors = transport.directCors;
-    const allowProxyFallback = transport.allowProxyFallback !== false;
     // Who chose the initial delivery: browserDeliveryRoute stamps 'auto' when
     // the «Авто» ladder picked the path, 'explicit-direct'/'explicit-proxy'
     // when the user ordered it on the card. Absent (routes built outside the
@@ -46,41 +47,32 @@ function transportFor(route, options = {}) {
         : 'explicit-direct';
     // initialDelivery selects the transport a paid POST takes on its FIRST
     // attempt. 'proxy' is set by `browserDeliveryRoute` when the connection
-    // opted into the ST CORS proxy AND the route is JSON-eligible; the request
-    // is dispatched through /proxy/ immediately, with no direct attempt, so
-    // there is no ambiguous "did the POST reach the provider?" state to
-    // reason about. Multipart routes can never go proxy-first (the ST /proxy/
-    // is JSON-only).
+    // opted into the ST CORS proxy (or «Авто» learned it) AND the route is
+    // JSON-eligible; the request is dispatched through /proxy/ immediately,
+    // with no direct attempt, so there is no ambiguous "did the POST reach
+    // the provider?" state to reason about. Multipart routes can never go
+    // proxy-first (the ST /proxy/ is JSON-only).
     const initialDelivery = transport.initialDelivery === 'proxy' ? 'proxy' : 'direct';
-    // This marker belongs to dispatch intent, not route discovery policy. A
-    // browser-paid POST is never eligible for a second delivery attempt.
     const method = String(options.method || 'GET').toUpperCase();
-    const noResubmit = method === 'POST'
-        || route?.noResubmit === true
-        || transport.noResubmit === true;
 
     if (bodyKind !== 'json' && bodyKind !== 'multipart') {
         throw new TypeError('Image routes require transport.bodyKind to be json or multipart.');
     }
-    if (typeof proxyEligible !== 'boolean' || typeof directCors !== 'string') {
-        throw new TypeError('JSON routes require explicit proxyEligible and directCors transport metadata.');
+    if (typeof directCors !== 'string') {
+        throw new TypeError('Image routes require explicit directCors transport metadata.');
     }
 
-    if (bodyKind === 'multipart' && (proxyEligible || directCors !== 'required')) {
+    if (bodyKind === 'multipart' && directCors !== 'required') {
         throw new TypeError('Multipart routes require direct CORS and cannot use the proxy.');
     }
-    // Proxy-first delivery is an explicit user choice for the FIRST attempt
-    // (connection useCorsProxy + JSON route). It must NOT be gated by the
-    // route's `proxyEligible` flag, because catalog.js marks every route
-    // proxyEligible:false to block the automatic direct->proxy fallback -
-    // that protection belongs to the failure-retry branch below, not to the
-    // initial delivery decision. The only hard constraint is bodyKind:json
-    // (the ST /proxy/ is JSON-only and cannot forward multipart).
+    // Proxy-first delivery is a user opt-in or a learned «Авто» decision for
+    // the FIRST attempt. The only hard constraint is bodyKind:json (the ST
+    // /proxy/ is JSON-only and cannot forward multipart).
     if (initialDelivery === 'proxy' && bodyKind !== 'json') {
         throw new TypeError('Proxy-first delivery requires a JSON route (multipart cannot traverse the ST /proxy/).');
     }
 
-    return { bodyKind, proxyEligible, directCors, allowProxyFallback, noResubmit, initialDelivery, deliveryPolicy };
+    return { bodyKind, directCors, initialDelivery, deliveryPolicy, method };
 }
 
 function proxyOptions(options) {
@@ -109,12 +101,12 @@ function withDiagnostic(options, diagnostic, role = 'generation', bodyKind = nul
 }
 
 /**
- * Fetch an image route directly, using the SillyTavern proxy only for an
- * eligible JSON route after a direct browser network/CORS failure.
+ * Fetch an image route directly; the only escalation after a CORS/network
+ * failure is the preflight-oracle rescue for auto-policy JSON POSTs.
  *
  * @param {string} url
  * @param {RequestInit & { signal?: AbortSignal }} [options]
- * @param {{ transport?: { bodyKind?: string, proxyEligible?: boolean, directCors?: string } }} route
+ * @param {{ transport?: { bodyKind?: string, directCors?: string } }} route
  * @param {number} [timeoutMs=120000]
  * @returns {Promise<Response>}
  */
@@ -132,7 +124,6 @@ export async function fetchImageRoute(url, options = {}, route, timeoutMs = 1200
         postDispatchState: 'sent-unknown',
     };
     const wireOptions = withDiagnostic({ ...options }, attemptDiagnostic, diagnostic?.role || (method === 'POST' ? 'generation' : 'download'), transport.bodyKind);
-    const noResubmit = method === 'POST' || transport.noResubmit;
     if (method === 'POST') {
         recordDiagnosticEvent({
             event: 'dispatch-attempt', stage: diagnostic?.stage || 'stage2',
@@ -253,41 +244,15 @@ export async function fetchImageRoute(url, options = {}, route, timeoutMs = 1200
             }
         }
 
-        if (noResubmit || !transport.allowProxyFallback || !transport.proxyEligible || transport.directCors !== 'preferred') {
-            if (method === 'POST') recordDiagnosticEvent({ event: 'dispatch-error', level: 'error', stage: diagnostic?.stage || 'stage2', requestId: diagnostic?.requestId || null, attemptId: rootAttemptId, attemptIndex: attemptDiagnostic.attemptIndex, delivery: 'direct', bodyKind: transport.bodyKind, outcome: 'network-unknown', durationMs: Date.now() - attemptStartedAt, details: { code: 'IMAGE_DELIVERY_AMBIGUOUS' } });
-            // Delivery fact: the ambiguous outcome is itself the broken-direct
-            // signal for the «Авто» ladder. Recorded here — where the attempt's
-            // true shape is known — never by callers reading plan stamps.
-            if (method === 'POST' && transport.bodyKind === 'json') {
-                noteDeliveryPostOutcome({ connId: diagnostic?.connId, endpoint: url, delivery: 'direct', ok: false }).catch(() => {});
-            }
-            throw ambiguousDeliveryError(error, transport.deliveryPolicy);
+        // Каждый CORS/сетевой сбой после оракула — типизированный ambiguous:
+        // доказательств «запрос не ушёл» нет, переотправка запрещена. Факты
+        // для лестницы «Авто» пишет только JSON-POST (GET — скачивания/каталоги
+        // через autoFetch/catalogRequest, сюда они не доходят).
+        if (method === 'POST') recordDiagnosticEvent({ event: 'dispatch-error', level: 'error', stage: diagnostic?.stage || 'stage2', requestId: diagnostic?.requestId || null, attemptId: rootAttemptId, attemptIndex: attemptDiagnostic.attemptIndex, delivery: 'direct', bodyKind: transport.bodyKind, outcome: 'network-unknown', durationMs: Date.now() - attemptStartedAt, details: { code: 'IMAGE_DELIVERY_AMBIGUOUS' } });
+        if (method === 'POST' && transport.bodyKind === 'json') {
+            noteDeliveryPostOutcome({ connId: diagnostic?.connId, endpoint: url, delivery: 'direct', ok: false }).catch(() => {});
         }
-
-        const fallbackDiagnostic = {
-            ...attemptDiagnostic,
-            attemptId: attemptId(),
-            attemptIndex: attemptDiagnostic.attemptIndex + 1,
-            parentAttemptId: attemptDiagnostic.attemptId,
-            delivery: 'proxy',
-            phase: 'post',
-            postDispatchState: 'sent-unknown',
-        };
-        recordDiagnosticEvent({
-            event: 'dispatch-fallback', stage: diagnostic?.stage || 'stage2',
-            requestId: diagnostic?.requestId || null, attemptId: fallbackDiagnostic.attemptId,
-            attemptIndex: fallbackDiagnostic.attemptIndex, parentAttemptId: fallbackDiagnostic.parentAttemptId,
-            delivery: 'proxy', bodyKind: 'json', outcome: 'dispatching', details: { reason: 'multipart-or-direct-cors' },
-        });
-        try {
-            const fallbackStartedAt = Date.now();
-            const response = await proxiedFetch(url, proxyOptions(withDiagnostic({ ...options }, fallbackDiagnostic, diagnostic?.role || 'generation', 'json')), timeoutMs);
-            if (method === 'POST') recordDiagnosticEvent({ event: 'dispatch-response', stage: diagnostic?.stage || 'stage2', requestId: diagnostic?.requestId || null, attemptId: fallbackDiagnostic.attemptId, attemptIndex: fallbackDiagnostic.attemptIndex, parentAttemptId: fallbackDiagnostic.parentAttemptId, delivery: 'proxy', bodyKind: 'json', status: response?.status ?? null, outcome: 'response', durationMs: Date.now() - fallbackStartedAt });
-            return response;
-        } catch (fallbackError) {
-            if (method === 'POST') recordDiagnosticEvent({ event: 'dispatch-error', level: 'error', stage: diagnostic?.stage || 'stage2', requestId: diagnostic?.requestId || null, attemptId: fallbackDiagnostic.attemptId, attemptIndex: fallbackDiagnostic.attemptIndex, parentAttemptId: fallbackDiagnostic.parentAttemptId, delivery: 'proxy', bodyKind: 'json', outcome: fallbackError?.name === 'AbortError' ? 'abort' : 'network-unknown', details: { code: fallbackError?.code || null } });
-            throw fallbackError;
-        }
+        throw ambiguousDeliveryError(error, transport.deliveryPolicy);
     }
 }
 
@@ -361,7 +326,6 @@ export function requestMultipart(url, options = {}, route = {}, timeoutMs = 1200
         transport: {
             ...(route.transport || {}),
             bodyKind: 'multipart',
-            proxyEligible: false,
             directCors: 'required',
             // Multipart can never go proxy-first (ST /proxy/ is JSON-only).
             // Clear any inherited initialDelivery:'proxy' from browserDeliveryRoute

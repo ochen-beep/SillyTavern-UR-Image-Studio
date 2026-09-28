@@ -134,6 +134,8 @@ export function render(root) {
                 <small class="uris-hint">Глобальные значения используются только если в текущем чате параметр не задан.</small>
                 <label class="checkbox_label"><input type="checkbox" id="uris_inline_enabled" ${state.settings.inlineEnabled ? 'checked' : ''}><span>Инлайн-генерация в чате (вкладка «Медиа»)</span></label>
                 <small class="uris-hint">[[тип: описание]] в ответах персонажа и 📷-кнопка превращаются в картинки. Профили триггеров и тестовый стенд — вкладка «Медиа».</small>
+                <label class="checkbox_label"><input type="checkbox" id="uris_auto_retry_ambiguous" ${state.settings.autoRetryAmbiguous === true ? 'checked' : ''}><span>Авто-повтор при неоднозначной доставке (очередь)</span></label>
+                <small class="uris-hint">Если прямой запрос к шлюзу ушёл «без ответа», задача один раз переотправится сама — следующая попытка пойдёт через прокси. Выключено по умолчанию: повтор возможной уже оплаченной генерации — на вашей совести.</small>
             </section>
             <section class="uris-settings-section">
                 <h3>Внешний мост <small class="uris-hint">(эксперимент)</small></h3>
@@ -288,6 +290,10 @@ function bindBehaviorToggles(root) {
     });
     root.querySelector('#uris_debug_mode')?.addEventListener('change', e => {
         state.settings.debugMode = e.target.checked === true;
+        saveSettings();
+    });
+    root.querySelector('#uris_auto_retry_ambiguous')?.addEventListener('change', e => {
+        state.settings.autoRetryAmbiguous = e.target.checked === true;
         saveSettings();
     });
     root.querySelector('#uris_use_all_params')?.addEventListener('change', e => {

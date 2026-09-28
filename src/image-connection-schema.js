@@ -197,9 +197,7 @@ export function normalizeRouteContract(value = {}) {
   if (!BODY_KINDS.has(bodyKind)) throw new TypeError(`Invalid bodyKind: ${bodyKind}`);
   const directCors = input.directCors === undefined ? 'preferred' : input.directCors;
   if (!DIRECT_CORS.has(directCors)) throw new TypeError(`Invalid directCors: ${directCors}`);
-  const proxyEligible = input.proxyEligible === undefined ? false : input.proxyEligible;
-  if (typeof proxyEligible !== 'boolean') throw new TypeError('proxyEligible must be boolean');
-  if (bodyKind === 'multipart' && (directCors !== 'required' || proxyEligible)) {
+  if (bodyKind === 'multipart' && directCors !== 'required') {
     throw new TypeError('Multipart routes require direct CORS and cannot use the proxy');
   }
   const id = deriveStableRouteId(source, model, contract);
@@ -209,7 +207,11 @@ export function normalizeRouteContract(value = {}) {
   // is dropped here rather than carried forward: it is destructured out of
   // `safeInput` so previously-persisted maps are cleaned up on the next
   // normalize instead of lingering in extension settings forever.
-  const { contract: _contract, generationContract: _generationContract, apiFamily: _apiFamily, capabilityObservations: _legacyObservations, ...safeInput } = stripSecrets(input);
+  // `proxyEligible` / `allowProxyFallback` / route-level `noResubmit` were
+  // retired with the 2026-09-28 delivery rework: the transport gates escalation
+  // on the preflight oracle alone, so these flags gated nothing and are
+  // destructured out of persisted records the same way.
+  const { contract: _contract, generationContract: _generationContract, apiFamily: _apiFamily, capabilityObservations: _legacyObservations, proxyEligible: _proxyEligible, allowProxyFallback: _allowProxyFallback, noResubmit: _noResubmit, ...safeInput } = stripSecrets(input);
   return {
     ...safeInput,
     id,
@@ -222,7 +224,6 @@ export function normalizeRouteContract(value = {}) {
     ...(remoteMetadata === undefined ? {} : { remoteMetadata }),
     transport: {
       bodyKind,
-      proxyEligible,
       directCors,
     },
   };
@@ -395,50 +396,13 @@ function normalizeConnectionExtraBody(value) {
     return stripSecrets(input);
 }
 
-// POST-delivery experience (delivery-evidence.js): what real generations proved
-// about the connection's direct path. Persisted verbatim per connection, so it
-// survives reloads and card edits; TTL freshness is a read-side concern
-// (deliveryHintFor), the schema only bounds the shape.
-function normalizeConnectionDeliveryEvidence(value) {
-    const input = plain(value);
-    const host = textOrNull(input.host);
-    if (!host || host.length > 253) return null;
-    const iso = v => {
-        const s = textOrNull(v);
-        return s && !Number.isNaN(Date.parse(s)) ? s : null;
-    };
-    return {
-        host,
-        ...(iso(input.directBrokenAt) ? { directBrokenAt: iso(input.directBrokenAt) } : {}),
-        ...(iso(input.directOkAt) ? { directOkAt: iso(input.directOkAt) } : {}),
-        ts: iso(input.ts) || new Date(0).toISOString(),
-    };
-}
-
-// Edit-dialect experience (delivery-evidence.js): which wire dialect accepted
-// references on this gateway (multipart blocked / JSON ok / generations+image
-// img2img ok). Same persistence discipline as deliveryEvidence.
-function normalizeConnectionEditDialectEvidence(value) {
-    const input = plain(value);
-    const host = textOrNull(input.host);
-    if (!host || host.length > 253) return null;
-    const iso = v => {
-        const s = textOrNull(v);
-        return s && !Number.isNaN(Date.parse(s)) ? s : null;
-    };
-    return {
-        host,
-        ...(iso(input.multipartBlockedAt) ? { multipartBlockedAt: iso(input.multipartBlockedAt) } : {}),
-        ...(iso(input.jsonOkAt) ? { jsonOkAt: iso(input.jsonOkAt) } : {}),
-        ...(iso(input.jsonRejectedAt) ? { jsonRejectedAt: iso(input.jsonRejectedAt) } : {}),
-        ...(iso(input.img2imgOkAt) ? { img2imgOkAt: iso(input.img2imgOkAt) } : {}),
-        ts: iso(input.ts) || new Date(0).toISOString(),
-    };
-}
 
 export function normalizeConnectionRecord(value = {}) {
     const rawInput = plain(value);
-    const input = stripSecrets(rawInput);
+    const stripped = stripSecrets(rawInput);
+    // Легаси-поля опыта доставки/диалекта (жили в записи до переезда в
+    // браузер-локальный localforage) вырезаются, чтобы не кочевали вечно.
+    const { deliveryEvidence: _legacyDeliveryEvidence, editDialectEvidence: _legacyEditDialectEvidence, ...input } = stripped;
     const contractVersion = normalizeContractVersion(input.contractVersion);
     const routeInput = input.selectedRoute || input.modelRoute;
     const rawRouteInput = rawInput.selectedRoute || rawInput.modelRoute;
@@ -491,8 +455,10 @@ export function normalizeConnectionRecord(value = {}) {
         detected,
         overrides,
         evidence: normalizeConnectionEvidence(input.evidence),
-        deliveryEvidence: normalizeConnectionDeliveryEvidence(input.deliveryEvidence),
-        editDialectEvidence: normalizeConnectionEditDialectEvidence(input.editDialectEvidence),
+        // deliveryEvidence/editDialectEvidence переехали в браузер-локальный
+        // localforage (delivery-evidence.js): факты машинно-сетевые и не должны
+        // гулять с серверными настройками на другие машины. Устаревшие поля
+        // старых записей вырезаются ниже вместе с прочим мусором.
         extraBody: normalizeConnectionExtraBody(input.extraBody),
         // Legacy emissions stay in sync with overrides so the interim card and
         // browserDeliveryRoute keep working (Phase 2 replaces the card).

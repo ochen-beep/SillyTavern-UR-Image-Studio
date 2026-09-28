@@ -136,40 +136,10 @@ test('fetchImageRoute does not resubmit an ambiguous paid JSON POST', async () =
     } finally { restore(); }
 });
 
-test('fetchImageRoute preserves proxy fallback for explicitly safe JSON GETs', async () => {
-    const calls = [];
-    const previousContext = globalThis.SillyTavern.getContext;
-    globalThis.SillyTavern.getContext = () => ({
-        getRequestHeaders: () => ({ 'X-CSRF-Token': 'st-token' }),
-    });
-    const restore = mockFetch((url, options, viaProxy) => {
-        calls.push({ url, options, viaProxy });
-        if (!viaProxy) throw new TypeError('Failed to fetch');
-        return { ok: true, status: 200 };
-    });
-    try {
-        await fetchImageRoute('https://images.example/v1/models', {
-            method: 'GET',
-            headers: { Authorization: 'Bearer image-key', 'Content-Type': 'application/json' },
-        }, route());
-
-        assert.deepEqual(calls.map(call => call.viaProxy), [false, true, true]);
-        assert.equal(calls[0].options.headers['X-CSRF-Token'], undefined);
-        // proxiedFetch passes headers through untouched: Accept-Encoding is a
-        // forbidden fetch header the browser drops anyway, so it is not
-        // injected; compressed proxy bodies are decoded at read time.
-        assert.deepEqual(calls[2].options.headers, {
-            'X-CSRF-Token': 'st-token',
-            Authorization: 'Bearer image-key',
-            'Content-Type': 'application/json',
-        });
-    } finally {
-        restore();
-        globalThis.SillyTavern.getContext = previousContext;
-    }
-});
-
-test('fetchImageRoute does not proxy a GET when route is marked no-resubmit', async () => {
+test('fetchImageRoute does not proxy a JSON GET — downloads and catalogs use their own transports', async () => {
+    // 2026-09-28: исторический GET-фолбэк удалён — через этот транспорт GET
+    // никто не вызывает (скачивания — autoFetch, каталоги — catalogRequest),
+    // а CORS-сбой GET неотличим от «ответ потерян» так же, как у POST.
     const calls = [];
     const restore = mockFetch((url, options, viaProxy) => {
         calls.push({ url, options, viaProxy });
@@ -177,7 +147,10 @@ test('fetchImageRoute does not proxy a GET when route is marked no-resubmit', as
     });
     try {
         await assert.rejects(
-            () => fetchImageRoute('https://images.example/v1/models', { method: 'GET' }, route({ noResubmit: true })),
+            () => fetchImageRoute('https://images.example/v1/models', {
+                method: 'GET',
+                headers: { Authorization: 'Bearer image-key', 'Content-Type': 'application/json' },
+            }, route()),
             error => error?.code === 'IMAGE_DELIVERY_AMBIGUOUS',
         );
         assert.deepEqual(calls.map(call => call.viaProxy), [false]);
@@ -229,7 +202,7 @@ test('fetchImageRoute does not proxy an ordinary Error with a browser-like TypeE
     } finally { restore(); }
 });
 
-test('fetchImageRoute preserves the proxy disabled diagnostic for safe JSON GETs', async () => {
+test('fetchImageRoute: a JSON GET dies ambiguous without any proxy attempt', async () => {
     const calls = [];
     const restore = mockFetch((url, options, viaProxy) => {
         calls.push({ url, options, viaProxy });
@@ -239,10 +212,10 @@ test('fetchImageRoute preserves the proxy disabled diagnostic for safe JSON GETs
     try {
         await assert.rejects(
             () => fetchImageRoute('https://images.example/v1/generations', { method: 'GET' }, route()),
-            /CORS-прокси SillyTavern недоступен/,
+            error => error?.code === 'IMAGE_DELIVERY_AMBIGUOUS',
         );
         assert.equal(calls.filter(call => !call.viaProxy).length, 1);
-        assert.equal(calls.filter(call => call.viaProxy).length, 1);
+        assert.equal(calls.filter(call => call.viaProxy).length, 0);
     } finally { restore(); }
 });
 
@@ -272,7 +245,7 @@ test('fetchImageRoute rejects a JSON route without explicit transport metadata b
     try {
         await assert.rejects(
             () => fetchImageRoute('https://images.example/v1/generations', { method: 'POST' }, { transport: { bodyKind: 'json' } }),
-            /JSON routes require explicit proxyEligible and directCors transport metadata/i,
+            /require explicit directCors transport metadata/i,
         );
         assert.deepEqual(calls, []);
     } finally { restore(); }

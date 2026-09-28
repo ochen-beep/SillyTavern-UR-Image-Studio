@@ -278,7 +278,6 @@ export function resolveDispatchPlan(connection, options = {}) {
 
             transport: {
                 bodyKind: 'json',
-                proxyEligible: false,
                 directCors: 'preferred',
                 ...(pollinationsRoute ? { providerId: 'pollinations', authStrategy: 'bearer' } : {}),
                 ...(naisteraRoute ? { providerId: 'naistera', authStrategy: 'bearer' } : {}),

@@ -1,6 +1,7 @@
 // @ts-check
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { mockFetch } from './_helpers.js';
 
 import { invokeImageProvider } from '../src/image-provider-registry.js';
 import { VALID_PARAMS, MODEL_FAMILIES } from '../src/dispatch-plan.js';
@@ -222,9 +223,19 @@ function makeFallbackTransport({ multipartError, jsonResponse }) {
 
 const REFS = [{ dataUrl: PNG }, { dataUrl: JPEG }];
 
+// OPTIONS-оракул (2026-09-28) ходит в сеть через fetchWithTimeout — в тестах
+// префлайт шлюза мёртв, чтобы фолбэк имел право состояться.
+function mockDeadPreflight() {
+  return mockFetch((_url, options) => {
+    if (options?.method === 'OPTIONS') throw new TypeError('Failed to fetch');
+    throw new Error(`unexpected direct fetch ${options?.method || 'GET'}`);
+  });
+}
+
 test('openai-images retries a CORS-blocked multipart edit as JSON through the proxy', async () => {
   const transport = makeFallbackTransport({ multipartError: multipartCorsError(), jsonResponse: jsonResponse({ data: [{ b64_json: 'cmVzdWx0' }] }) });
   const req = { prompt: 'Edit this', references: REFS };
+  const restoreFetch = mockDeadPreflight();
   const result = await invokeImageProvider({
     endpoint: 'https://api.example', apiKey: 'secret',
     connection: { timeoutMs: 4300, useCorsProxy: true },
@@ -239,10 +250,9 @@ test('openai-images retries a CORS-blocked multipart edit as JSON through the pr
   assert.equal(transport.calls[1].url, 'https://api.example/v1/images/edits');
   assert.equal(transport.calls[1].options.headers.Authorization, 'Bearer secret');
   assert.equal(transport.calls[1].options.headers['Content-Type'], 'application/json');
-  // The retry goes through /proxy/ immediately (proxy-first, no direct re-try)
-  // and keeps the no-resubmit guard so there is exactly one paid attempt total.
+  // The retry goes through /proxy/ immediately (proxy-first, no direct re-try):
+  // exactly one paid attempt total, behind the proven preflight oracle.
   assert.equal(transport.calls[1].route.transport.initialDelivery, 'proxy');
-  assert.equal(transport.calls[1].route.transport.noResubmit, true);
   // Fallback diagnostic marker.
   assert.equal(transport.calls[1].options.__urisDiagnostic.attempt, 'proxy-fallback');
   // Same JSON body as an explicit editProtocol:'json' edit.
@@ -256,6 +266,7 @@ test('openai-images retries a CORS-blocked multipart edit as JSON through the pr
   // observer logs the fallback truth (edit-json / proxy), not the plan.
   assert.equal(req.editDialect, 'json');
   assert.equal(req.delivery, 'proxy');
+  restoreFetch();
 });
 
 test('openai-images never falls back to JSON without the CORS proxy opt-in', async () => {
@@ -317,6 +328,7 @@ test('openai-images preserves the final upstream 524 after the safe CORS fallbac
   const upstream = jsonResponse({ error: { message: 'Gateway timeout while contacting the provider' } }, 524);
   const transport = makeFallbackTransport({ multipartError: multipartCorsError(), jsonResponse: upstream });
   const req = { prompt: 'Edit this', references: REFS };
+  const restoreFetch = mockDeadPreflight();
 
   await assert.rejects(
     invokeImageProvider({
@@ -330,6 +342,7 @@ test('openai-images preserves the final upstream 524 after the safe CORS fallbac
       && /HTTP 524/.test(error.message)
       && /Gateway timeout/.test(error.message),
   );
+  restoreFetch();
   assert.deepEqual(transport.calls.map(call => call.kind), ['multipart', 'json']);
 });
 

@@ -8,8 +8,11 @@
  * every later generation repeated the same doomed direct attempt until the
  * user manually switched the card to «Через прокси». This module gives «Авто»
  * the memory autoFetch already has for the text path (proxy.js _hostStrategy),
- * but persisted per connection so it survives a page reload and feeds both the
- * dispatch ladder (image-api.browserDeliveryRoute) and the card facts line.
+ * persisted per connection in BROWSER-LOCAL storage (localforage, like the API
+ * keys): the facts are machine+network specific, so they must survive a page
+ * reload for THIS browser without leaking to other machines through server
+ * settings. They feed the dispatch ladder (image-api.browserDeliveryRoute)
+ * and the card facts line.
  *
  * Facts and their only writers:
  *   - direct POST finished ambiguous (IMAGE_DELIVERY_AMBIGUOUS) → directBrokenAt
@@ -29,7 +32,6 @@
  * Writes are best-effort telemetry: they never throw into the generation flow,
  * and an unknown connection id degrades to the in-memory cache only.
  */
-import { saveConnection } from './connections.js';
 import { serialize } from './serialize.js';
 
 /** How long a broken-direct verdict keeps routing «Авто» through the proxy. */
@@ -44,10 +46,53 @@ export const DIRECT_OK_TTL_MS = 24 * 60 * 60 * 1000;
  */
 export const EDIT_DIALECT_TTL_MS = 30 * 60 * 1000;
 
-// Session write-through cache: deliveryHintFor is synchronous (it reads the
-// already-normalized connection record), so the cache only accelerates writes
-// and lets the transport record a fact without awaiting persistence.
+// Browser-local store + synchronous memory mirror. deliveryHintFor and
+// editDialectHintFor are SYNC (the dispatch ladder cannot await), so reads come
+// from memory; the async load below warms it once per page load, and every
+// write updates memory before persisting. A generation that starts within the
+// first moments after a reload may see no hint yet — it then just rediscovers,
+// exactly like an unprobed connection.
 const memory = new Map();
+const editMemory = new Map();
+const DELIVERY_STORE_KEY = 'uris_delivery_evidence';
+const EDIT_DIALECT_STORE_KEY = 'uris_edit_dialect_evidence';
+
+function localforageStore() {
+    return globalThis.SillyTavern?.libs?.localforage || null;
+}
+
+const loadPromises = new Map();
+function ensureStoreLoaded(key, target) {
+    if (!loadPromises.has(key)) {
+        const store = localforageStore();
+        // Promise.resolve поверх результата: тестовые стабы localforage могут
+        // возвращать синхронное значение вместо промиса.
+        loadPromises.set(key, Promise.resolve(store?.getItem?.(key) ?? null)
+            .then(raw => {
+                for (const [connId, entry] of Object.entries(raw || {})) {
+                    if (entry && typeof entry === 'object') target.set(connId, entry);
+                }
+            })
+            .catch(() => { /* telemetry storage is best-effort */ }));
+    }
+    return loadPromises.get(key);
+}
+
+async function persistStore(key, source, connId) {
+    const store = localforageStore();
+    if (!store) return;
+    try {
+        const raw = { ...(await store.getItem(key).catch(() => null) || {}) };
+        if (source.has(connId)) raw[connId] = source.get(connId);
+        else delete raw[connId];
+        await store.setItem(key, raw);
+    } catch { /* best-effort */ }
+}
+
+// Тёплый старт при импорте модуля (браузер); в node-тестах стор-заглушки
+// подставляются до импорта, вне SillyTavern — загрузка тихо пропускается.
+ensureStoreLoaded(DELIVERY_STORE_KEY, memory);
+ensureStoreLoaded(EDIT_DIALECT_STORE_KEY, editMemory);
 
 /**
  * Hostname of an endpoint URL, or '' when the value is not a URL.
@@ -76,7 +121,7 @@ function fresh(iso, ttlMs, now) {
  *   null — no usable experience (ladder falls through to detected.delivery).
  */
 export function deliveryHintFor(conn, nowMs = Date.now()) {
-    const evidence = conn?.deliveryEvidence;
+    const evidence = memory.get(conn?.id);
     if (!evidence?.host) return null;
     if (hostOfEndpoint(conn?.endpoint) !== evidence.host) return null;
     if (fresh(evidence.directBrokenAt, DIRECT_BROKEN_TTL_MS, nowMs)) return 'proxy';
@@ -96,9 +141,7 @@ async function writeEvidence(connId, endpoint, mutate, now) {
             directOkAt: previous.host === host ? (previous.directOkAt || null) : null,
         }, now);
         memory.set(connId, next);
-        try {
-            await saveConnection({ id: connId, deliveryEvidence: next });
-        } catch { /* telemetry must not break the generation flow */ }
+        persistStore(DELIVERY_STORE_KEY, memory, connId);
         return next;
     });
 }
@@ -147,7 +190,10 @@ export async function clearDeliveryEvidenceFor(connId) {
     memory.delete(connId);
     editMemory.delete(connId);
     if (!connId) return;
-    try { await saveConnection({ id: connId, deliveryEvidence: null, editDialectEvidence: null }); } catch { /* best-effort */ }
+    await Promise.all([
+        persistStore(DELIVERY_STORE_KEY, memory, connId),
+        persistStore(EDIT_DIALECT_STORE_KEY, editMemory, connId),
+    ]);
 }
 
 // ── Edit-dialect experience (openai-images references) ─────────────────────
@@ -162,8 +208,6 @@ export async function clearDeliveryEvidenceFor(connId) {
 // next generation skip straight to the working dialect instead of re-paying
 // the discovery round trips.
 
-const editMemory = new Map();
-
 /**
  * Which edit dialect «Авто» should start with, from the connection's edit
  * experience. Pure and synchronous. Host mismatch (endpoint edited) → null.
@@ -173,7 +217,7 @@ const editMemory = new Map();
  * @returns {'img2img-proxy'|'json-proxy'|null}
  */
 export function editDialectHintFor(conn, nowMs = Date.now()) {
-    const evidence = conn?.editDialectEvidence;
+    const evidence = editMemory.get(conn?.id);
     if (!evidence?.host) return null;
     if (hostOfEndpoint(conn?.endpoint) !== evidence.host) return null;
     if (fresh(evidence.img2imgOkAt, EDIT_DIALECT_TTL_MS, nowMs)) return 'img2img-proxy';
@@ -195,9 +239,7 @@ async function writeEditEvidence(connId, endpoint, mutate, now) {
         next.host = host;
         next.ts = new Date(now).toISOString();
         editMemory.set(connId, next);
-        try {
-            await saveConnection({ id: connId, editDialectEvidence: next });
-        } catch { /* telemetry must not break the generation flow */ }
+        persistStore(EDIT_DIALECT_STORE_KEY, editMemory, connId);
         return next;
     });
 }
@@ -234,8 +276,14 @@ export function noteEditDialectOutcome({ connId, endpoint, dialect, ok, rejectKi
     }, now).catch(() => null);
 }
 
-/** Test seam: drop the in-memory caches (persistence is per-test-store). */
+/** Test seam: drop the in-memory caches and force store reload next time. */
 export function _resetDeliveryEvidenceForTests() {
     memory.clear();
     editMemory.clear();
+    loadPromises.clear();
+}
+
+/** Test seam: read both experience records for a connection without touching storage. */
+export function _peekEvidenceForTests(connId) {
+    return { delivery: memory.get(connId) || null, editDialect: editMemory.get(connId) || null };
 }

@@ -61,7 +61,9 @@ test('normalizes routes with generationContract and no legacy contract output', 
   assert.equal('contract' in route, false);
   assert.deepEqual(route.capabilities, { generate: 'supported', references: 'unsupported', edit: 'unknown' });
   assert.equal(route.transport.bodyKind, 'json');
-  assert.equal(route.transport.proxyEligible, true);
+  // proxyEligible ушёл из транспортных метаданных (2026-09-28): эскалация
+  // доставки гейтится оракулом, а не флагом; устаревшее поле вырезается.
+  assert.equal('proxyEligible' in route.transport, false);
   assert.equal(route.transport.directCors, 'preferred');
   assert.match(route.id, /^route_[a-f0-9]{24}$/);
 });
@@ -161,9 +163,11 @@ test('only migrates omitted contract versions and rejects supplied invalid versi
 
 test('enforces multipart transport invariants', () => {
   const route = normalizeRouteContract({ generationContract: 'gemini-native', source: 'gemini', modelId: 'imagen', bodyKind: 'multipart', directCors: 'required' });
-  assert.equal(route.transport.proxyEligible, false);
+  assert.equal('proxyEligible' in route.transport, false);
   assert.throws(() => normalizeRouteContract({ generationContract: 'gemini-native', source: 'gemini', modelId: 'imagen', bodyKind: 'multipart', directCors: 'preferred' }), /multipart/i);
-  assert.throws(() => normalizeRouteContract({ generationContract: 'gemini-native', source: 'gemini', modelId: 'imagen', bodyKind: 'multipart', proxyEligible: true, directCors: 'required' }), /multipart/i);
+  // proxyEligible больше не валидируется — multipart-инвариант только в directCors.
+  assert.doesNotThrow(() => normalizeRouteContract({ generationContract: 'gemini-native', source: 'gemini', modelId: 'imagen', bodyKind: 'multipart', proxyEligible: true, directCors: 'required' }));
+  assert.throws(() => normalizeRouteContract({ generationContract: 'gemini-native', source: 'gemini', modelId: 'imagen', bodyKind: 'multipart', directCors: 'preferred' }), /multipart/i);
 });
 test('rejects unknown or executable contracts and invalid capability or transport values', () => {
   assert.throws(() => normalizeRouteContract({ contract: 'javascript:alert(1)', modelId: 'x' }), /contract/i);

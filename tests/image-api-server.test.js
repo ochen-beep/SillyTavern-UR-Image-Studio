@@ -41,7 +41,7 @@ const { listPendingBrowserRequests, getPendingBrowserRequest, getPendingBrowserR
 const getPendingImages = listPendingBrowserRequests;
 const { listDiagnosticEvents, resetDiagnosticEventsForTests } = await import('../src/diagnostic-events.js');
 const { generateImageRequest } = await import('../src/image-api.js');
-const { _resetDeliveryEvidenceForTests } = await import('../src/delivery-evidence.js');
+const { _resetDeliveryEvidenceForTests, noteDeliveryPostOutcome, _peekEvidenceForTests } = await import('../src/delivery-evidence.js');
 const connectionsFacade = await import('../src/connections.js');
 
 after(() => { globalThis.fetch = originalFetch; });
@@ -136,8 +136,10 @@ test('browser generation passes the resolved connection timeout to result materi
     // несколько миллисекунд меньше — тем меньше, чем сильнее загружена машина
     // (полный набор идёт параллельными процессами). Точное равенство делало тест
     // флапающим; проверяем, что каждая нога ушла именно с этим бюджетом.
-    assert.equal(timeouts.length, 2, 'ожидались ровно два таймера: скачивание и загрузка на сервер');
-    for (const delay of timeouts) {
+    // (Разведка доставки #10 добавляет свой 15с-таймер — в legs он не входит.)
+    const legs = timeouts.filter(delay => delay <= 16789 && delay >= 16789 * 0.9);
+    assert.equal(legs.length, 2, 'ожидались ровно два таймера ног: скачивание и загрузка на сервер');
+    for (const delay of legs) {
         assert.ok(
             delay <= 16789 && delay >= 16789 * 0.9,
             `таймаут ${delay} мс должен быть остатком бюджета 16789 мс — иначе нога ушла не с тем таймаутом`,
@@ -189,8 +191,8 @@ test('auto delivery: a direct POST failure with a dead preflight probes OPTIONS 
     assert.equal(generationCalls.some(call => call.options?.method === 'OPTIONS'), true, 'preflight-оракул должен был провернуть OPTIONS');
     assert.equal(fetchCalls.some(call => call.options?.method === 'POST' && call.url.includes('/proxy/')), false, 'прокси недоступен — попытка спасения не доходит до POST');
     // Опыт записи: прямая помечена сломанной — следующая «Авто»-генерация пойдёт через прокси.
-    const conn = await connectionsFacade.getConnection('browser-image');
-    assert.ok(conn.deliveryEvidence?.directBrokenAt, 'опыт о сломанной прямой должен быть записан');
+    const peek = _peekEvidenceForTests('browser-image');
+    assert.ok(peek.delivery?.directBrokenAt, 'опыт о сломанной прямой должен быть записан');
 });
 
 test('auto delivery: dead preflight with a working ST proxy rescues the generation in the same call', async () => {
@@ -221,22 +223,19 @@ test('auto delivery: dead preflight with a working ST proxy rescues the generati
         ], 'прямой POST → OPTIONS-оракул → спасение через прокси, один платный запрос суммарно');
         // Опыт записи: прямая помечена сломанной — следующая генерация пойдёт через прокси сразу.
         // Запись fire-and-forget — коротко дождёмся персиста.
-        let evidenceConn = await connectionsFacade.getConnection('browser-image');
-        for (let i = 0; i < 40 && !evidenceConn?.deliveryEvidence?.directBrokenAt; i++) {
+        let peek = _peekEvidenceForTests('browser-image');
+        for (let i = 0; i < 40 && !peek.delivery?.directBrokenAt; i++) {
             await new Promise(resolve => setTimeout(resolve, 5));
-            evidenceConn = await connectionsFacade.getConnection('browser-image');
+            peek = _peekEvidenceForTests('browser-image');
         }
-        assert.ok(evidenceConn?.deliveryEvidence?.directBrokenAt);
+        assert.ok(peek.delivery?.directBrokenAt);
     } finally {
         globalThis.fetch = standardFetch;
     }
 });
 
 test('auto delivery: a fresh broken-direct experience routes the next generation through the proxy without a doomed direct attempt', async () => {
-    await connectionsFacade.saveConnection({
-        id: 'browser-image',
-        deliveryEvidence: { host: 'images.example', directBrokenAt: new Date(Date.now()).toISOString(), ts: new Date(Date.now()).toISOString() },
-    });
+    await noteDeliveryPostOutcome({ connId: 'browser-image', endpoint: 'https://images.example', delivery: 'direct', ok: false });
     const calls = [];
     const standardFetch = globalThis.fetch;
     globalThis.fetch = async (url, options = {}) => {
@@ -263,15 +262,15 @@ test('auto delivery: a fresh broken-direct experience routes the next generation
 });
 
 test('auto delivery: a direct success clears the broken verdict and stamps directOkAt', async () => {
-    await connectionsFacade.saveConnection({
-        id: 'browser-image',
-        deliveryEvidence: { host: 'images.example', directBrokenAt: new Date(Date.now() - 31 * 60 * 1000).toISOString(), ts: new Date(Date.now() - 31 * 60 * 1000).toISOString() },
+    await noteDeliveryPostOutcome({
+        connId: 'browser-image', endpoint: 'https://images.example', delivery: 'direct', ok: false,
+        now: Date.now() - 31 * 60 * 1000,
     });
     await generateImageRequest('browser-image', request({ requestId: 'req_direct_ok_0001' }));
-    const conn = await connectionsFacade.getConnection('browser-image');
+    const peek = _peekEvidenceForTests('browser-image');
     // Нормализатор опускает пустые поля: «вердикта нет» = ключ отсутствует.
-    assert.ok(!conn.deliveryEvidence?.directBrokenAt, 'успешный прямой POST должен стирать вердикт «сломана»');
-    assert.ok(conn.deliveryEvidence?.directOkAt, 'и фиксировать рабочий прямой путь');
+    assert.ok(!peek.delivery?.directBrokenAt, 'успешный прямой POST должен стирать вердикт «сломана»');
+    assert.ok(peek.delivery?.directOkAt, 'и фиксировать рабочий прямой путь');
 });
 
 test('explicit-direct delivery never probes OPTIONS and keeps the typed ambiguity', async () => {

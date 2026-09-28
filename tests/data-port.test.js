@@ -417,7 +417,7 @@ test('normalization produces runtime-valid route contracts or explicit unresolve
     const routes = normalized.shared.connections[0].routes;
     assert.equal(routes[0].generationContract, 'openrouter-images');
     assert.equal(routes[0].modelId, 'dall-e');
-    assert.deepEqual(routes[0].transport, { bodyKind: 'json', proxyEligible: false, directCors: 'preferred' });
+    assert.deepEqual(routes[0].transport, { bodyKind: 'json', directCors: 'preferred' });
     assert.equal(routes[1].generationContract, 'chat-completions');
     assert.equal(routes[1].modelId, 'gpt-image');
     assert.equal(routes[2].resolutionState, 'unresolved');
@@ -482,7 +482,7 @@ test('normalization filters schema-normalized credentials from every portable in
     assert.deepEqual(normalized.shared.connections, [{ id: 'c', selectedRoute: {
         id: 'route_b85ee038faf331a99ab04c2e', generationContract: 'openai-images', modelId: 'dall-e', source: 'unknown', contractVersion: 1,
         apiFamily: 'openai-images', capabilities: { generate: 'unknown', references: 'unknown', edit: 'unknown' },
-        transport: { bodyKind: 'json', proxyEligible: false, directCors: 'preferred' }, safe: true,
+        transport: { bodyKind: 'json', directCors: 'preferred' }, safe: true,
     }, selectedRouteId: 'route_b85ee038faf331a99ab04c2e' }]);
     assert.equal(Object.hasOwn(normalized, 'imageConnections'), false);
 });

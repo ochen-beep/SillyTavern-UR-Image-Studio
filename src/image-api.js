@@ -1,17 +1,17 @@
 // @ts-check
 /** Browser-owned image generation dispatch and native gallery materialization. */
-import { state } from './core.js';
+import { state, fetchWithTimeout } from './core.js';
 import { resolveConnection } from './connections.js';
 import { resolveDispatchPlan } from './dispatch-plan.js';
 import { invokeImageProvider, validateImageProviderInvocation } from './image-provider-registry.js';
-import { isCorsProxyAvailable } from './proxy.js';
-import { deliveryHintFor } from './delivery-evidence.js';
+import { isCorsProxyAvailable, isCorsOrNetworkError } from './proxy.js';
+import { deliveryHintFor, noteDeliveryPostOutcome } from './delivery-evidence.js';
 import { materializeImageResult, getCharacterImageFolder, makeThumbnailForPath } from './native-image-storage.js';
 import { addCard, updateCard } from './gallery-index.js';
 import { providerError } from './providers/image-base.js';
 import { summarizeReference } from './references.js';
 import { aspectDeviates } from './aspect-ratio.js';
-import { getDiagnosticSessionId, hashDiagnosticId, recordDiagnosticEvent } from './diagnostic-events.js';
+import { getDiagnosticSessionId, hashDiagnosticId, recordDiagnosticEvent, listDiagnosticEvents } from './diagnostic-events.js';
 import { savePendingBrowserRequest, updatePendingBrowserRequest } from './browser-image-recovery.js';
 
 const REQUEST_ID = /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/;
@@ -63,26 +63,10 @@ function pendingSnapshot(connectionId, route, request) {
 }
 
 function browserDeliveryRoute(route, conn, hasReferences = false) {
-    // The connection-level `useCorsProxy` opt-in was previously scoped to
-    // catalog discovery only. For providers that send no CORS headers at all
-    // the direct-first generation POST always dies on the
-    // browser preflight and `IMAGE_DELIVERY_AMBIGUOUS` then blocks the safe
-    // proxy retry - leaving the connection unusable for generation. When the
-    // user has explicitly ticked "through the ST CORS proxy" AND the route is
-    // JSON (multipart cannot traverse the JSON-only /proxy/), dispatch the
-    // paid POST through /proxy/ on the FIRST attempt: no direct try, no
-    // ambiguous state, no double-billing risk.
-    //
-    // This is an EXPLICIT user choice for the first attempt, not an automatic
-    // post-failure fallback, so it deliberately does NOT consult the route's
-    // `proxyEligible` flag (catalog.js marks all routes proxyEligible:false
-    // to block the automatic direct->proxy retry path; that protection stays
-    // intact for the failure-fallback branch in image-transport.js).
-    // A multipart edit can never traverse the JSON-only ST /proxy/, so when the
-    // request carries references AND the connection edits via multipart, the
-    // dispatch must stay direct even if the user ticked the proxy box. Deciding
-    // this here (rather than letting requestMultipart clear the flag later)
-    // keeps the recorded delivery honest.
+    // JSON-маршруты диспетчатся по лестнице ниже; multipart-редактирование
+    // (openai-images + референсы + multipart-пин) не может идти через
+    // JSON-only /proxy/ — оно всегда напрямую, даже при «Через прокси».
+    // Решение принимается здесь, чтобы записанная доставка была честной.
     const multipartEdit = hasReferences
         && route?.generationContract === 'openai-images'
         && conn?.editProtocol !== 'json';
@@ -106,18 +90,48 @@ function browserDeliveryRoute(route, conn, hasReferences = false) {
         && !multipartEdit;
     return {
         ...route,
-        noResubmit: true,
         transport: {
             ...route.transport,
             initialDelivery: useProxy ? 'proxy' : 'direct',
-            allowProxyFallback: false,
-            noResubmit: true,
             // Who chose this path: an explicit user order or the «Авто» ladder.
             // Only 'auto' makes the transport's preflight oracle (safe proxy
             // rescue) eligible; explicit orders are never second-guessed.
             deliveryPolicy: policy === 'proxy' ? 'explicit-proxy' : policy === 'direct' ? 'explicit-direct' : 'auto',
         },
     };
+}
+
+// Контракты, чьи GET-каталоги говорят о доставке POST: у pollinations/naistera
+// своя форма каталога, разведка не нужна (их прямая доставка исторически жива).
+const DELIVERY_PROBE_CONTRACTS = new Set(['openai-images', 'chat-completions', 'openrouter-images']);
+
+/**
+ * Дешёвая разведка доставки до первого платного POST (перенос паттерна
+ * providers/openai.js на картинный путь, 2026-09-28): один GET /models с теми
+ * же заголовками. Читаемый ответ → прямая дорога подтверждена (directOkAt);
+ * CORS/сетевой TypeError → «прямая сломана» (directBrokenAt) — лестница «Авто»
+ * сразу поведёт POST через прокси. Запускается только когда знаний нет вовсе:
+ * ни факта пробы («Проверить»), ни опыта POST. Best-effort: неудача разведки
+ * (кроме отмены) не блокирует генерацию.
+ */
+async function probeDeliveryBeforeFirstPost(conn, apiKey, route, signal) {
+    try {
+        if (!DELIVERY_PROBE_CONTRACTS.has(route?.generationContract)) return;
+        if (conn?.detected?.checkedAt || deliveryHintFor(conn)) return;
+        const base = String(conn?.endpoint || '').trim().replace(/\/+$/, '');
+        if (!base) return;
+        await fetchWithTimeout(`${base}/models`, {
+            method: 'GET',
+            headers: { Authorization: `Bearer ${apiKey}` },
+            ...(signal ? { signal } : {}),
+        }, 15000);
+        noteDeliveryPostOutcome({ connId: conn.id, endpoint: conn.endpoint, delivery: 'direct', ok: true }).catch(() => {});
+    } catch (error) {
+        if (signal?.aborted || error?.name === 'AbortError') return;
+        if (isCorsOrNetworkError(error)) {
+            noteDeliveryPostOutcome({ connId: conn.id, endpoint: conn.endpoint, delivery: 'direct', ok: false }).catch(() => {});
+        }
+    }
 }
 
 /**
@@ -210,6 +224,10 @@ export async function generateImageRequest(imageConnId, request, onStatus, signa
         await updatePendingBrowserRequest(request.requestId, { status: 'rejectedBeforeDispatch', error: error?.message || String(error) });
         throw error;
     }
+    // Разведка доставки: непроверенный коннект не должен учиться на гиблом
+    // платном POST, если это можно выяснить бесплатным GET-ом. После валидации,
+    // чтобы невалидные запросы не зондировали сеть.
+    await probeDeliveryBeforeFirstPost(conn, apiKey, route, signal).catch(() => {});
     await updatePendingBrowserRequest(request.requestId, { status: 'dispatchingUnknown', error: null });
     onStatus?.('Generating image...');
 
@@ -230,6 +248,13 @@ export async function generateImageRequest(imageConnId, request, onStatus, signa
         // of the pre-dispatch plan (edit-multipart / direct).
         if (invocation.request?.editDialect !== undefined) request.editDialect = invocation.request.editDialect;
         if (invocation.request?.delivery) request.delivery = invocation.request.delivery;
+        // The delivery oracle rescues INSIDE the transport, where the adapter
+        // cannot stamp anything. The journal is the single source of truth for
+        // that path: a dispatch-fallback event of THIS attempt means the paid
+        // POST actually went through /proxy/.
+        const fellBackToProxy = listDiagnosticEvents().some(event =>
+            event?.requestId === request.requestId && event?.event === 'dispatch-fallback' && event?.delivery === 'proxy');
+        if (fellBackToProxy) request.delivery = 'proxy';
     }
 
     await updatePendingBrowserRequest(request.requestId, { status: 'resultReceived', error: null });
