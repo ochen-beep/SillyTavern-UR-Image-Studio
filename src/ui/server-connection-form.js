@@ -145,14 +145,24 @@ function modelSelectMarkup(draft) {
     const current = draft?.model?.id || '';
     const classifications = modelPartition(draft).classifications;
     const classificationById = new Map(classifications.map(item => [item.modelId.toLowerCase(), item]));
-    const manualMode = !current || draft?.model?.source === 'manual' || !ids.includes(current);
+    // Manual mode — только явный выбор пользователя (source:'manual') или
+    // полное отсутствие модели. Инцидент 2026-09-28: «Сбросить знания»
+    // опустошает detected.modelIds, из-за !ids.includes(current) карточка
+    // уезжала в manual-режим, и следующий автосейв закреплял
+    // source:'manual' в записи, хотя модель была выбрана из списка.
+    const manualMode = !current || draft?.model?.source === 'manual';
     const options = ids.map(id => {
         const classification = classificationById.get(id.toLowerCase());
         const disabled = classification?.kind === 'non-image';
         const label = disabled ? `${id} (не image)` : id;
         return `<option value="${escapeHtml(id)}" ${!manualMode && id === current ? 'selected' : ''}${disabled ? ' disabled' : ''}>${escapeHtml(label)}</option>`;
-    }).join('');
-    return `<select class="text_pole uris-server-model">${options}
+    });
+    // Модель выбрана из списка, но список (временно) пуст или её там нет —
+    // показываем её в select отдельным option, чтобы выбор не «терял» вид.
+    if (!manualMode && current && !ids.includes(current)) {
+        options.unshift(`<option value="${escapeHtml(current)}" selected>${escapeHtml(current)}</option>`);
+    }
+    return `<select class="text_pole uris-server-model">${options.join('')}
         <option value="${MANUAL_MODEL}" ${manualMode ? 'selected' : ''}>— ввести ID вручную —</option>
     </select>`;
 }

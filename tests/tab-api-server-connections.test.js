@@ -93,7 +93,11 @@ test('model dropdown keeps an unclassified catalog hidden without an extra toggl
     const draft = baseDraft({ detected: { ...baseDraft().detected, modelIds: ['text-a', 'text-b'] } });
     const form = mount(draft);
     const options = form.querySelector('.uris-server-model').querySelectorAll('option').map(o => o.attributes.value);
-    assert.deepEqual(options, ['__manual__']);
+    // Неклассифицированный каталог скрыт (text-a/text-b не показываются), но
+    // текущая list-модель остаётся видимой отдельным option — выбор не «теряет
+    // вид» на пустом/непонятном каталоге (фикс инцидента 2026-09-28).
+    assert.deepEqual(options, ['gpt-image-1', '__manual__']);
+    assert.equal(form.querySelector('.uris-server-model').value, 'gpt-image-1');
     assert.equal(form.querySelector('.uris-server-model-toggle'), null);
 });
 
