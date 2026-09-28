@@ -1846,8 +1846,27 @@
     border: 1px solid currentColor;
     border-radius: 8px;
     padding: 1px 7px;
+    position: relative;
 }
 .uris-error-badge:hover { opacity: 1; }
+/* Всё просмотрено: бейдж остаётся виден (инвентарь достижим — тот же
+   паттерн, что у QUEUE), но явно гаснет: цифра считает только новое. */
+.uris-error-badge--seen { opacity: 0.45; }
+.uris-error-badge--seen:hover { opacity: 0.8; }
+/* Красная точка = среди непрочитанного есть жёсткая ошибка (не warn).
+   Внимание кодируется точкой, а не покраской цифры — бейдж остаётся
+   нейтральным элементом шапки (см. 8abb722, «шумопонижение заголовка»). */
+.uris-badge-dot {
+    position: absolute;
+    top: -3px;
+    right: -3px;
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: var(--uris-err, #e05050);
+    box-shadow: 0 0 0 2px var(--uris-surface-header, #141414);
+}
+.uris-badge-dot[hidden] { display: none; }
 .uris-error-count { font-weight: 400; opacity: 0.85; margin-left: 2px; }
 .uris-error-panel {
         position: fixed;
@@ -1873,6 +1892,10 @@
 .uris-error-row { display: flex; align-items: flex-start; gap: 5px; opacity: 0.9; word-break: break-word; }
 .uris-error-row small { flex: 1 1 100%; color: var(--uris-text-mut); }
 .uris-error-empty { opacity: 0.5; }
+/* Тоны строк пула: жёсткая ошибка — красная заливка (как fail-строки
+   очереди), предупреждение (level:'warn', обычно quiet) — приглушено. */
+.uris-pool-fail { background: color-mix(in srgb, var(--uris-err, #e05050) 18%, transparent); border-radius: 6px; padding: 2px 6px; }
+.uris-pool-warn { color: var(--uris-text-mut); border-left: 2px solid var(--uris-warn-line, rgba(204, 153, 0, 0.35)); padding-left: 6px; }
 /* Строки очереди: успех зелёным, неудача красным. Отмена остаётся без заливки. */
 .uris-queue-row { flex-wrap: wrap; border-radius: 6px; padding: 3px 6px; }
 .uris-queue-row small { flex: 1 1 100%; }

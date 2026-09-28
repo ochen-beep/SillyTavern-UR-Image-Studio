@@ -882,6 +882,7 @@ export async function submitCurrentGeneration(root, deps = {}) {
                     message: entry.warnings.map(w => `${w?.feature || '?'}: ${w?.details || ''}`).join('; '),
                     context: entry?.generationContext || null,
                     quiet: true,
+                    level: 'warn',
                 });
             }
             if (getActiveTab() === 'gallery') refreshActive();

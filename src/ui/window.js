@@ -4,7 +4,7 @@
  */
 import { state, saveSettings, escapeHtml, error, showConfirmModal } from '../core.js';
 import { exportDiagnosticDump } from '../diagnostic-dump.js';
-import { listUrisErrors, clearUrisErrors, formatUrisError, recordUrisError } from '../error-pool.js';
+import { listUrisErrors, clearUrisErrors, formatUrisError, recordUrisError, markUrisErrorsSeen, countUnreadUrisErrors, hasUnreadHardUrisErrors } from '../error-pool.js';
 import { listPendingBrowserRequests, discardPendingBrowserRequest, clearPendingBrowserRequests } from '../browser-image-recovery.js';
 import { bindTabBarScroll } from './tab-bar-scroll.js';
 import { listQueueLog, queueBadgeCount, clearQueueLog, noteQueued, noteRunning, noteFinished, hasLiveQueueLane, laneFromSource } from './queue-log.js';
@@ -51,7 +51,7 @@ export function mountPanel() {
             <div class="uris-header-actions">
                 <span class="uris-status" id="urisStatus"></span>
                 <button class="uris-icon-btn uris-error-badge" id="urisQueueBadge" hidden title="Очередь генераций" aria-label="Очередь генераций" aria-expanded="false" aria-controls="urisQueuePanel">QUEUE <span class="uris-error-count" id="urisQueueCount">0</span></button>
-                <button class="uris-icon-btn uris-error-badge" id="urisErrorBadge" hidden title="События и незавершённые запросы" aria-label="События и незавершённые запросы" aria-expanded="false" aria-controls="urisErrorPanel">INFO <span class="uris-error-count" id="urisErrorCount">0</span></button>
+                <button class="uris-icon-btn uris-error-badge" id="urisErrorBadge" hidden title="События и незавершённые запросы" aria-label="События и незавершённые запросы" aria-expanded="false" aria-controls="urisErrorPanel">INFO <span class="uris-error-count" id="urisErrorCount">0</span><span class="uris-badge-dot" id="urisErrorDot" hidden></span></button>
                 <button class="uris-icon-btn" id="urisExportDumps" title="Выгрузить диагностику (только метаданные)" aria-label="Выгрузить диагностику (только метаданные)">📥</button>
                 <button class="uris-icon-btn" id="urisClose" title="Свернуть" aria-label="Свернуть">✕</button>
             </div>
@@ -393,11 +393,57 @@ function renderPendingRows(items) {
         : '<div class="uris-error-row uris-error-empty">Нет записей</div>';
 }
 
+// Подпись содержимого панели: события (текст/время/счётчик/тон) + recovery.
+// Панель перерисовывается на каждое событие пула, включая дедуп-бампы; без
+// пропуска по подписи innerHTML сбрасывает скролл ровно в момент, когда
+// пользователь читает список. false до первого рендера — пустая панель должна
+// отстроиться; сбрасывается в bindErrorPool на каждый монтаж окна.
+let _lastPanelSnapshot = null;
+
+function panelSnapshot(errors, pending) {
+    return JSON.stringify([
+        errors.map(entry => [entry.scope, entry.message, entry.ts, entry.count, entry.level || 'error', entry.quiet === true]),
+        pending.map(item => [item.id, item.status, item.error || '']),
+    ]);
+}
+
+/**
+ * Русская плюрализация: 1 событие / 2 события / 5 событий; 11/12/14 — «событий»,
+ * 21/31/… — снова «событие».
+ */
+function pluralRu(n, one, few, many) {
+    const mod10 = n % 10;
+    const mod100 = n % 100;
+    if (mod10 === 1 && mod100 !== 11) return one;
+    if (mod10 >= 2 && mod10 <= 4 && (mod100 < 12 || mod100 > 14)) return few;
+    return many;
+}
+
+/** title бейджа: из чего состоит счётчик (новые события + recovery). */
+function composeBadgeTitle(unread, pending) {
+    const parts = [];
+    if (unread > 0) parts.push(`${unread} ${pluralRu(unread, 'новое событие', 'новых события', 'новых событий')}`);
+    if (pending > 0) parts.push(`${pending} ${pluralRu(pending, 'незавершённый запрос', 'незавершённых запроса', 'незавершённых запросов')}`);
+    return parts.length ? parts.join(' · ') : 'События';
+}
+
+/** Шов для node-тестов: чистые функции бейджа без DOM. */
+export const _testErrorBadge = { pluralRu, composeBadgeTitle };
+
 function renderErrorPanel(winEl, errors, pending = []) {
     const panel = winEl?.querySelector?.('#urisErrorPanel');
     if (!panel) return;
+    const snapshot = panelSnapshot(errors, pending);
+    if (snapshot === _lastPanelSnapshot) return;
+    _lastPanelSnapshot = snapshot;
+    const scrollTop = panel.scrollTop;
     const errorRows = errors.length
-        ? errors.slice().reverse().map(entry => `<div class="uris-error-row">${escapeHtml(formatUrisError(entry))}</div>`).join('')
+        ? errors.slice().reverse().map(entry => {
+            // Тон строки = серьёзность записи: warn-предупреждения приглушены,
+            // жёсткие ошибки получают красную заливку как fail-строки очереди.
+            const tone = entry.level === 'warn' ? ' uris-pool-warn' : ' uris-pool-fail';
+            return `<div class="uris-error-row${tone}">${escapeHtml(formatUrisError(entry))}</div>`;
+        }).join('')
         : '<div class="uris-error-row uris-error-empty">Ошибок текущей сессии нет</div>';
     const preDispatch = pending.filter(item => item.status === 'notStarted');
     const uncertain = pending.filter(item => item.status !== 'notStarted');
@@ -407,6 +453,12 @@ function renderErrorPanel(winEl, errors, pending = []) {
         <section class="uris-error-section"><h3>Ошибки текущей сессии</h3><div class="uris-error-rows">${errorRows}</div></section>
         <section class="uris-error-section"><h3>Результат/сохранение не завершено</h3><div class="uris-error-rows">${renderPendingRows(uncertain)}</div></section>
         <section class="uris-error-section"><h3>Неотправленные операции</h3><div class="uris-error-rows">${renderPendingRows(preDispatch)}</div></section>`;
+    panel.scrollTop = scrollTop;
+    panel.querySelector('#urisErrorClear')?.addEventListener('click', () => {
+        // sync придёт событием uris:errors из clearUrisErrors — как у
+        // recovery-кнопок ниже, которые полагаются на uris:pending-changed.
+        clearUrisErrors();
+    });
     panel.querySelectorAll('[data-pending-id]').forEach(button => button.addEventListener('click', async () => {
         button.disabled = true;
         try { await discardPendingBrowserRequest(button.dataset.pendingId); }
@@ -562,6 +614,7 @@ function bindErrorPool(el) {
     const badge = el.querySelector('#urisErrorBadge');
     const panel = el.querySelector('#urisErrorPanel');
     if (!badge || !panel) return;
+    _lastPanelSnapshot = null;
     let refreshSeq = 0;
     const positionPanel = () => {
         if (panel.hidden || isMobileViewport()) return;
@@ -572,27 +625,27 @@ function bindErrorPool(el) {
     const sync = async () => {
         const seq = ++refreshSeq;
         positionPanel();
+        // Кто смотрит в открытый лист — всё в нём прочитал: до подсчёта
+        // unread, чтобы цифра гасла сразу при открытии и не горела, пока
+        // панель открыта, даже когда события приходят потоком.
+        if (!panel.hidden) markUrisErrorsSeen();
         const pending = await listPendingBrowserRequests();
         const errors = listUrisErrors();
         if (seq !== refreshSeq || (el.isConnected === false)) return;
-        // Quiet entries (provider warnings etc.) live only in the dropdown —
-        // they must not keep the badge permanently lit.
-        const badgeErrors = errors.filter(entry => entry.quiet !== true);
-        const count = badgeErrors.length + pending.length;
-        badge.hidden = count === 0;
-        badge.title = pending.length
-            ? `События и ${pending.length} незавершённый запрос`
-            : 'События';
+        // Цифра — только новости: непрочитанные события + незакрытый recovery.
+        // Видимость — инвентарь (как у QUEUE-бейджа: виден, пока в ленте есть
+        // строки): просмотренное остаётся достижимым, но бейдж гаснет.
+        const unread = countUnreadUrisErrors();
+        const total = errors.length + pending.length;
+        const dot = el.querySelector('#urisErrorDot');
+        badge.hidden = total === 0;
+        badge.classList.toggle('uris-error-badge--seen', total > 0 && unread === 0);
+        badge.title = composeBadgeTitle(unread, pending.length);
+        if (dot) dot.hidden = !hasUnreadHardUrisErrors();
         badge.setAttribute('aria-expanded', String(!panel.hidden));
-        el.querySelector('#urisErrorCount').textContent = String(count);
-        if (!panel.hidden) {
-            renderErrorPanel(el, errors, pending);
-            panel.querySelector('#urisErrorClear')?.addEventListener('click', () => {
-                clearUrisErrors();
-                sync();
-            });
-        }
-    }; 
+        el.querySelector('#urisErrorCount').textContent = String(unread + pending.length);
+        if (!panel.hidden) renderErrorPanel(el, errors, pending);
+    };
     badge.addEventListener('click', async event => {
         event.stopPropagation();
         panel.hidden = !panel.hidden;
