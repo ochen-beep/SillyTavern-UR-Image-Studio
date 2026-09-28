@@ -3,7 +3,6 @@
  * Floating window: mount, drag (by header), resize (corner handle), mobile overlay.
  */
 import { state, saveSettings, escapeHtml, error } from '../core.js';
-import { exportDiagnosticDump } from '../diagnostic-dump.js';
 import { listUrisErrors, clearUrisErrors, formatUrisError, markUrisErrorsSeen, countUnreadUrisErrors, hasUnreadHardUrisErrors, reportFailure, URIS_SCOPES } from '../error-pool.js';
 import { listPendingBrowserRequests, discardPendingBrowserRequest, clearPendingBrowserRequests } from '../browser-image-recovery.js';
 import { bindTabBarScroll } from './tab-bar-scroll.js';
@@ -52,7 +51,6 @@ export function mountPanel() {
                 <span class="uris-status" id="urisStatus"></span>
                 <button class="uris-icon-btn uris-error-badge" id="urisQueueBadge" hidden title="Очередь генераций" aria-label="Очередь генераций" aria-expanded="false" aria-controls="urisQueuePanel">QUEUE <span class="uris-error-count" id="urisQueueCount">0</span></button>
                 <button class="uris-icon-btn uris-error-badge" id="urisErrorBadge" hidden title="События" aria-label="События" aria-expanded="false" aria-controls="urisErrorPanel">INFO <span class="uris-error-count" id="urisErrorCount">0</span><span class="uris-badge-dot" id="urisErrorDot" hidden></span></button>
-                <button class="uris-icon-btn" id="urisExportDumps" title="Выгрузить диагностику (только метаданные)" aria-label="Выгрузить диагностику (только метаданные)">📥</button>
                 <button class="uris-icon-btn" id="urisClose" title="Свернуть" aria-label="Свернуть">✕</button>
             </div>
         </div>
@@ -317,12 +315,6 @@ function saveGeometry(el) {
 function bindWindowEvents(el) {
     el.querySelector('#urisClose').addEventListener('click', () => {
         state.settings.collapsed = true; saveSettings(); syncPanelVisibility();
-    });
-    el.querySelector('#urisExportDumps').addEventListener('click', () => {
-        exportDiagnosticDump().catch(e => {
-            error('exportDiagnosticDump:', e);
-            reportFailure({ scope: URIS_SCOPES.diagnostics, message: e?.message || String(e), toast: true, toastText: 'Ошибка выгрузки диагностики: ' + (e?.message || e), toastTitle: 'UR Image Studio' });
-        });
     });
     const header = el.querySelector('#urisHeader');
     // Pointer Events (как у плавающего лаунчера): один жест покрывает мышь, перо
