@@ -5,7 +5,7 @@
 import { state, saveSettings, escapeHtml, error } from '../core.js';
 import { exportDiagnosticDump } from '../diagnostic-dump.js';
 import { listUrisErrors, clearUrisErrors, formatUrisError, markUrisErrorsSeen, countUnreadUrisErrors, hasUnreadHardUrisErrors, reportFailure, URIS_SCOPES } from '../error-pool.js';
-import { listPendingBrowserRequests, discardPendingBrowserRequest } from '../browser-image-recovery.js';
+import { listPendingBrowserRequests, discardPendingBrowserRequest, clearPendingBrowserRequests } from '../browser-image-recovery.js';
 import { bindTabBarScroll } from './tab-bar-scroll.js';
 import { listQueueLog, queueBadgeCount, clearQueueLog, noteQueued, noteRunning, noteFinished, hasLiveQueueLane, laneFromSource } from './queue-log.js';
 import { stopQueue, cancelQueuedItem, resubmitQueueRow } from '../pipeline-queue.js';
@@ -51,13 +51,13 @@ export function mountPanel() {
             <div class="uris-header-actions">
                 <span class="uris-status" id="urisStatus"></span>
                 <button class="uris-icon-btn uris-error-badge" id="urisQueueBadge" hidden title="Очередь генераций" aria-label="Очередь генераций" aria-expanded="false" aria-controls="urisQueuePanel">QUEUE <span class="uris-error-count" id="urisQueueCount">0</span></button>
-                <button class="uris-icon-btn uris-error-badge" id="urisErrorBadge" hidden title="События и незавершённые запросы" aria-label="События и незавершённые запросы" aria-expanded="false" aria-controls="urisErrorPanel">INFO <span class="uris-error-count" id="urisErrorCount">0</span><span class="uris-badge-dot" id="urisErrorDot" hidden></span></button>
+                <button class="uris-icon-btn uris-error-badge" id="urisErrorBadge" hidden title="События" aria-label="События" aria-expanded="false" aria-controls="urisErrorPanel">INFO <span class="uris-error-count" id="urisErrorCount">0</span><span class="uris-badge-dot" id="urisErrorDot" hidden></span></button>
                 <button class="uris-icon-btn" id="urisExportDumps" title="Выгрузить диагностику (только метаданные)" aria-label="Выгрузить диагностику (только метаданные)">📥</button>
                 <button class="uris-icon-btn" id="urisClose" title="Свернуть" aria-label="Свернуть">✕</button>
             </div>
         </div>
         <div class="uris-error-panel" id="urisQueuePanel" role="dialog" aria-label="Очередь генераций" hidden></div>
-        <div class="uris-error-panel" id="urisErrorPanel" role="dialog" aria-label="Ошибки и незавершённые запросы" hidden></div>
+        <div class="uris-error-panel" id="urisErrorPanel" role="dialog" aria-label="События" hidden></div>
         <div class="uris-tabs" id="urisTabs"></div>
         <div class="uris-body" id="urisBody"></div>
         <div class="uris-resizer" id="urisResizer"></div>`;
@@ -404,25 +404,31 @@ function pendingRowContext(item) {
 }
 
 /**
- * Recovery-строка: статус + провенанс вместо голого UUID. Мелким текстом —
- * только текст ошибки (например CORS-объяснение): он и есть причина читать
- * строку; requestId не информативен и в диагностический дамп попадает всегда.
+ * Единая лента событий: ошибки/предупреждения сессии и чеки платных запросов
+ * в одном списке, новые сверху. Для пользователя — одна сущность («событие»)
+ * и одна кнопка очистки; различие живёт только в содержимом карточки.
  */
-function renderPendingRows(items) {
-    return items.slice().reverse().map(item => {
-        const context = pendingRowContext(item);
-        const detail = item?.error ? `<small>${escapeHtml(item.error)}</small>` : '';
-        return `<div class="uris-error-row uris-pending-row"><span><strong>${escapeHtml(pendingStatusLabel(item))}</strong>${context ? ` · ${escapeHtml(context)}` : ''}</span>${detail}<button type="button" class="uris-btn uris-btn-ghost uris-pending-discard" data-pending-id="${escapeHtml(item.id)}" title="Удалить запись без повторной отправки" aria-label="Удалить запись без повторной отправки">×</button></div>`;
-    }).join('');
+function mergeEvents(errors, pending) {
+    const poolCards = (errors || []).map(entry => ({
+        kind: 'pool',
+        ts: entry.ts,
+        text: formatUrisError(entry),
+        level: entry.level === 'warn' ? 'warn' : 'error',
+    }));
+    const recoveryCards = (pending || []).map(item => ({
+        kind: 'recovery',
+        id: item.id,
+        ts: Date.parse(item.createdAt) || 0,
+        status: pendingStatusLabel(item),
+        context: pendingRowContext(item),
+        error: item.error || '',
+    }));
+    return [...poolCards, ...recoveryCards].sort((a, b) => b.ts - a.ts);
 }
 
-/**
- * Бейдж держат только записи с деньгами под угрозой (исход POST неизвестен).
- * «Не отправлен» — до провайдера не дошло, восстанавливать нечего: строка
- * живёт в панели, но бейдж не зажигает и хранится лишь сутки.
- */
-function recoveryBadgeCount(pending) {
-    return (pending || []).filter(item => item?.status !== 'notStarted').length;
+/** Непросмотренные recovery-события: id, который панель ещё не показывала. */
+function unseenRecoveryCount(pending, seenIds) {
+    return (pending || []).filter(item => !seenIds.has(item.id)).length;
 }
 
 // Подпись содержимого панели: события (текст/время/счётчик/тон) + recovery.
@@ -451,16 +457,15 @@ function pluralRu(n, one, few, many) {
     return many;
 }
 
-/** title бейджа: из чего состоит счётчик (новые события + recovery). */
-function composeBadgeTitle(unread, pending) {
-    const parts = [];
-    if (unread > 0) parts.push(`${unread} ${pluralRu(unread, 'новое событие', 'новых события', 'новых событий')}`);
-    if (pending > 0) parts.push(`${pending} ${pluralRu(pending, 'незавершённый запрос', 'незавершённых запроса', 'незавершённых запросов')}`);
-    return parts.length ? parts.join(' · ') : 'События';
+/** title бейджа: сколько событий осталось неразобранными. */
+function composeBadgeTitle(unread) {
+    return unread > 0
+        ? `${unread} ${pluralRu(unread, 'новое событие', 'новых события', 'новых событий')}`
+        : 'События';
 }
 
 /** Шов для node-тестов: чистые функции бейджа без DOM. */
-export const _testErrorBadge = { pluralRu, composeBadgeTitle, pendingRowContext, pendingStatusLabel, recoveryBadgeCount };
+export const _testErrorBadge = { pluralRu, composeBadgeTitle, pendingRowContext, pendingStatusLabel, mergeEvents, unseenRecoveryCount };
 
 function renderErrorPanel(winEl, errors, pending = []) {
     const panel = winEl?.querySelector?.('#urisErrorPanel');
@@ -469,32 +474,24 @@ function renderErrorPanel(winEl, errors, pending = []) {
     if (snapshot === _lastPanelSnapshot) return;
     _lastPanelSnapshot = snapshot;
     const scrollTop = panel.scrollTop;
-    const errorRows = errors.length
-        ? errors.slice().reverse().map(entry => {
-            // Тон строки = серьёзность записи: warn-предупреждения приглушены,
-            // жёсткие ошибки получают красную заливку как fail-строки очереди.
-            const tone = entry.level === 'warn' ? ' uris-pool-warn' : ' uris-pool-fail';
-            return `<div class="uris-error-row${tone}">${escapeHtml(formatUrisError(entry))}</div>`;
-        }).join('')
-        : '<div class="uris-error-row uris-error-empty">Ошибок текущей сессии нет</div>';
-    const preDispatch = pending.filter(item => item.status === 'notStarted').reverse();
-    const uncertain = pending.filter(item => item.status !== 'notStarted').reverse();
-    // Recovery — одна секция и только когда есть записи: пустые заглушки
-    // («Нет записей») — шум без содержания. Сначала записи с деньгами под
-    // угрозой (исход POST неизвестен), затем «не отправлен».
-    const recoverySection = pending.length
-        ? `<section class="uris-error-section"><h3>Незавершённые запросы</h3><div class="uris-error-rows">${renderPendingRows([...uncertain, ...preDispatch])}</div></section>`
-        : '';
-    // Действия вынесены наверх: панели с записями могут быть длинными, кнопки
-    // не должны требовать прокрутки. Массовая очистка recovery осталась в
-    // настройках («Очистить всю диагностику»), здесь — только крестик на строке.
-    panel.innerHTML = `<div class="uris-error-panel-actions"><button type="button" class="uris-btn uris-btn-ghost" id="urisErrorClear">Очистить события</button></div>
-        <section class="uris-error-section"><h3>Ошибки текущей сессии</h3><div class="uris-error-rows">${errorRows}</div></section>${recoverySection}`;
+    // Единая лента карточек, новые сверху. Событие есть событие: и ошибка
+    // сессии, и чек платного запроса лежат в одном списке без подсекций —
+    // различие только в содержимом карточки.
+    const body = mergeEvents(errors, pending).map(ev => ev.kind === 'pool'
+        ? `<div class="uris-error-row${ev.level === 'warn' ? ' uris-pool-warn' : ' uris-pool-fail'}">${escapeHtml(ev.text)}</div>`
+        : `<div class="uris-error-row uris-pending-row"><span><strong>${escapeHtml(ev.status)}</strong>${ev.context ? ` · ${escapeHtml(ev.context)}` : ''}</span>${ev.error ? `<small>${escapeHtml(ev.error)}</small>` : ''}<button type="button" class="uris-btn uris-btn-ghost uris-pending-discard" data-pending-id="${escapeHtml(ev.id)}" title="Удалить событие" aria-label="Удалить событие">×</button></div>`
+    ).join('');
+    // Одна кнопка на всю ленту: стирает и события сессии, и чеки платных
+    // запросов. Точечно чек убирается крестиком на его карточке.
+    panel.innerHTML = `<div class="uris-error-panel-actions"><button type="button" class="uris-btn uris-btn-ghost" id="urisErrorClear">Очистить</button></div>
+        <div class="uris-error-rows">${body || '<div class="uris-error-row uris-error-empty">Событий нет</div>'}</div>`;
     panel.scrollTop = scrollTop;
     panel.querySelector('#urisErrorClear')?.addEventListener('click', () => {
-        // sync придёт событием uris:errors из clearUrisErrors — как у
-        // recovery-кнопок ниже, которые полагаются на uris:pending-changed.
-        clearUrisErrors();
+        clearUrisErrors(); // sync придёт событием uris:errors…
+        clearPendingBrowserRequests().catch(e => { // …и uris:pending-changed
+            error('clear pending:', e);
+            reportFailure({ scope: URIS_SCOPES.recovery, message: e?.message || String(e) });
+        });
     });
     panel.querySelectorAll('[data-pending-id]').forEach(button => button.addEventListener('click', async () => {
         button.disabled = true;
@@ -650,6 +647,12 @@ function bindErrorPool(el) {
     const panel = el.querySelector('#urisErrorPanel');
     if (!badge || !panel) return;
     _lastPanelSnapshot = null;
+    // Recovery-события, уже показанные в этой сессии. Пул помнит «просмотрено»
+    // таймстампом, но он сессионный; чеки живут между сессиями, поэтому для
+    // них «новое» = id, которого панель ещё не показывала. После перезагрузки
+    // страницы старые чеки снова «новые» — и честно зажигают бейдж: их ещё
+    // не разобрали.
+    const seenRecoveryIds = new Set();
     let refreshSeq = 0;
     const positionPanel = () => {
         if (panel.hidden || isMobileViewport()) return;
@@ -663,23 +666,26 @@ function bindErrorPool(el) {
         // Кто смотрит в открытый лист — всё в нём прочитал: до подсчёта
         // unread, чтобы цифра гасла сразу при открытии и не горела, пока
         // панель открыта, даже когда события приходят потоком.
-        if (!panel.hidden) markUrisErrorsSeen();
+        const wasOpen = !panel.hidden;
+        if (wasOpen) markUrisErrorsSeen();
         const pending = await listPendingBrowserRequests();
         const errors = listUrisErrors();
         if (seq !== refreshSeq || (el.isConnected === false)) return;
-        // Цифра — новое: непрочитанные события + recovery с деньгами под
-        // угрозой. Видимость — инвентарь (как у QUEUE-бейджа: виден, пока
-        // есть что показать), просмотренное гаснет классом --seen. Записи
-        // «не отправлен» (денег нет) не держат бейдж вовсе.
-        const unread = countUnreadUrisErrors();
-        const atRisk = recoveryBadgeCount(pending);
+        if (wasOpen) for (const item of pending) seenRecoveryIds.add(item.id);
+        // Цифра — новое: непрочитанные события единой ленты. Видимость —
+        // инвентарь (как у QUEUE-бейджа: виден, пока есть что показать),
+        // просмотренное гаснет классом --seen.
+        const unseenRecovery = pending.filter(item => !seenRecoveryIds.has(item.id));
+        const unread = countUnreadUrisErrors() + unseenRecovery.length;
         const dot = el.querySelector('#urisErrorDot');
-        badge.hidden = errors.length === 0 && atRisk === 0;
-        badge.classList.toggle('uris-error-badge--seen', unread === 0 && atRisk === 0 && (errors.length > 0 || pending.length > 0));
-        badge.title = composeBadgeTitle(unread, atRisk);
-        if (dot) dot.hidden = !hasUnreadHardUrisErrors();
+        badge.hidden = errors.length === 0 && pending.length === 0;
+        badge.classList.toggle('uris-error-badge--seen', unread === 0 && (errors.length > 0 || pending.length > 0));
+        badge.title = composeBadgeTitle(unread);
+        // Точка = среди нового есть серьёзное: жёсткая ошибка сессии или чек
+        // платного запроса с неизвестным исходом.
+        if (dot) dot.hidden = !(hasUnreadHardUrisErrors() || unseenRecovery.some(item => item.status !== 'notStarted'));
         badge.setAttribute('aria-expanded', String(!panel.hidden));
-        el.querySelector('#urisErrorCount').textContent = String(unread + atRisk);
+        el.querySelector('#urisErrorCount').textContent = String(unread);
         if (!panel.hidden) renderErrorPanel(el, errors, pending);
     };
     badge.addEventListener('click', async event => {

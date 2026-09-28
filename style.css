@@ -1886,8 +1886,6 @@
     box-shadow: 0 8px 28px rgba(0,0,0,.35);
 }
 .uris-error-panel[hidden] { display: none; }
-.uris-error-section + .uris-error-section { margin-top: 10px; padding-top: 8px; border-top: 1px solid var(--uris-border-soft); }
-.uris-error-section h3 { margin: 0 0 5px; font-size: var(--uris-font-sm); color: var(--uris-text-mut); font-weight: 600; }
 .uris-error-rows { display: flex; flex-direction: column; gap: 3px; }
 .uris-error-row { display: flex; align-items: flex-start; gap: 5px; opacity: 0.9; word-break: break-word; }
 .uris-error-row small { flex: 1 1 100%; color: var(--uris-text-mut); }
