@@ -21,15 +21,19 @@
  * manifest therefore needs no code change at all.
  *
  * Resolution order for a requested aspect ratio:
- *   1. `capabilities.aspectRatios` (explicit ratio enum)  → aspect_ratio
+ *   1. `capabilities.aspectRatios` (explicit ratio enum) includes the value → aspect_ratio
  *   2. `capabilities.imageSizes` contains the ratio literal ("16:9") → size
  *      (some gateways take aspect strings as size values, e.g.
  *      bytedance/seedream-v5.0-pro)
- *   3. `capabilities.imageSizes` contains WxH resolutions → nearest by ratio,
+ *   3. `capabilities.imageSizes` speaks ratios but lacks the requested one
+ *      (4:5, 5:4, 21:9 vs seedream-v5.0-pro's list) → nearest declared ratio
+ *      as size
+ *   4. `capabilities.imageSizes` contains WxH resolutions → nearest by ratio,
  *      ties resolved to the smaller canvas
- *   4. `capabilities.supportedParameters` includes 'aspect_ratio' → aspect_ratio
- *   5. family fallback table (gpt-image / dall-e static taxonomy)
- *   6. nothing — the caller reports a dropped parameter instead of guessing
+ *   5. `capabilities.supportedParameters` includes 'aspect_ratio' → aspect_ratio,
+ *      clamped to the declared aspectRatios enum when one exists
+ *   6. family fallback table (gpt-image / dall-e static taxonomy)
+ *   7. nothing — the caller reports a dropped parameter instead of guessing
  *
  * Nearest-WxH is always sent even when the deviation is large: it is the best
  * the model can do, and the post-generation aspect check (aspectDeviates in
@@ -92,6 +96,28 @@ function nearestWxH(sizes, requestedRatio) {
 }
 
 /**
+ * Pick the ratio-shaped candidate closest to the requested ratio
+ * (log-distance; ties resolve lexicographically for determinism). Used when
+ * a manifest speaks ratios but does not list the requested one: sending the
+ * nearest declared value preserves the intent, an undeclared value is the
+ * silent-drop bug class this resolver exists to prevent.
+ */
+function nearestRatio(candidates, requestedRatio) {
+    let best = null;
+    let bestDistance = Number.POSITIVE_INFINITY;
+    for (const candidate of candidates) {
+        const ratio = ratioOf(candidate);
+        if (ratio == null) continue;
+        const distance = Math.abs(Math.log(requestedRatio) - Math.log(ratio));
+        if (distance < bestDistance || (distance === bestDistance && String(candidate) < String(best))) {
+            best = candidate;
+            bestDistance = distance;
+        }
+    }
+    return best;
+}
+
+/**
  * Resolve the wire geometry for an aspect-ratio request against the route's
  * manifest, falling back to the dialect's static table.
  *
@@ -117,13 +143,31 @@ export function resolveWireGeometry({ route, aspectRatio, fallbackTable }) {
         return { param: 'size', value: requested, source: 'manifest-size-exact' };
     }
     const sizes = imageSizes.filter(value => WxH_PATTERN.test(value));
+    const ratioLiterals = imageSizes.filter(value => RATIO_PATTERN.test(value));
+    if (requestedRatio != null && ratioLiterals.length) {
+        // Ratio vocabulary without the requested value (4:5, 5:4, 21:9 against
+        // seedream-v5.0-pro's list): send the nearest declared ratio instead of
+        // a static-taxonomy value the model never declared.
+        const nearest = nearestRatio(ratioLiterals, requestedRatio);
+        if (nearest) return { param: 'size', value: nearest, source: 'manifest-size-nearest-ratio' };
+    }
     if (sizes.length && requestedRatio != null) {
         const nearest = nearestWxH(sizes, requestedRatio);
         if (nearest) return { param: 'size', value: nearest, source: 'manifest-size-nearest' };
     }
 
     if (manifestSupports(route, 'aspect_ratio')) {
-        return { param: 'aspect_ratio', value: requested, source: 'manifest-aspect-param' };
+        // When the route declares a ratio enum, clamp to it: an aspect_ratio
+        // value outside the enum is exactly the undeclared-parameter risk.
+        const enumRatios = (capabilityList(route, 'aspectRatios') || []).filter(value => RATIO_PATTERN.test(value));
+        const value = enumRatios.length && !enumRatios.includes(requested) && requestedRatio != null
+            ? nearestRatio(enumRatios, requestedRatio)
+            : requested;
+        return {
+            param: 'aspect_ratio',
+            value,
+            source: value !== requested ? 'manifest-aspect-nearest' : 'manifest-aspect-param',
+        };
     }
 
     const fallback = fallbackTable instanceof Map ? fallbackTable.get(requested) : null;
@@ -137,9 +181,11 @@ export function resolveWireGeometry({ route, aspectRatio, fallbackTable }) {
  * that reject the explicit value outright (apihub 400 "quality is not
  * supported", 2026-09). When the manifest declares a quality vocabulary, a
  * value outside it is dropped; the caller turns that into a paramWarning.
+ * `acceptedValues` (Set or Array) is the dialect's accepted input scale and
+ * is required: a value outside it is dropped.
  * @param {object} [route]
  * @param {unknown} quality
- * @param {Set<string>} acceptedValues — the dialect's accepted input scale
+ * @param {Set<string>|string[]} acceptedValues — the dialect's accepted scale
  * @returns {string|undefined}
  */
 export function resolveWireQuality(route, quality, acceptedValues) {
@@ -147,5 +193,6 @@ export function resolveWireQuality(route, quality, acceptedValues) {
     if (quality === 'auto') return undefined;
     const declared = capabilityList(route, 'qualityValues');
     if (declared && !declared.includes(quality)) return undefined;
-    return acceptedValues instanceof Set && acceptedValues.has(quality) ? quality : undefined;
+    const accepted = acceptedValues instanceof Set ? acceptedValues : Array.isArray(acceptedValues) ? new Set(acceptedValues) : null;
+    return accepted && accepted.has(quality) ? quality : undefined;
 }

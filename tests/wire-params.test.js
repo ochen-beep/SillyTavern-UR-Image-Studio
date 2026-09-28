@@ -51,6 +51,22 @@ test('seedream-v5.0-pro: ratio literals in imageSizes travel as the size value',
     assert.deepEqual(resolveWireGeometry({ route: { capabilities: SEEDREAM_PRO }, aspectRatio: '4:3' }), { param: 'size', value: '4:3', source: 'manifest-size-exact' });
 });
 
+test('seedream-v5.0-pro: ratios missing from the manifest clamp to the nearest declared one', () => {
+    // Regression: 4:5/5:4/21:9 used to fall through to the static gpt table,
+    // i.e. an undeclared size — the same silent-drop class as the Seedream bug.
+    const geo = aspect => resolveWireGeometry({ route: { capabilities: SEEDREAM_PRO }, aspectRatio: aspect, fallbackTable: new Map([['4:5', '1024x1536'], ['5:4', '1536x1024'], ['21:9', '1536x1024']]) });
+    assert.deepEqual(geo('4:5'), { param: 'size', value: '3:4', source: 'manifest-size-nearest-ratio' });
+    assert.deepEqual(geo('5:4'), { param: 'size', value: '4:3', source: 'manifest-size-nearest-ratio' });
+    assert.deepEqual(geo('21:9'), { param: 'size', value: '16:9', source: 'manifest-size-nearest-ratio' });
+});
+
+test('an aspect_ratio value outside a declared aspectRatios enum clamps to the enum', () => {
+    const route = { capabilities: { aspectRatios: ['1:1', '16:9', '9:16'], supportedParameters: ['resolutions', 'aspect_ratio'], imageSizes: ['1k', '2k'] } };
+    assert.deepEqual(resolveWireGeometry({ route, aspectRatio: '21:9' }), { param: 'aspect_ratio', value: '16:9', source: 'manifest-aspect-nearest' });
+    // Without the enum the requested value travels verbatim (nano-banana case).
+    assert.deepEqual(resolveWireGeometry({ route: { capabilities: NANO_BANANA }, aspectRatio: '9:16' }), { param: 'aspect_ratio', value: '9:16', source: 'manifest-aspect-param' });
+});
+
 test('nano-banana: aspect_ratio-only manifest → aspect_ratio parameter', () => {
     assert.deepEqual(resolveWireGeometry({ route: { capabilities: NANO_BANANA }, aspectRatio: '16:9' }), { param: 'aspect_ratio', value: '16:9', source: 'manifest-aspect-param' });
     // nano-banana-2 lists resolution tiers, not WxH — tiers carry no aspect,
@@ -88,6 +104,10 @@ test('quality: auto is omitted, manifest vocabulary drops unknown values', () =>
     assert.equal(resolveWireQuality({ capabilities: {} }, 'hd', QUALITY), undefined);
     assert.equal(resolveWireQuality({ capabilities: { qualityValues: ['low', 'medium', 'high'] } }, 'high', QUALITY), 'high');
     assert.equal(resolveWireQuality({ capabilities: { qualityValues: ['low', 'medium', 'high'] } }, 'hd', QUALITY), undefined, 'manifest vocabulary drops values outside it');
+    // The accepted scale may be an array as well as a Set — both are dialect
+    // vocabularies, and rejecting one shape silently unwires every value.
+    assert.equal(resolveWireQuality({ capabilities: {} }, 'high', ['low', 'medium', 'high']), 'high');
+    assert.equal(resolveWireQuality({ capabilities: {} }, 'hd', ['low', 'medium', 'high']), undefined);
 });
 
 // ── Adapter integration: the manifest must reach the wire ──
