@@ -167,6 +167,7 @@ export async function processJob({ msgId, idx, type, desc }, operation = null) {
     if (msgId >= 0 && sourceCurrent(operation, msgId)) upsertItem(msgId, { idx, type, descHash, desc, status: 'pending', requestId, createdAt: Date.now() });
     let outcome = 'error';      // 'ready' | 'cancelled' | 'error'
     let errorCode = null;
+    let errorText = null;       // человекочитаемая причина для UI (item.error, uris:inline-end)
     let imagePath = null;
     let cardId = null;
     try {
@@ -244,12 +245,15 @@ export async function processJob({ msgId, idx, type, desc }, operation = null) {
         const cancelled = controller.signal.aborted || e?.name === 'AbortError';
         outcome = cancelled ? 'cancelled' : 'error';
         errorCode = cancelled ? 'aborted' : String(e?.code || e?.message || e);
+        // UI показывает сообщение ('No image connection'), сырой код
+        // ('NO_CONNECTION') остаётся в диагностическом событии ниже.
+        errorText = cancelled ? 'Генерация отменена' : String(e?.message || e);
         // Провал реролла не откатывает платный ready-результат в ошибку: старая
         // картинка остаётся видимой, провал уходит вызывающему (реролл/retry, Task 8).
         const canWrite = msgId >= 0 && sourceCurrent(operation, msgId);
         const wasReady = canWrite && getSlot(msgId).items.some(i => i.status === 'ready' && itemKey(i) === itemKey({ idx, type, descHash }));
         if (canWrite && !wasReady) {
-            upsertItem(msgId, { idx, type, descHash, desc, status: 'error', imagePath: null, cardId: null, requestId, error: errorCode, createdAt: Date.now() });
+            upsertItem(msgId, { idx, type, descHash, desc, status: 'error', imagePath: null, cardId: null, requestId, error: errorText, createdAt: Date.now() });
         }
         // DOMException AbortError carries a legacy numeric .code (20): wrap by string-code check.
         if (cancelled && typeof e?.code !== 'string') throw Object.assign(new Error('aborted'), { code: 'ABORTED' });
@@ -262,7 +266,7 @@ export async function processJob({ msgId, idx, type, desc }, operation = null) {
         recordDiagnosticEvent({ event: 'inline-end', requestId, outcome,
             durationMs: Date.now() - startedAt,
             details: { msgId, type, code: outcome === 'ready' ? null : errorCode, cardId } });
-        emitInline('uris:inline-end', { requestId, msgId, idx, type, outcome, imagePath, error: outcome === 'ready' ? null : errorCode });
+        emitInline('uris:inline-end', { requestId, msgId, idx, type, outcome, imagePath, error: outcome === 'ready' ? null : errorText });
     }
 }
 

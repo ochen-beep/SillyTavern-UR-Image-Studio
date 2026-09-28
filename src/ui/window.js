@@ -512,7 +512,15 @@ function renderQueuePanel(winEl) {
     }));
     panel.querySelectorAll('[data-queue-retry]').forEach(btn => btn.addEventListener('click', () => {
         const row = listQueueLog().find(r => r.id === btn.getAttribute('data-queue-retry'));
-        if (row?.retry) resubmitQueueRow(row.retry);
+        if (!row?.retry) return;
+        resubmitQueueRow(row.retry).catch(e => {
+            // Повторно упавшая задача — не unhandled rejection: та же запись
+            // «Генерация», что у ручной отправки (QUEUE-строку красит
+            // noteFinished в processQueue, пулу нужен свой durable-след).
+            if (e?.name === 'AbortError') return;
+            error('Queue retry:', e?.message || e);
+            recordUrisError({ scope: 'Генерация', message: e?.message || String(e), context: e?.urisContext || { post: row.retry.msgId } });
+        });
     }));
 }
 
