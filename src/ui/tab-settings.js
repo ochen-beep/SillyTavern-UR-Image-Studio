@@ -13,7 +13,7 @@ import { playStageSound } from '../notify.js';
 import { runExport, runImportInteractive } from '../data-port.js';
 import { exportDiagnosticDump, clearAllDiagnostics } from '../diagnostic-dump.js';
 import { exportNetDump } from '../netdump.js';
-import { recordUrisError } from '../error-pool.js';
+import { reportFailure, URIS_SCOPES } from '../error-pool.js';
 import { listFileStores, measureSettingsFootprint } from '../file-store.js';
 import { refreshActive, renderTabs } from './tabs.js';
 import { applyInlineRuntime } from './tab-media.js';
@@ -319,15 +319,13 @@ function bindDataActions(root) {
     root.querySelector('#urisTabExportDiag')?.addEventListener('click', () => {
         exportDiagnosticDump().catch(e => {
             error('exportDiagnosticDump:', e);
-            recordUrisError({ scope: 'Диагностика', message: e?.message || String(e) });
-            toastr?.error('Ошибка выгрузки диагностики: ' + (e?.message || e), DISPLAY_NAME);
+            reportFailure({ scope: URIS_SCOPES.diagnostics, message: e?.message || String(e), toast: true, toastText: 'Ошибка выгрузки диагностики: ' + (e?.message || e), toastTitle: DISPLAY_NAME });
         });
     });
     root.querySelector('#urisTabExportNet')?.addEventListener('click', () => {
         exportNetDump().catch(e => {
             error('exportNetDump:', e);
-            recordUrisError({ scope: 'Сетевой дамп', message: e?.message || String(e) });
-            toastr?.error('Ошибка выгрузки сетевого дампа: ' + (e?.message || e), DISPLAY_NAME);
+            reportFailure({ scope: URIS_SCOPES.netdump, message: e?.message || String(e), toast: true, toastText: 'Ошибка выгрузки сетевого дампа: ' + (e?.message || e), toastTitle: DISPLAY_NAME });
         });
     });
     root.querySelector('#urisTabClearDiag')?.addEventListener('click', async () => {
@@ -338,8 +336,7 @@ function bindDataActions(root) {
             toastr?.success(`Диагностика очищена: события, логи, ошибки, сетевой дамп (${netCount}) и recovery (${pendingCount})`, DISPLAY_NAME);
         } catch (e) {
             error('clearAllDiagnostics:', e);
-            recordUrisError({ scope: 'Диагностика', message: e?.message || String(e) });
-            toastr?.error('Не удалось полностью очистить диагностику: ' + (e?.message || e), DISPLAY_NAME);
+            reportFailure({ scope: URIS_SCOPES.diagnostics, message: e?.message || String(e), toast: true, toastText: 'Не удалось полностью очистить диагностику: ' + (e?.message || e), toastTitle: DISPLAY_NAME });
         }
     });
 }

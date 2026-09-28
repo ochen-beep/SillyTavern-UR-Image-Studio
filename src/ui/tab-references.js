@@ -18,7 +18,7 @@ import { openCropDialog } from './crop-dialog.js';
 import { showSingleImage } from './lightbox.js';
 import { refreshActive, getActiveTab } from './tabs.js';
 import { lockBodyScroll, unlockBodyScroll } from './window.js';
-import { recordUrisError } from '../error-pool.js';
+import { reportFailure, URIS_SCOPES } from '../error-pool.js';
 import {
     createFolderField, openFolderSheet, orderSidebarFolders, nextFolderSortMode, filterFolders,
 } from './folder-picker.js';
@@ -733,8 +733,7 @@ function _bindEditorBody(root, host, ref, folders, opts = {}) {
             if (img) img.src = optimized.imagePath;
             flashSaved();
         } catch (err) {
-            recordUrisError({ scope: 'Референсы', message: 'Не удалось обрезать: ' + (err?.message || err) });
-            toastr?.error?.('Не удалось обрезать: ' + err.message);
+            reportFailure({ scope: URIS_SCOPES.refs, message: 'Не удалось обрезать: ' + (err?.message || err), toast: true, toastText: 'Не удалось обрезать: ' + err.message });
         }
     });
     host.querySelector('.uris-ed-file')?.addEventListener('change', async (e) => {
@@ -757,8 +756,7 @@ function _bindEditorBody(root, host, ref, folders, opts = {}) {
             const img = host.querySelector('.uris-editor-preview');
             if (img) img.src = optimized.imagePath;
         } catch (err) {
-            recordUrisError({ scope: 'Референсы', message: 'Не удалось заменить: ' + (err?.message || err) });
-            toastr?.error?.('Не удалось заменить: ' + err.message);
+            reportFailure({ scope: URIS_SCOPES.refs, message: 'Не удалось заменить: ' + (err?.message || err), toast: true, toastText: 'Не удалось заменить: ' + err.message });
         }
         e.target.value = '';
     });

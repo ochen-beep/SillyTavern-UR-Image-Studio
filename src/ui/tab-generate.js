@@ -24,7 +24,7 @@ import {
     getVisibleModelChoices,
     classifyModelCapability,
 } from '../dispatch-plan.js';
-import { recordUrisError } from '../error-pool.js';
+import { reportFailure, URIS_SCOPES } from '../error-pool.js';
 import { isStudioActive, STUDIO_CHAT_ID, STUDIO_MSG_ID } from '../studio-scope.js';
 
 import { activeScope, setGenerateRoot, getGenerateRoot } from './tab-generate-scope.js';
@@ -144,7 +144,7 @@ export function renderGenerateMarkup(vm) {
     const followPressed = followOn ? 'true' : 'false';
 
     // Stage 1/2 errors are no longer rendered as a red inline block — they
-    // live in the header error pool (recordUrisError from the action handlers).
+    // live in the header error pool (reportFailure from the action handlers).
 
     // Source block: in a chat it is the read-only excerpt of the selected post;
     // in the studio the scene text is an input the user edits freely.
@@ -404,8 +404,7 @@ export function bindModelSelect(root, choices, options = {}) {
             }
             options.onSwitched?.(modelId);
         } catch (e) {
-            recordUrisError({ scope: 'Параметры', message: `Не удалось сменить модель: ${e?.message || e}` });
-            toastr?.error('Не удалось сменить модель: ' + (e?.message || e));
+            reportFailure({ scope: URIS_SCOPES.params, message: `Не удалось сменить модель: ${e?.message || e}`, toast: true });
         }
     });
 }
@@ -488,8 +487,7 @@ export async function render(root) {
         modelChoices = await resolveModelChoices();
     } catch (e) {
         error('Generate tab: model choices failed:', e?.message || e);
-        recordUrisError({ scope: 'Параметры', message: `Модель чата недоступна: ${e?.message || e}` });
-        toastr?.error('Модель чата недоступна: ' + (e?.message || e));
+        reportFailure({ scope: URIS_SCOPES.params, message: `Модель чата недоступна: ${e?.message || e}`, toast: true });
     }
     if (!isCurrent()) return;
     root.innerHTML = renderGenerateMarkup({ ...vm, modelChoices, qualityOptions: qualityOptionsFor(modelChoices?.current || '', effectiveDraft.quality), isStudio: studio });
@@ -688,8 +686,7 @@ export function bindGenerate(root) {
             }
         } catch (e) {
             error('Generate action:', e.message);
-            recordUrisError({ scope: 'Stage 1', message: e.message, context: input ? { post: input.msgId } : null });
-            toastr?.error(e.message);
+            reportFailure({ scope: URIS_SCOPES.stage1, message: e.message, context: input ? { post: input.msgId } : null, toast: true });
             setStatus('');
         }
         await render(root);
@@ -728,8 +725,7 @@ export function bindGenerate(root) {
             try {
                 await saveGenerationDefault(key, e.target.value);
             } catch (e) {
-                recordUrisError({ scope: 'Параметры', message: `Не удалось сохранить ${key}: ${e?.message || e}` });
-                toastr?.error(`Не удалось сохранить параметр: ${e?.message || e}`);
+                reportFailure({ scope: URIS_SCOPES.params, message: `Не удалось сохранить ${key}: ${e?.message || e}`, toast: true, toastText: `Не удалось сохранить параметр: ${e?.message || e}` });
             }
         });
     }
@@ -767,8 +763,7 @@ export function bindGenerate(root) {
                 }));
             }
         } catch (e) {
-            recordUrisError({ scope: 'Параметры', message: `Не удалось сохранить шаблон: ${e?.message || e}` });
-            toastr?.error(`Не удалось сохранить шаблон: ${e?.message || e}`);
+            reportFailure({ scope: URIS_SCOPES.params, message: `Не удалось сохранить шаблон: ${e?.message || e}`, toast: true });
         }
     });
 
@@ -877,8 +872,8 @@ export async function submitCurrentGeneration(root, deps = {}) {
             // are not failures: record them quietly in the INFO pool instead of
             // toasting on every generation.
             if (Array.isArray(entry?.warnings) && entry.warnings.length) {
-                recordUrisError({
-                    scope: 'Провайдер',
+                reportFailure({
+                    scope: URIS_SCOPES.provider,
                     message: entry.warnings.map(w => `${w?.feature || '?'}: ${w?.details || ''}`).join('; '),
                     context: entry?.generationContext || null,
                     quiet: true,
@@ -894,14 +889,12 @@ export async function submitCurrentGeneration(root, deps = {}) {
                 if (e?.message !== 'Queue stopped') toastr?.info('Генерация отменена');
             } else {
                 error('Generate action:', e?.message || e);
-                recordUrisError({ scope: 'Генерация', message: e?.message || String(e), context: e?.urisContext || null });
-                toastr?.error(e?.message || String(e));
+                reportFailure({ scope: URIS_SCOPES.generation, message: e?.message || String(e), context: e?.urisContext || null, toast: true });
             }
         });
     } catch (e) {
         error('Generate action:', e?.message || e);
-        recordUrisError({ scope: 'Генерация', message: e?.message || String(e), context: e?.urisContext || null });
-        toastr?.error(e?.message || String(e));
+        reportFailure({ scope: URIS_SCOPES.generation, message: e?.message || String(e), context: e?.urisContext || null, toast: true });
     }
 }
 

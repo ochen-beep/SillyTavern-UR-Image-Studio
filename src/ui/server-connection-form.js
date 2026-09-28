@@ -17,7 +17,7 @@ import { getProviderDescriptor } from '../provider-descriptors.js';
 import { validatePollinationsToken } from '../providers/image-pollinations.js';
 import { validateNaisteraToken } from '../providers/image-naistera.js';
 import { getVisibleModelChoices, partitionLikelyImageModels } from '../dispatch-plan.js';
-import { recordUrisError } from '../error-pool.js';
+import { reportFailure, URIS_SCOPES } from '../error-pool.js';
 import { showConfirmModal, log, escapeHtml } from '../core.js';
 import { forgetAccordion, getAccordionOpen, setAccordionOpen } from './accordion-state.js';
 import { setStatus } from './window.js';
@@ -485,7 +485,7 @@ export function bindServerConnectionForm(form, draft, dependencies = {}) {
         } catch (error) {
             log('probe: fail', draft?.id || draft?.draftId, error?.code || '', error?.message || error);
             draft.errorMessage = error?.message || 'Проверка не удалась';
-            recordUrisError({ scope: 'Проверка', message: `${draft?.name || draft?.endpoint || 'коннект'}: ${draft.errorMessage}` });
+            reportFailure({ scope: URIS_SCOPES.probe, message: `${draft?.name || draft?.endpoint || 'коннект'}: ${draft.errorMessage}` });
             notifyError(error);
             rerenderCard();
             setStatus('');

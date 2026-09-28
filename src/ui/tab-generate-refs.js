@@ -13,7 +13,7 @@ import { resolveChatConfigSnapshot } from '../pipeline-config.js';
 import { getConnection, isServerOwnedConnection, saveConnection } from '../connections.js';
 import { effectiveReferenceCap } from '../reference-limits.js';
 import { resolveDispatchPlan, referenceEncoding } from '../dispatch-plan.js';
-import { recordUrisError } from '../error-pool.js';
+import { reportFailure, URIS_SCOPES } from '../error-pool.js';
 import { getChatRefs, saveChatRefs, listFolders, listRefs } from '../refs-library.js';
 import { showPoolPicker } from './tab-references.js';
 import { openFolderSheet } from './folder-picker.js';
@@ -556,8 +556,7 @@ export async function renderLivePreview(root, referenceResolution) {
             toastr?.info(`Протокол коннекта закреплён: ${nextDialect}`);
             refreshActive();
         } catch (e) {
-            recordUrisError({ scope: 'Параметры', message: 'Не удалось сменить протокол: ' + (e?.message || e) });
-            toastr?.error('Не удалось сменить протокол: ' + (e?.message || e));
+            reportFailure({ scope: URIS_SCOPES.params, message: 'Не удалось сменить протокол: ' + (e?.message || e), toast: true });
         }
     });
 

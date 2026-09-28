@@ -8,6 +8,8 @@ import {
     markUrisErrorsSeen,
     countUnreadUrisErrors,
     hasUnreadHardUrisErrors,
+    reportFailure,
+    URIS_SCOPES,
 } from '../src/error-pool.js';
 
 test.beforeEach(() => {
@@ -151,4 +153,46 @@ test('clearUrisErrors resets the seen baseline', () => {
 
     recordUrisError({ message: 'fresh' });
     assert.equal(countUnreadUrisErrors(), 1);
+});
+
+test('reportFailure records and toasts the pool text once', () => {
+    const toasts = [];
+    globalThis.toastr = { error: (msg, title) => toasts.push(['error', msg, title]) };
+    try {
+        const entry = reportFailure({ scope: 'Генерация', message: 'boom', toast: true });
+        assert.equal(listUrisErrors().at(-1), entry);
+        assert.deepEqual(toasts, [['error', 'boom', undefined]]);
+    } finally {
+        delete globalThis.toastr;
+    }
+});
+
+test('reportFailure without toast flag and with toastText override', () => {
+    const toasts = [];
+    globalThis.toastr = { error: (...args) => toasts.push(args) };
+    try {
+        reportFailure({ scope: 'Галерея', message: 'pool text', toastText: 'toast text' });
+        assert.equal(listUrisErrors().at(-1).message, 'pool text');
+        assert.deepEqual(toasts, []);
+
+        reportFailure({ scope: 'Галерея', message: 'pool 2', toast: true, toastText: 'toast 2', toastTitle: 'URIS' });
+        assert.deepEqual(toasts, [['toast 2', 'URIS']]);
+    } finally {
+        delete globalThis.toastr;
+    }
+});
+
+test('reportFailure carries level and quiet into the entry', () => {
+    reportFailure({ scope: 'Провайдер', message: 'hint', quiet: true, level: 'warn' });
+    const entry = listUrisErrors().at(-1);
+    assert.equal(entry.quiet, true);
+    assert.equal(entry.level, 'warn');
+    assert.equal(countUnreadUrisErrors(), 0);
+});
+
+test('URIS_SCOPES values are unique non-empty strings', () => {
+    const values = Object.values(URIS_SCOPES);
+    assert.equal(new Set(values).size, values.length);
+    for (const value of values) assert.equal(typeof value, 'string');
+    for (const value of values) assert.ok(value.length > 0);
 });

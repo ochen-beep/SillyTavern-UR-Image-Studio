@@ -14,7 +14,7 @@ import { runStage2 } from '../pipeline.js';
 import { createRef, createReferenceFromGalleryCard, listRefs, updateRef, persistPoolOrThrow, releaseRefImage } from '../refs-library.js';
 import { imageToDataUrl, ingestReferenceImage, blobToDataUrl } from '../references.js';
 import { openCropDialog } from './crop-dialog.js';
-import { recordUrisError } from '../error-pool.js';
+import { reportFailure, URIS_SCOPES } from '../error-pool.js';
 
 import { canonicalizeNativeImagePath } from '../native-image-path.js';
 
@@ -50,8 +50,7 @@ export async function copyItemText(item, deps = {}) {
             await write(field.text);
             toastr?.success(`Скопировано: ${field.label}`);
         } catch (err) {
-            recordUrisError({ scope: 'Копирование', message: String(err?.message || err) });
-            toastr?.error('Не удалось скопировать');
+            reportFailure({ scope: URIS_SCOPES.copy, message: String(err?.message || err), toast: true, toastText: 'Не удалось скопировать' });
         }
     };
     if (fields.length === 1) return writeWithFeedback(fields[0]);
@@ -137,8 +136,7 @@ export async function saveAsReference(item) {
         refreshActive();
     } catch (err) {
         log('saveRef error:', err.message);
-        recordUrisError({ scope: 'Галерея', message: `Не удалось сохранить: ${err?.message || err}` });
-        toastr?.error('Не удалось сохранить: ' + err.message);
+        reportFailure({ scope: URIS_SCOPES.gallery, message: `Не удалось сохранить: ${err?.message || err}`, toast: true, toastText: 'Не удалось сохранить: ' + err.message });
     }
 }
 
@@ -211,8 +209,7 @@ export async function regenerate(item, root, regenBtn) {
     } catch (err) {
         if (err?.name === 'AbortError') toastr?.info('Генерация отменена');
         else {
-            recordUrisError({ scope: 'Галерея', message: 'Перегенерация: ' + (err?.message || err) });
-            toastr?.error('Перегенерация: ' + err.message);
+            reportFailure({ scope: URIS_SCOPES.gallery, message: 'Перегенерация: ' + (err?.message || err), toast: true, toastText: 'Перегенерация: ' + err.message });
         }
     } finally {
         _regenInFlight.delete(flightKey);
@@ -342,8 +339,7 @@ export async function cropGalleryImage(item, chatId, root, deps = {}) {
         if (root) refreshRoot(root);
         return true;
     } catch (err) {
-        recordUrisError({ scope: 'Галерея', message: 'Кроп: ' + (err?.message || err) });
-        toastr?.error('Кроп не удался: ' + err.message);
+        reportFailure({ scope: URIS_SCOPES.gallery, message: 'Кроп: ' + (err?.message || err), toast: true, toastText: 'Кроп не удался: ' + err.message });
         return false;
     }
 }
@@ -383,8 +379,7 @@ export async function cropReference(item, deps = {}) {
         import('./tabs.js').then(m => m.refreshActive()).catch(() => {});
         return true;
     } catch (err) {
-        recordUrisError({ scope: 'Референсы', message: 'Кроп референса: ' + (err?.message || err) });
-        toastr?.error('Кроп не удался: ' + err.message);
+        reportFailure({ scope: URIS_SCOPES.refs, message: 'Кроп референса: ' + (err?.message || err), toast: true, toastText: 'Кроп не удался: ' + err.message });
         return false;
     }
 }

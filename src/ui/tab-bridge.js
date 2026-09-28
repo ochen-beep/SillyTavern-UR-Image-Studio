@@ -8,7 +8,7 @@
 import { state, escapeHtml, DISPLAY_NAME, error } from '../core.js';
 import { getBridge } from '../bridge.js';
 import { VALID_ASPECT_RATIOS } from '../core.js';
-import { recordUrisError } from '../error-pool.js';
+import { reportFailure, URIS_SCOPES } from '../error-pool.js';
 
 // Module-scoped form state: survives tab re-renders within the session.
 const _lab = {
@@ -360,7 +360,7 @@ function bindLab(root) {
 
     // Async fills after render — never block the tab paint.
     refreshLabData(root).catch(e => {
-        recordUrisError({ scope: 'Мост', message: e?.message || String(e) });
+        reportFailure({ scope: URIS_SCOPES.bridge, message: e?.message || String(e) });
     });
 }
 

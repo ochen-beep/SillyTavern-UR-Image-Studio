@@ -7,7 +7,7 @@ import { listImageConnections } from '../connections.js';
 import { patchChatConfig } from '../chat-binding.js';
 import { getProfiles, getProfileDetails } from '../text-connection.js';
 import { bindHeaderToggle } from './accordion-state.js';
-import { recordUrisError } from '../error-pool.js';
+import { reportFailure, URIS_SCOPES } from '../error-pool.js';
 import {
     bindServerConnectionForm, renderServerConnectionForm,
 } from './server-connection-form.js';
@@ -219,8 +219,7 @@ function rerenderCard(form, draft, rerenderHost, setActive) {
         onSaved: () => rerenderCard(newForm, draft, rerenderHost, setActive),
         rerenderCard: () => rerenderCard(newForm, draft, rerenderHost, setActive),
         notifyError: error => {
-            recordUrisError({ scope: 'API', message: error?.message || String(error) });
-            toastr?.error(error?.message || String(error));
+            reportFailure({ scope: URIS_SCOPES.api, message: error?.message || String(error), toast: true });
         },
         setActive,
     });
@@ -305,8 +304,7 @@ export async function renderImageConnSection(host) {
         onSaved: () => rerenderCard(form, draft, rerender, setActive),
         rerenderCard: () => rerenderCard(form, draft, rerender, setActive),
         notifyError: error => {
-            recordUrisError({ scope: 'API', message: error?.message || String(error) });
-            toastr?.error(error?.message || String(error));
+            reportFailure({ scope: URIS_SCOPES.api, message: error?.message || String(error), toast: true });
         },
         notifySuccess: message => toastr?.success(message),
         cloneConnection: cloneConnectionTemplate,

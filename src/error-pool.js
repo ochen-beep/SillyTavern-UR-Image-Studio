@@ -115,3 +115,47 @@ export function formatUrisError(entry) {
     ].filter(Boolean);
     return `${time} · ${entry.scope}${count}: ${entry.message}` + (parts.length ? ` — ${parts.join(' · ')}` : '');
 }
+
+/**
+ * Канонический реестр скоупов пула. recordUrisError по-прежнему принимает
+ * любую строку (дампы/тесты), но вызовы берут значение отсюда: свободные
+ * строки расползлись до 17 вариантов с синонимами, «Диагностика» писалась
+ * из четырёх файлов по памяти.
+ */
+export const URIS_SCOPES = Object.freeze({
+    auto: 'Автогенерация',
+    generation: 'Генерация',
+    provider: 'Провайдер',
+    params: 'Параметры',
+    stage1: 'Stage 1',
+    probe: 'Проверка',
+    refs: 'Референсы',
+    gallery: 'Галерея',
+    copy: 'Копирование',
+    templates: 'Шаблоны',
+    bridge: 'Мост',
+    api: 'API',
+    dataPort: 'Импорт/экспорт',
+    diagnostics: 'Диагностика',
+    netdump: 'Сетевой дамп',
+    recovery: 'Recovery',
+    ui: 'UI',
+});
+
+/**
+ * Одна точка «тост + запись в пул». 26 из 35 мест вызова дублировали текст
+ * ошибки в toastr рядом с recordUrisError; хелпер держит пару синхронной.
+ * Тексты тостов переносятся дословно (toastText), заголовок — toastTitle.
+ * DOM-free: toastr читается с globalThis с guarded-вызовом (как в file-store),
+ * поэтому node-тесты импортируют модуль без оговорок.
+ */
+export function reportFailure({
+    scope = 'URIS', message, context = null, level = 'error', quiet = false,
+    toast = false, toastText = null, toastKind = 'error', toastTitle = null,
+} = {}) {
+    const entry = recordUrisError({ scope, message, context, level, quiet });
+    if (toast) {
+        try { globalThis.toastr?.[toastKind]?.(toastText ?? entry.message, toastTitle || undefined); } catch { /* no toastr in tests */ }
+    }
+    return entry;
+}

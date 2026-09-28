@@ -4,7 +4,7 @@
  */
 import { state, saveSettings, escapeHtml, error, showConfirmModal } from '../core.js';
 import { exportDiagnosticDump } from '../diagnostic-dump.js';
-import { listUrisErrors, clearUrisErrors, formatUrisError, recordUrisError, markUrisErrorsSeen, countUnreadUrisErrors, hasUnreadHardUrisErrors } from '../error-pool.js';
+import { listUrisErrors, clearUrisErrors, formatUrisError, markUrisErrorsSeen, countUnreadUrisErrors, hasUnreadHardUrisErrors, reportFailure, URIS_SCOPES } from '../error-pool.js';
 import { listPendingBrowserRequests, discardPendingBrowserRequest, clearPendingBrowserRequests } from '../browser-image-recovery.js';
 import { bindTabBarScroll } from './tab-bar-scroll.js';
 import { listQueueLog, queueBadgeCount, clearQueueLog, noteQueued, noteRunning, noteFinished, hasLiveQueueLane, laneFromSource } from './queue-log.js';
@@ -321,8 +321,7 @@ function bindWindowEvents(el) {
     el.querySelector('#urisExportDumps').addEventListener('click', () => {
         exportDiagnosticDump().catch(e => {
             error('exportDiagnosticDump:', e);
-            recordUrisError({ scope: 'Диагностика', message: e?.message || String(e) });
-            toastr?.error('Ошибка выгрузки диагностики: ' + (e?.message || e), 'UR Image Studio');
+            reportFailure({ scope: URIS_SCOPES.diagnostics, message: e?.message || String(e), toast: true, toastText: 'Ошибка выгрузки диагностики: ' + (e?.message || e), toastTitle: 'UR Image Studio' });
         });
     });
     const header = el.querySelector('#urisHeader');
@@ -462,7 +461,7 @@ function renderErrorPanel(winEl, errors, pending = []) {
     panel.querySelectorAll('[data-pending-id]').forEach(button => button.addEventListener('click', async () => {
         button.disabled = true;
         try { await discardPendingBrowserRequest(button.dataset.pendingId); }
-        catch (e) { error('discard pending:', e); recordUrisError({ scope: 'Recovery', message: e?.message || String(e) }); }
+        catch (e) { error('discard pending:', e); reportFailure({ scope: URIS_SCOPES.recovery, message: e?.message || String(e) }); }
     }));
     panel.querySelector('#urisPendingClear')?.addEventListener('click', async () => {
         try {
@@ -471,7 +470,7 @@ function renderErrorPanel(winEl, errors, pending = []) {
             await clearPendingBrowserRequests();
         } catch (e) {
             error('clear pending:', e);
-            recordUrisError({ scope: 'Recovery', message: e?.message || String(e) });
+            reportFailure({ scope: URIS_SCOPES.recovery, message: e?.message || String(e) });
         }
     });
 }
@@ -519,7 +518,7 @@ function renderQueuePanel(winEl) {
             // noteFinished в processQueue, пулу нужен свой durable-след).
             if (e?.name === 'AbortError') return;
             error('Queue retry:', e?.message || e);
-            recordUrisError({ scope: 'Генерация', message: e?.message || String(e), context: e?.urisContext || { post: row.retry.msgId } });
+            reportFailure({ scope: URIS_SCOPES.generation, message: e?.message || String(e), context: e?.urisContext || { post: row.retry.msgId } });
         });
     }));
 }

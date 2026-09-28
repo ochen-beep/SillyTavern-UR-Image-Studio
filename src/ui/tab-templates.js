@@ -4,7 +4,7 @@ import { state, escapeHtml, showConfirmModal, showInputModal, debounceSave, erro
 import { listTemplates, saveTemplate, deleteTemplate, createInstructionTemplate } from '../prompt-templates.js';
 import { patchChatConfig } from '../chat-binding.js';
 import { refreshActive } from './tabs.js';
-import { recordUrisError } from '../error-pool.js';
+import { reportFailure, URIS_SCOPES } from '../error-pool.js';
 import { generatePromptText } from '../text-api.js';
 import { editTextModal } from './text-editor.js';
 
@@ -36,8 +36,7 @@ async function renderActions(root) {
                 }
             } catch (e) {
                 error('Templates: create failed:', e?.message || e);
-                recordUrisError({ scope: 'Шаблоны', message: e?.message || String(e) });
-                toastr?.error('Не удалось создать шаблон: ' + (e?.message || e));
+                reportFailure({ scope: URIS_SCOPES.templates, message: e?.message || String(e), toast: true, toastText: 'Не удалось создать шаблон: ' + (e?.message || e) });
             }
         });
     });

@@ -4,7 +4,7 @@
  * Each tab registers {id, label, render} and receives a root element on activation.
  */
 import { state, saveSettings, error } from '../core.js';
-import { recordUrisError } from '../error-pool.js';
+import { reportFailure, URIS_SCOPES } from '../error-pool.js';
 
 const registry = [];
 let _active = null;
@@ -72,7 +72,7 @@ export function setActiveTab(id, { persist = true, render = true } = {}) {
                 // trace of why. The pool is the durable record (the header INFO
                 // badge); the console line stays for the developer.
                 error(`render tab "${id}":`, e);
-                recordUrisError({ scope: 'UI', message: `Вкладка «${tab.label}» не отрисовалась: ${e?.message || e}` });
+                reportFailure({ scope: URIS_SCOPES.ui, message: `Вкладка «${tab.label}» не отрисовалась: ${e?.message || e}` });
             });
         } else {
             raf(restore);

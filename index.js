@@ -40,7 +40,7 @@ import { setCurrentMsgId, getLastPostIndex } from './src/post-navigator.js';
 import { refreshPoolCache } from './src/refs-library.js';
 import { runExport, runImportInteractive } from './src/data-port.js';
 import { sweepStaleRunningDrafts } from './src/generation-drafts.js';
-import { recordUrisError } from './src/error-pool.js';
+import { reportFailure, URIS_SCOPES } from './src/error-pool.js';
 import { exportDiagnosticDump, clearAllDiagnostics } from './src/diagnostic-dump.js';
 import { loadDiagnosticEvents, flushDiagnosticEvents, recordDiagnosticEvent } from './src/diagnostic-events.js';
 import { flushTemplateWrites, flushTemplateWritesOnUnload } from './src/template-file-store.js';
@@ -198,12 +198,7 @@ async function init() {
                     toastr?.info('Генерация отменена');
                 } else {
                     error('Auto generation:', e.message);
-                    recordUrisError({
-                        scope: 'Автогенерация',
-                        message: e.message,
-                        context: e?.urisContext || { post: input.msgId },
-                    });
-                    toastr?.error('Generation: ' + e.message);
+                    reportFailure({ scope: URIS_SCOPES.auto, message: e.message, context: e?.urisContext || { post: input.msgId }, toast: true, toastText: 'Generation: ' + e.message });
                 }
             }
         },
@@ -445,11 +440,11 @@ function bindSettingsPanel(host) {
     });
     host.querySelector('#uris_export_diagnostic').addEventListener('click', () => exportDiagnosticDump().catch(e => {
         error('exportDiagnosticDump:', e);
-        recordUrisError({ scope: 'Диагностика', message: e?.message || String(e) });
+        reportFailure({ scope: URIS_SCOPES.diagnostics, message: e?.message || String(e) });
     }));
     host.querySelector('#uris_export_network').addEventListener('click', () => exportNetDump().catch(e => {
         error('exportNetDump:', e);
-        recordUrisError({ scope: 'Сетевой дамп', message: e?.message || String(e) });
+        reportFailure({ scope: URIS_SCOPES.netdump, message: e?.message || String(e) });
     }));
     host.querySelector('#uris_clear_diagnostic').addEventListener('click', async () => {
         const confirmed = await showConfirmModal('Очистить всю диагностику?\n\nБудут удалены события, логи, ошибки, сетевой дамп и локальные recovery-записи. Recovery может описывать уже оплаченный запрос с неизвестным результатом; действие не отменяет запрос у провайдера.');
@@ -459,8 +454,7 @@ function bindSettingsPanel(host) {
             toastr?.success(`Диагностика очищена: события, логи, ошибки, сетевой дамп (${netCount}) и recovery (${pendingCount})`, DISPLAY_NAME);
         } catch (e) {
             error('clearDiagnostic:', e);
-            recordUrisError({ scope: 'Диагностика', message: e?.message || String(e) });
-            toastr?.error('Не удалось полностью очистить диагностику: ' + (e?.message || e), DISPLAY_NAME);
+            reportFailure({ scope: URIS_SCOPES.diagnostics, message: e?.message || String(e), toast: true, toastText: 'Не удалось полностью очистить диагностику: ' + (e?.message || e), toastTitle: DISPLAY_NAME });
         }
     });
     // NOTE: intentionally NOT attaching our own toggle on .inline-drawer-toggle — the ST core

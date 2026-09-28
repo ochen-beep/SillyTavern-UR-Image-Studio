@@ -21,7 +21,7 @@ import {
 } from './core.js';
 import { ALLOWED_CONTRACTS, isSecretKey, normalizeRouteContract } from './image-connection-schema.js';
 import { invalidateTemplateCache, replaceTemplateStoreRecords, getTemplateRecordsForExport } from './prompt-templates.js';
-import { recordUrisError } from './error-pool.js';
+import { reportFailure, URIS_SCOPES } from './error-pool.js';
 import { invalidatePoolCache, getRefsForExport, replaceRefsRecords } from './refs-library.js';
 import { getParamPresetsForExport, replaceParamPresetRecords } from './param-presets.js';
 import { recordDiagnosticEvent } from './diagnostic-events.js';
@@ -792,8 +792,7 @@ export async function runExport() {
         toastr?.success(`Экспортировано ${total} записей и текущая конфигурация чата`, DISPLAY_NAME);
     } catch (e) {
         error('runExport:', e);
-        recordUrisError({ scope: 'Импорт/экспорт', message: 'Ошибка экспорта: ' + (e?.message || e) });
-        toastr?.error('Ошибка экспорта: ' + e.message, DISPLAY_NAME);
+        reportFailure({ scope: URIS_SCOPES.dataPort, message: 'Ошибка экспорта: ' + (e?.message || e), toast: true, toastText: 'Ошибка экспорта: ' + e.message, toastTitle: DISPLAY_NAME });
     }
 }
 
@@ -816,8 +815,7 @@ export async function runImport(mode = 'merge', onSuccess) {
         return result;
     } catch (e) {
         error('runImport:', e);
-        recordUrisError({ scope: 'Импорт/экспорт', message: 'Ошибка импорта: ' + (e?.message || e) });
-        toastr?.error('Ошибка импорта: ' + e.message, DISPLAY_NAME);
+        reportFailure({ scope: URIS_SCOPES.dataPort, message: 'Ошибка импорта: ' + (e?.message || e), toast: true, toastText: 'Ошибка импорта: ' + e.message, toastTitle: DISPLAY_NAME });
         throw e;
     }
 }
@@ -867,8 +865,7 @@ export async function runImportInteractive() {
         return result;
     } catch (e) {
         error('runImportInteractive:', e);
-        recordUrisError({ scope: 'Импорт/экспорт', message: e?.message || String(e) });
-        toastr?.error('Ошибка импорта: ' + (e?.message || e), DISPLAY_NAME);
+        reportFailure({ scope: URIS_SCOPES.dataPort, message: e?.message || String(e), toast: true, toastText: 'Ошибка импорта: ' + (e?.message || e), toastTitle: DISPLAY_NAME });
         return null;
     }
 }
