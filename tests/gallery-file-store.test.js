@@ -100,81 +100,28 @@ after(() => {
     globalThis.toastr = originalToastr;
 });
 
-describe('gallery file store: migration', () => {
-    it('moves the settings index into the file and strips it, freeing the bytes', async () => {
-        seedSettingsCards([
-            { id: 'c1', imagePath: img('one.png'), prompt: 'one', status: 'ready' },
-            { id: 'c2', imagePath: img('two.png'), prompt: 'two', status: 'ready' },
-        ]);
-
-        assert.equal(await gallery.ensureGalleryStoreReady(), 'file');
-        await gallery.flushGalleryWrites();
-
-        assert.deepEqual(fileCards().map(c => c.id), ['c1', 'c2']);
-        assert.equal(Object.hasOwn(extensionSettings.ur_image_studio.imageConnections, 'galleryIndex'), false,
-            'the settings copy is what makes settings.json big — it must be gone');
-        assert.equal(gallery.galleryStoreMode(), 'file');
-    });
-
-    it('leaves settings.json untouched when there is nothing to migrate', async () => {
+describe('gallery file store: load', () => {
+    it('no file and no cards → nothing is created', async () => {
         assert.equal(await gallery.ensureGalleryStoreReady(), 'file');
         await gallery.flushGalleryWrites();
         assert.equal(serverFiles.size, 0, 'no empty file is created');
         assert.equal(saveCalls, 0);
     });
 
-    it('does not strip the settings copy when the migration write fails', async () => {
-        seedSettingsCards([{ id: 'c1', imagePath: img('one.png'), prompt: 'one' }]);
-        failUploads = true;
-
-        await gallery.ensureGalleryStoreReady();
-        await gallery.flushGalleryWrites();
-
-        assert.deepEqual(settingsIndex().map(c => c.id), ['c1'], 'data survives a failed migration');
-        assert.equal(serverFiles.size, 0);
-    });
-
-    it('an existing file wins and the stale settings copy is dropped', async () => {
-        serverFiles.set(gallery.GALLERY_FILE_NAME, JSON.stringify({
-            v: gallery.GALLERY_STORE_VERSION,
-            cards: [{ id: 'from-file', imagePath: img('f.png'), prompt: 'f', status: 'ready' }],
-        }));
+    it('a settings blob with no data starts from the empty file value', async () => {
         seedSettingsCards([{ id: 'stale', imagePath: img('s.png'), prompt: 's' }]);
-
-        await gallery.ensureGalleryStoreReady();
-        assert.deepEqual((await gallery.listCards({ reconcile: false })).map(c => c.id), ['from-file']);
-        assert.equal(Object.hasOwn(extensionSettings.ur_image_studio.imageConnections, 'galleryIndex'), false);
+        assert.equal(await gallery.ensureGalleryStoreReady(), 'file');
+        assert.deepEqual(await gallery.listCards({ reconcile: false }), [], 'настройки больше не источник данных');
     });
 
-    it('shrinks the module settings footprint by roughly the size of the index', async () => {
-        const { measureSettingsFootprint } = await import('../src/file-store.js');
-        // A miniature version of the real situation: many cards carrying a long
-        // prompt. This is the number the whole change is judged by.
-        seedSettingsCards(Array.from({ length: 50 }, (_, i) => ({
-            id: `c${i}`, imagePath: img(`f${i}.png`), prompt: 'x'.repeat(2000), status: 'ready',
-        })));
-        const before = measureSettingsFootprint('ur_image_studio');
-
-        await gallery.ensureGalleryStoreReady();
+    it('no user-files API → readonly, writes refused, nothing uploaded', async () => {
+        verifyAvailable = false;
+        assert.equal(await gallery.ensureGalleryStoreReady(), 'readonly');
+        await gallery.addCard({ id: 'c1', imagePath: img('one.png'), prompt: 'one' });
         await gallery.flushGalleryWrites();
 
-        const after = measureSettingsFootprint('ur_image_studio');
-        assert.equal(before.entries.galleryIndex, 50);
-        assert.equal(after.entries.galleryIndex ?? 0, 0, 'no cards left in settings');
-        assert.equal(after.settingsBytes < before.settingsBytes / 10, true,
-            `expected a large drop, got ${before.settingsBytes} → ${after.settingsBytes}`);
-        assert.equal(fileCards().length, 50, 'all cards survived the move');
-    });
-
-    it('falls back to the settings store when user-files is unavailable', async () => {
-        verifyAvailable = false;
-        seedSettingsCards([]);
-        const card = await gallery.addCard({ id: 'c1', imagePath: img('one.png'), prompt: 'one' });
-
-        assert.equal(gallery.galleryStoreMode(), 'legacy');
+        assert.equal(gallery.galleryStoreMode(), 'readonly');
         assert.equal(uploads.length, 0, 'no user-files traffic');
-        assert.equal(saveCalls > 0, true, 'settings store persists via saveSettings');
-        assert.equal(settingsIndex()[0].id, card.id);
     });
 });
 

@@ -7,16 +7,35 @@ let originalSt;
 let originalFetch;
 
 /**
- * These cases cover card sanitization and the LEGACY settings-backed store.
- * The user-files probe is forced to fail so the store stays deterministic in
- * legacy mode; the server-file path has its own suite
- * (tests/gallery-file-store.test.js).
+ * These cases cover card sanitization on the server-file store. The fetch stub
+ * models a modern SillyTavern: the user-files surface answers, uploads land in
+ * an in-memory `serverFiles` map (the server-file shape has its own deeper
+ * suite, tests/gallery-file-store.test.js).
  */
-function installLegacyFetch() {
-    globalThis.fetch = async url => {
-        if (String(url).startsWith('/api/files/')) throw new Error('user-files unavailable in this suite');
+const serverFiles = new Map();
+
+function installFileFetch() {
+    globalThis.fetch = async (url, options = {}) => {
+        const u = String(url);
+        if (u === '/api/files/verify') return { ok: true, status: 200, json: async () => ({}), text: async () => '' };
+        if (u === '/api/files/upload' && options.method === 'POST') {
+            const body = JSON.parse(options.body);
+            serverFiles.set(body.name, Buffer.from(body.data, 'base64').toString('utf8'));
+            return { ok: true, status: 200, json: async () => ({}), text: async () => '' };
+        }
+        if (u.startsWith('/user/files/')) {
+            const name = decodeURIComponent(u.slice('/user/files/'.length));
+            if (!serverFiles.has(name)) return { ok: false, status: 404, text: async () => '', json: async () => ({}) };
+            return { ok: true, status: 200, text: async () => serverFiles.get(name), json: async () => ({}) };
+        }
         return { ok: true, status: 200, json: async () => [], text: async () => '' };
     };
+}
+
+/** The stored card array from the in-memory server file. */
+function galleryFileDoc() {
+    const text = serverFiles.get('uris_gallery.json');
+    return text ? JSON.parse(text).cards : [];
 }
 
 beforeEach(async () => {
@@ -24,7 +43,8 @@ beforeEach(async () => {
     originalFetch = globalThis.fetch;
     context = { extensionSettings: {}, saveSettingsDebounced: () => {} };
     globalThis.SillyTavern = { getContext: () => context };
-    installLegacyFetch();
+    installFileFetch();
+    serverFiles.clear();
     const { resetGalleryStoreForTests } = await import('../src/gallery-index.js');
     resetGalleryStoreForTests();
 });
@@ -44,7 +64,7 @@ test('persists sanitized card metadata without bytes or secrets', async () => {
     });
 
     assert.equal(card.id, 'card-1');
-    const stored = context.extensionSettings.ur_image_studio.imageConnections.galleryIndex[0];
+    const stored = galleryFileDoc()[0];
     assert.equal(JSON.stringify(stored).includes('must-not-persist'), false);
     assert.equal(JSON.stringify(stored).includes('data:image'), false);
     assert.deepEqual(await listCards({ reconcile: false }), [card]);
@@ -65,7 +85,7 @@ test('removes nested secrets and image bytes from provenance metadata', async ()
 
     assert.deepEqual(card.provenance, { source: 'openrouter', upstream: { requestId: 'req-1' } });
     assert.deepEqual(card.refs, [{ id: 'ref-1', name: 'Aria' }]);
-    assert.equal(JSON.stringify(context.extensionSettings).match(/do-not-store|"hidden":true|data:image|secret-bytes/), null);
+    assert.equal(JSON.stringify([...serverFiles.values()]).match(/do-not-store|"hidden":true|data:image|secret-bytes/), null);
 });
 
 test('updates and deletes cards by stable id', async () => {
@@ -141,7 +161,7 @@ test('sanitizes direct image data URLs in metadata values, not only reserved fie
     });
 
     assert.deepEqual(card.provenance, { source: 'provider', upstream: { requestId: 'req-1' } });
-    assert.equal(JSON.stringify(context.extensionSettings).includes('data:image'), false);
+    assert.equal(JSON.stringify([...serverFiles.values()]).includes('data:image'), false);
 });
 
 test('rejects URLs, data URLs, absolute paths, and unsafe paths as image paths', async () => {
@@ -192,8 +212,19 @@ test('reconcileCards scans every distinct folder referenced by cards plus the le
         getContext: () => ctx,
         libs: { localforage: { getItem: async () => '' } },
     };
-    globalThis.fetch = async (url, options) => {
-        if (String(url).startsWith('/api/files/')) throw new Error('user-files unavailable in this suite');
+    globalThis.fetch = async (url, options = {}) => {
+        const u = String(url);
+        if (u === '/api/files/verify') return { ok: true, status: 200, json: async () => ({}), text: async () => '' };
+        if (u === '/api/files/upload' && options.method === 'POST') {
+            const body = JSON.parse(options.body);
+            serverFiles.set(body.name, Buffer.from(body.data, 'base64').toString('utf8'));
+            return { ok: true, status: 200, json: async () => ({}), text: async () => '' };
+        }
+        if (u.startsWith('/user/files/')) {
+            const name = decodeURIComponent(u.slice('/user/files/'.length));
+            if (!serverFiles.has(name)) return { ok: false, status: 404, text: async () => '', json: async () => ({}) };
+            return { ok: true, status: 200, text: async () => serverFiles.get(name), json: async () => ({}) };
+        }
         const body = JSON.parse(options.body);
         listedFolders.push(body.folder);
         if (body.folder === 'UR Image Studio') return { ok: true, json: async () => ['legacy.png'] };
@@ -224,7 +255,7 @@ test('persists natural dimensions on the card; bytes-like keys stay stripped', a
 
     const updated = await updateCard('dims', { width: 1024, height: 768 });
     assert.deepEqual({ width: updated.width, height: updated.height }, { width: 1024, height: 768 });
-    const stored = JSON.stringify(context.extensionSettings);
+    const stored = JSON.stringify(galleryFileDoc());
     assert.equal(stored.includes('"bytes"'), false);
 });
 

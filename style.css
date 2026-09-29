@@ -1982,10 +1982,8 @@
     font-size: var(--uris-font-xs); text-transform: uppercase; letter-spacing: .04em;
 }
 .uris-store-mode-file { color: var(--uris-accent); border-color: var(--uris-accent); }
-.uris-store-mode-legacy { color: var(--uris-text-dim); }
 .uris-store-mode-readonly { color: var(--uris-warning, #c9a030); border-color: var(--uris-warning, #c9a030); }
 .uris-store-mode-unknown { color: var(--uris-text-dim); opacity: .7; }
-.uris-store-mode-info { color: var(--uris-text-dim); border-style: dashed; }
 .uris-store-detail {
     flex: 0 0 auto; font-size: var(--uris-font-xs); color: var(--uris-text-dim);
     font-variant-numeric: tabular-nums;

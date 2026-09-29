@@ -96,35 +96,11 @@ after(() => {
 });
 
 describe('reference pool file store', () => {
-    it('migrates refs and folders out of settings, then strips both', async () => {
-        extensionSettings.ur_image_studio = {
-            imageConnections: {
-                refs: [{ id: 'r1', name: 'Aria', imagePath: 'user/images/x/a.png' }],
-                folders: [{ id: 'f1', name: 'Мама' }],
-            },
-        };
+    it('a settings blob with no data starts from the empty file value', async () => {
+        extensionSettings.ur_image_studio = { imageConnections: { refs: [{ id: 'stale' }] } };
 
         assert.equal(await refs.ensureRefsStoreReady(), 'file');
-        await refs.flushRefsWrites();
-
-        const doc = storedDoc(refs.REFS_FILE_NAME);
-        assert.deepEqual(doc.data.refs.map(r => r.id), ['r1']);
-        assert.deepEqual(doc.data.folders.map(f => f.id), ['f1']);
-        assert.equal(Object.hasOwn(imageConnections(), 'refs'), false, 'settings copy stripped');
-        assert.equal(Object.hasOwn(imageConnections(), 'folders'), false, 'settings copy stripped');
-    });
-
-    it('does not strip when the migration write fails', async () => {
-        extensionSettings.ur_image_studio = {
-            imageConnections: { refs: [{ id: 'r1', name: 'Aria' }] },
-        };
-        failUploads = true;
-
-        await refs.ensureRefsStoreReady();
-        await refs.flushRefsWrites();
-
-        assert.deepEqual(imageConnections().refs.map(r => r.id), ['r1'], 'data survives');
-        assert.equal(serverFiles.size, 0);
+        assert.deepEqual(await refs.listRefs(), [], 'настройки больше не источник данных');
     });
 
     it('writes created, updated and deleted references into the file', async () => {
@@ -154,16 +130,14 @@ describe('reference pool file store', () => {
         assert.deepEqual(doc.data.refs[0].folders, [folder.id]);
     });
 
-    it('falls back to settings when user-files is unavailable', async () => {
+    it('no user-files API → readonly, writes refused, nothing uploaded', async () => {
         verifyAvailable = false;
-        extensionSettings.ur_image_studio = { imageConnections: { refs: [] } };
 
-        const created = await refs.createRef({ name: 'Aria' });
+        await refs.createRef({ name: 'Aria' });
+        assert.equal(await refs.flushRefsWrites(), false, 'запись не дошла — хранилища нет');
 
-        assert.equal(refs.refsStoreMode(), 'legacy');
-        assert.equal(uploads.length, 0);
-        assert.equal(saveCalls > 0, true);
-        assert.deepEqual(imageConnections().refs.map(r => r.id), [created.id]);
+        assert.equal(refs.refsStoreMode(), 'readonly');
+        assert.equal(uploads.length, 0, 'некуда писать — ни одной попытки');
     });
 
     it('leaves folder preferences in settings (device-local UI state)', async () => {
@@ -174,16 +148,13 @@ describe('reference pool file store', () => {
 });
 
 describe('parameter preset file store', () => {
-    it('migrates presets out of settings, then strips the copy', async () => {
+    it('a settings blob with presets starts from the empty file value', async () => {
         extensionSettings.ur_image_studio = {
             imageConnections: { presets: [{ id: 'p1', name: 'Cinematic', aspectRatio: '16:9', imageSize: '2K' }] },
         };
 
         assert.equal(await presets.ensureParamPresetStoreReady(), 'file');
-        await presets.flushParamPresetWrites();
-
-        assert.deepEqual(storedDoc(presets.PRESETS_FILE_NAME).presets.map(p => p.id), ['p1']);
-        assert.equal(Object.hasOwn(imageConnections(), 'presets'), false);
+        assert.deepEqual(await presets.listImageParams(), [], 'настройки больше не источник данных');
     });
 
     it('writes created, updated and deleted presets into the file', async () => {

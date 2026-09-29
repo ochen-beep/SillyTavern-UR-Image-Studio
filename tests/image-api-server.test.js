@@ -21,8 +21,20 @@ globalThis.SillyTavern = {
 };
 
 const originalFetch = globalThis.fetch;
+const serverFiles = new Map();
 globalThis.fetch = async (url, options = {}) => {
     fetchCalls.push({ url: String(url), options });
+    if (url === '/api/files/verify') return jsonResponse({});
+    if (url === '/api/files/upload' && options.method === 'POST') {
+        const body = JSON.parse(options.body);
+        serverFiles.set(body.name, Buffer.from(body.data, 'base64').toString('utf8'));
+        return jsonResponse({});
+    }
+    if (String(url).startsWith('/user/files/')) {
+        const name = decodeURIComponent(String(url).slice('/user/files/'.length));
+        if (!serverFiles.has(name)) return { ok: false, status: 404, text: async () => '', json: async () => ({}) };
+        return { ok: true, status: 200, text: async () => serverFiles.get(name), json: async () => ({}) };
+    }
     if (url === 'https://images.example/v1/images/generations') {
         if (providerResponse instanceof Error) throw providerResponse;
         return providerResponse;

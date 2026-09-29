@@ -125,21 +125,6 @@ test('test injection may model a shared backend without production fallback sema
     assert.equal(extensionSettings.ur_image_studio, undefined);
 });
 
-test('reference mutations persist normalized metadata to shared settings', async () => {
-    resetRefStoreForTests();
-    const folder = await createFolder('Cast');
-    const ref = await createRef({ name: 'Aria', imagePath: '/aria.png', folders: [folder.id], apiKey: 'not-metadata' });
-    await updateRef(ref.id, { name: 'Aria Rose' });
-    await deleteFolder(folder.id);
-
-    const shared = extensionSettings.ur_image_studio.imageConnections;
-    assert.deepEqual(shared.folders, []);
-    assert.equal(shared.refs[0].name, 'Aria Rose');
-    assert.deepEqual(shared.refs[0].folders, []);
-    assert.equal(shared.refs[0].apiKey, undefined);
-    assert.equal(settingsSaveCalls, 5);
-});
-
 test('creates a reference from a native gallery card without duplicating image bytes', async () => {
     const { createReferenceFromGalleryCard } = await import('../src/refs-library.js');
     const ref = await createReferenceFromGalleryCard({

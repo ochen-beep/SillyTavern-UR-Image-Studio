@@ -113,7 +113,7 @@ The test runtime needs no jsdom: `tests/fake-dom.js` stubs the minimum DOM surfa
 - `src/pipeline*.js`, `src/dispatch-plan.js` — Stage 1/Stage 2 orchestration and provider dispatch.
 - `src/providers/` — one adapter per image contract plus the text LLM adapters.
 - `src/refs-library.js`, `src/gallery-index.js`, `src/param-presets.js`, `src/prompt-templates.js`, `src/studio-scope.js` — server-file stores and their domain logic.
-- `src/file-store.js`, `src/store-migration.js` — shared user-files machinery and legacy migration.
+- `src/file-store.js` — shared user-files machinery: server-file storage with write coalescing, unload flush, and read-only refusals that protect data (requires a SillyTavern with the user-files API).
 - `src/inline/` — the inline engine (grammar, triggers, scanner, runner, render, store).
 - `src/bridge.js`, `src/autolane.js` — external facade and the automatic-jobs lane.
 - `src/ui/` — floating window, tabs (API, References, Generate, Gallery, Templates, Media, Bridge, Settings), viewer, launcher.

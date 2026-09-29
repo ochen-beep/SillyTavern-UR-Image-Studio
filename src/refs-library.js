@@ -60,28 +60,6 @@ const refsStore = createFileStore({
     // document instead of clobbering it with a possibly stale mirror.
     mergeWithServer: true,
     empty: () => ({ refs: [], folders: [] }),
-    legacyRead: () => {
-        const settings = imageSettings();
-        const refs = Array.isArray(settings.refs) ? settings.refs : [];
-        const folders = Array.isArray(settings.folders) ? settings.folders : [];
-        return refs.length || folders.length ? { refs, folders } : null;
-    },
-    legacyWrite: value => {
-        const settings = imageSettings();
-        settings.refs = Array.isArray(value?.refs) ? value.refs : [];
-        settings.folders = Array.isArray(value?.folders) ? value.folders : [];
-        saveSettings();
-    },
-    legacyStrip: () => {
-        const settings = imageSettings();
-        const freedBytes = (Array.isArray(settings.refs) ? JSON.stringify(settings.refs).length : 0)
-            + (Array.isArray(settings.folders) ? JSON.stringify(settings.folders).length : 0);
-        delete settings.refs;
-        delete settings.folders;
-        saveSettings();
-        return freedBytes;
-    },
-    stripLegacyOnLoad: true,
     countEntries: value => (Array.isArray(value?.refs) ? value.refs.length : null),
 });
 

@@ -1,6 +1,6 @@
 // @ts-check
 /** Prompt-template persistence. Only base mode and instruction records are supported. */
-import { getCtx, getImageConnectionSettings, IMAGE_CONNECTION_SETTINGS_KEY, uid, log, state, saveSettings } from './core.js';
+import { uid, log, state, saveSettings } from './core.js';
 import { recordDiagnosticEvent } from './diagnostic-events.js';
 import {
     applyTemplateMutation,
@@ -12,52 +12,6 @@ import {
 
 let cachedTemplates = null;
 let testStore = null;
-let storeKindPromise = null; // memoized 'file' | 'legacy' resolution
-
-function sharedTemplates() {
-    const ctx = getCtx();
-    if (!ctx.extensionSettings) ctx.extensionSettings = {};
-    if (!ctx.extensionSettings.ur_image_studio || typeof ctx.extensionSettings.ur_image_studio !== 'object') {
-        ctx.extensionSettings.ur_image_studio = {};
-    }
-    const settings = ctx.extensionSettings.ur_image_studio;
-    if (!settings[IMAGE_CONNECTION_SETTINGS_KEY] || typeof settings[IMAGE_CONNECTION_SETTINGS_KEY] !== 'object') {
-        settings[IMAGE_CONNECTION_SETTINGS_KEY] = getImageConnectionSettings({});
-    }
-    if (!Array.isArray(settings[IMAGE_CONNECTION_SETTINGS_KEY].templates)) {
-        settings[IMAGE_CONNECTION_SETTINGS_KEY].templates = [];
-    }
-    return settings[IMAGE_CONNECTION_SETTINGS_KEY].templates;
-}
-
-/** Legacy settings-backed store (old ST without user-files, and Node tests). */
-function legacyStore() {
-    return {
-        available: async () => true,
-        list: async () => sharedTemplates(),
-        create: async payload => {
-            sharedTemplates().push(payload);
-            saveSettings();
-            return payload;
-        },
-        update: async (id, payload) => {
-            const records = sharedTemplates();
-            const index = records.findIndex(item => item.id === id);
-            if (index === -1) return null;
-            records[index] = payload;
-            saveSettings();
-            return payload;
-        },
-        delete: async id => {
-            const records = sharedTemplates();
-            const index = records.findIndex(item => item.id === id);
-            if (index !== -1) {
-                records.splice(index, 1);
-                saveSettings();
-            }
-        },
-    };
-}
 
 /** Server user-file store (data/<user>/user/files/uris_templates.json). */
 function fileStore() {
@@ -84,9 +38,8 @@ function fileStore() {
 
 async function store() {
     if (testStore) return testStore;
-    if (!storeKindPromise) storeKindPromise = ensureTemplateStoreReady();
-    const kind = await storeKindPromise;
-    return kind === 'file' ? fileStore() : legacyStore();
+    await ensureTemplateStoreReady();
+    return fileStore();
 }
 
 export function setTemplateStoreForTests(value) {
@@ -97,7 +50,6 @@ export function setTemplateStoreForTests(value) {
 export function resetTemplateStoreForTests() {
     testStore = null;
     cachedTemplates = null;
-    storeKindPromise = null;
 }
 
 /**
@@ -152,6 +104,8 @@ export async function createInstructionTemplate(data = {}) {
     };
     if (cachedTemplates === null) await listTemplates();
     const persisted = await (await store()).create(item);
+    // Refused write (readonly session): the store returns nothing to cache.
+    if (!persisted) return null;
     if (!cachedTemplates.some(template => template.id === persisted.id)) cachedTemplates.push(persisted);
     recordDiagnosticEvent({ event: 'template-crud', stage: 'templates', operation: 'create', details: { id: persisted.id } });
     log('Создан instruction-шаблон', persisted.id);

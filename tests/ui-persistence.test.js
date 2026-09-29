@@ -55,10 +55,22 @@ beforeEach(async () => {
     globalThis.window = { location: { origin: 'http://localhost:8000' }, dispatchEvent: () => {}, addEventListener: () => {} };
     globalThis.document = fakeDoc.document;
     globalThis.toastr = { info: () => {}, success: () => {}, error: () => {}, warning: () => {} };
-    // Blanket 200 for unrelated fetches, but the template user-files probe must
-    // fail so the legacy settings-backed template store stays under test here.
-    globalThis.fetch = async url => {
-        if (url === '/api/files/verify') return { ok: false, status: 404, text: async () => '' };
+    // Blanket 200 for unrelated fetches; the user-files surface answers so the
+    // file-backed template store is under test (the settings fallback is gone).
+    const serverFiles = new Map();
+    globalThis.fetch = async (url, options = {}) => {
+        const u = String(url);
+        if (u === '/api/files/verify') return { ok: true, status: 200, json: async () => ({}), text: async () => '' };
+        if (u === '/api/files/upload' && options.method === 'POST') {
+            const body = JSON.parse(options.body);
+            serverFiles.set(body.name, Buffer.from(body.data, 'base64').toString('utf8'));
+            return { ok: true, status: 200, json: async () => ({}), text: async () => '' };
+        }
+        if (u.startsWith('/user/files/')) {
+            const name = decodeURIComponent(u.slice('/user/files/'.length));
+            if (!serverFiles.has(name)) return { ok: false, status: 404, text: async () => '', json: async () => ({}) };
+            return { ok: true, status: 200, text: async () => serverFiles.get(name), json: async () => ({}) };
+        }
         return { ok: true, status: 200, text: async () => '', headers: { get: () => '' } };
     };
 

@@ -27,10 +27,21 @@ beforeEach(async () => {
         getContext: () => ctx,
         libs: { localforage: { getItem: async () => '' } },
     };
-    // Clear in-memory gallery index from any prior test.
-    const { clearCards } = await import('../src/gallery-index.js');
-    await clearCards();
-    globalThis.fetch = async (url, options) => {
+    const serverFiles = new Map();
+    // Хранилище должно отвечать ДО clearCards(): ready() с недоступной
+    // поверхностью ждёт, а не откатывается в settings-мир.
+    globalThis.fetch = async (url, options = {}) => {
+        if (url === '/api/files/verify') return { ok: true, status: 200, json: async () => ({}), text: async () => '' };
+        if (url === '/api/files/upload' && options.method === 'POST') {
+            const body = JSON.parse(options.body);
+            serverFiles.set(body.name, Buffer.from(body.data, 'base64').toString('utf8'));
+            return { ok: true, status: 200, json: async () => ({}), text: async () => '' };
+        }
+        if (String(url).startsWith('/user/files/')) {
+            const name = decodeURIComponent(String(url).slice('/user/files/'.length));
+            if (!serverFiles.has(name)) return { ok: false, status: 404, text: async () => '', json: async () => ({}) };
+            return { ok: true, status: 200, text: async () => serverFiles.get(name), json: async () => ({}) };
+        }
         if (url === '/api/images/upload') {
             const body = JSON.parse(options.body);
             uploadedFolders.push(body.ch_name);
@@ -50,6 +61,9 @@ beforeEach(async () => {
         }
         return { ok: true, json: async () => ({}) };
     };
+    // Clear in-memory gallery index from any prior test.
+    const { clearCards } = await import('../src/gallery-index.js');
+    await clearCards();
 });
 
 afterEach(() => {

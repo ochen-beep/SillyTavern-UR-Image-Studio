@@ -1,36 +1,53 @@
 import assert from 'node:assert/strict';
 import { beforeEach, describe, it } from 'node:test';
 
-const memoryStore = new Map();
 const extensionSettings = {};
-let saveCalls = 0;
 
 globalThis.SillyTavern = {
   getContext: () => ({
     extensionSettings,
-    saveSettingsDebounced: () => { saveCalls += 1; },
+    saveSettingsDebounced: () => {},
   }),
   libs: {
     localforage: {
-      async getItem(key) { return memoryStore.get(key) ?? []; },
-      async setItem(key, value) { memoryStore.set(key, value); },
-      async removeItem(key) { memoryStore.delete(key); },
+      async getItem() { return []; },
+      async setItem() {},
+      async removeItem() {},
     },
   },
 };
 
-const core = await import('../src/core.js');
 const presets = await import('../src/param-presets.js');
 
 beforeEach(() => {
-  memoryStore.clear();
   for (const key of Object.keys(extensionSettings)) delete extensionSettings[key];
-  saveCalls = 0;
   presets.resetParamPresetStoreForTests();
 });
 
+function recordingStore() {
+  const records = [];
+  const calls = [];
+  return {
+    records,
+    calls,
+    async available() { return true; },
+    async list() { calls.push('list'); return structuredClone(records); },
+    async create(payload) { calls.push('create'); records.push({ ...payload }); return { ...payload }; },
+    async update(id, payload) {
+      calls.push('update');
+      const index = records.findIndex(item => item.id === id);
+      records[index] = { ...payload, id };
+      return { ...records[index] };
+    },
+    async delete(id) { calls.push('delete'); records.splice(records.findIndex(item => item.id === id), 1); },
+  };
+}
+
 describe('shared image parameter presets', () => {
-  it('uses shared settings for CRUD and preserves image parameter normalization', async () => {
+  it('runs CRUD through the store and preserves image parameter normalization', async () => {
+    const store = recordingStore();
+    presets.setParamPresetStoreForTests(store);
+
     const created = await presets.createImageParam({
       id: 'cinematic',
       name: 'Cinematic',
@@ -43,8 +60,9 @@ describe('shared image parameter presets', () => {
     assert.equal(created.aspectRatio, '1:1');
     assert.equal(created.imageSize, '1K');
     assert.equal(saved.name, 'Cinematic wide');
-    assert.deepEqual(extensionSettings.ur_image_studio.imageConnections.presets, []);
-    assert.equal(memoryStore.has(core.LF_IMAGE_PARAMS), false);
-    assert.equal(saveCalls, 3);
+    assert.deepEqual(
+      store.calls.filter(op => op !== 'list'),
+      ['create', 'update', 'delete'],
+    );
   });
 });

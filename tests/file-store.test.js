@@ -1,8 +1,8 @@
 // @ts-check
 /**
- * Generic server-file store: probe / load / migrate / strip / write / flush.
- * The surrounding stubs mirror tests/template-file-store.test.js so both layers
- * see the same server shape.
+ * Generic server-file store: probe / load / write / flush. The surrounding
+ * stubs mirror tests/template-file-store.test.js so both layers see the same
+ * server shape.
  */
 import assert from 'node:assert/strict';
 import { after, afterEach, beforeEach, describe, it } from 'node:test';
@@ -80,16 +80,12 @@ function makeStore(overrides = {}) {
         key,
         version: 1,
         empty: () => [],
-        legacyRead: () => moduleSettings[key],
-        legacyWrite: value => { moduleSettings[key] = value; },
-        legacyStrip: () => {
-            const bytes = moduleSettings[key] ? JSON.stringify(moduleSettings[key]).length : 0;
-            delete moduleSettings[key];
-            return bytes;
-        },
+        probeRetryMs: 10,
         ...overrides,
     });
 }
+
+const sleep = ms => new Promise(r => setTimeout(r, ms));
 
 function serverDoc(store, key = 'items') {
     return JSON.parse(serverFiles.get(store.name))[key];
@@ -126,96 +122,38 @@ describe('file-store: mode selection', () => {
         assert.equal(store.isFileMode(), true);
     });
 
-    it('probe HTTP failure → legacy mode, no file writes', async () => {
+    it('probe HTTP failure (no user-files API) → readonly, writes refused, no uploads', async () => {
         verifyAvailable = false;
-        moduleSettings.items = [{ id: 'a' }];
         const store = makeStore();
-        assert.equal(await store.ready(), 'legacy');
+        assert.equal(await store.ready(), 'readonly');
         await store.mutate(items => items.push({ id: 'b' }));
+        await store.flush();
         assert.equal(serverFiles.size, 0);
-        assert.deepEqual(moduleSettings.items.map(i => i.id), ['a', 'b']);
+        assert.equal(store.diagnostics().lastWriteOk, false);
+        assert.equal(store.diagnostics().lastError, 'no-user-files');
     });
 
-    it('probe throwing → legacy mode', async () => {
+    it('probe throwing → ready() stays pending and resolves once the surface answers', async () => {
         probeThrows = true;
         const store = makeStore();
-        assert.equal(await store.ready(), 'legacy');
-    });
-
-    it('legacy mode without legacyWrite does not throw on mutate', async () => {
-        verifyAvailable = false;
-        const store = makeStore({ legacyWrite: null, legacyStrip: null });
-        await store.ready();
-        const result = await store.mutate(items => { items.push({ id: 'x' }); return 'ok'; });
-        assert.equal(result, 'ok');
+        const pending = store.ready();
+        const winner = await Promise.race([pending.then(() => 'resolved'), sleep(50).then(() => 'pending')]);
+        assert.equal(winner, 'pending', 'нет данных, на которых можно честно работать — ждём');
+        probeThrows = false;
+        assert.equal(await pending, 'file');
     });
 });
 
-// ── Load / migration / strip ──
+// ── Load ──
 
-describe('file-store: migration', () => {
-    it('no file + settings copy → migrates, persists, then strips', async () => {
-        moduleSettings.items = [{ id: 'a' }, { id: 'b' }];
-        const store = makeStore({ stripLegacyOnLoad: true });
-        await store.ready();
-        await store.flush();
-        assert.deepEqual(serverDoc(store).map(i => i.id), ['a', 'b']);
-        assert.equal(Object.hasOwn(moduleSettings, 'items'), false, 'settings copy stripped');
-        assert.equal(store.diagnostics().freedBytes > 0, true);
-    });
-
-    it('keeps the settings copy when stripLegacyOnLoad is false (template behaviour)', async () => {
-        moduleSettings.items = [{ id: 'a' }];
-        const store = makeStore({ stripLegacyOnLoad: false });
-        await store.ready();
-        await store.flush();
-        assert.deepEqual(serverDoc(store).map(i => i.id), ['a']);
-        assert.deepEqual(moduleSettings.items.map(i => i.id), ['a'], 'copy retained for downgrade');
-    });
-
-    it('failed migration upload does NOT strip the settings copy', async () => {
-        moduleSettings.items = [{ id: 'a' }];
-        failUploads = true;
-        const store = makeStore({ stripLegacyOnLoad: true });
-        await store.ready();
-        await store.flush();
-        assert.deepEqual(moduleSettings.items.map(i => i.id), ['a'], 'survives a failed write');
-        assert.equal(store.diagnostics().lastWriteOk, false);
-        assert.equal(serverFiles.size, 0);
-    });
-
-    it('existing file wins and the settings copy is stripped', async () => {
-        const store = makeStore({ stripLegacyOnLoad: true });
-        serverFiles.set(store.name, JSON.stringify({ v: 1, items: [{ id: 'from-file' }] }));
-        moduleSettings.items = [{ id: 'stale' }];
-        await store.ready();
-        assert.deepEqual(store.snapshot().map(i => i.id), ['from-file']);
-        // Union-by-id is not needed when the file is authoritative, but the
-        // legacy copy must still go away once the file has been read.
-        assert.equal(Object.hasOwn(moduleSettings, 'items'), false);
-    });
-
-    it('unions file and settings records by id', async () => {
-        // A valid file wins outright — merging the settings copy back would
-        // resurrect records the user already deleted.
-        const store = makeStore({ stripLegacyOnLoad: true });
-        serverFiles.set(store.name, JSON.stringify({ v: 1, items: [{ id: 'a' }] }));
-        moduleSettings.items = [{ id: 'a' }, { id: 'b' }];
-        await store.ready();
-        await store.flush();
-        assert.deepEqual(store.snapshot().map(i => i.id), ['a']);
-        assert.deepEqual(serverDoc(store).map(i => i.id), ['a']);
-        assert.equal(Object.hasOwn(moduleSettings, 'items'), false, 'stale copy is stripped');
-    });
-
-    it('corrupt file is treated as missing and re-migrated from settings', async () => {
-        const store = makeStore({ stripLegacyOnLoad: true });
+describe('file-store: load', () => {
+    it('corrupt file is repaired with the empty mirror', async () => {
+        const store = makeStore();
         serverFiles.set(store.name, '{ not json');
-        moduleSettings.items = [{ id: 'a' }];
         await store.ready();
         await store.flush();
         assert.equal(store.diagnostics().readResult, 'corrupt');
-        assert.deepEqual(serverDoc(store).map(i => i.id), ['a']);
+        assert.deepEqual(serverDoc(store), [], 'пустой документ-ремонт записан');
     });
 
     it('a document from a newer build is read-only, not repaired away', async () => {

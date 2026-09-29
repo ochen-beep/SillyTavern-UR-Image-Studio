@@ -247,7 +247,14 @@ test('the gallery tab shows studio-scope cards and the «Студия» badge wi
         }),
     };
     const originalFetch = globalThis.fetch;
-    globalThis.fetch = async () => ({ ok: true, json: async () => ({}) });
+    // Карты студии живут в файловом сторе: сидим файл до рендера вкладки
+    // (fetchStub из beforeEach обслуживает и чтение файла).
+    serverFiles.set('uris_gallery.json', JSON.stringify({ v: 1, cards: [
+        { id: 's1', imagePath: 'user/images/URIS Studio/a.png', prompt: 'студийная', provenance: { chatId: '__uris_studio__' }, status: 'ready', createdAt: 1 },
+        { id: 'c1', imagePath: 'user/images/Alice/b.png', prompt: 'чатовая', provenance: { chatId: 'Alice - 3' }, status: 'ready', createdAt: 2 },
+    ] }));
+    const { resetGalleryStoreForTests } = await import('../src/gallery-index.js');
+    resetGalleryStoreForTests();
 
     try {
         const gallery = await import('../src/ui/tab-gallery.js');

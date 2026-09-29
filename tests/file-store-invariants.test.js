@@ -43,8 +43,10 @@ function installStubs() {
     globalThis.fetch = fetchStub;
 }
 
+let probeCalls = 0;
 const fetchStub = async (url, options = {}) => {
     if (url === '/api/files/verify') {
+        probeCalls += 1;
         if (probeThrows) throw new Error('offline');
         if (!verifyAvailable) return { ok: false, status: 404, text: async () => '' };
         return { ok: true, status: 200, json: async () => ({}), text: async () => '' };
@@ -77,7 +79,7 @@ function makeStore() {
         stripLegacyOnLoad: true,
         legacyRead: () => null,
         legacyWrite: null,
-        legacyRetryMs: 10,
+        probeRetryMs: 10,
     });
 }
 
@@ -86,6 +88,15 @@ function serverDoc(store) {
 }
 
 const sleep = ms => new Promise(r => setTimeout(r, ms));
+/** Поллинг условия с дедлайном: результат важнее пути — зависший промис не должен вешать тест. */
+async function waitFor(cond, ms = 4000) {
+    const deadline = Date.now() + ms;
+    while (Date.now() < deadline) {
+        if (cond()) return true;
+        await sleep(20);
+    }
+    return cond();
+}
 
 beforeEach(() => {
     installStubs();
@@ -132,13 +143,17 @@ describe('file-store invariants: the settings.json world may go away, these may 
             JSON.parse(serverFiles.get(store.name)).items.length, 1,
             'существующий файл не тронут пустой базой',
         );
-        // Хранилище отвечает — работа доезжает до файла
+        // Хранилище отвечает — работа доезжает до файла (поллим результат,
+        // а не путь: зависший await здесь и есть тот класс зависания, который
+        // инвариант ловит).
         probeThrows = false;
-        await mutation;
-        await store.ready();
+        const landed = await waitFor(() => {
+            const doc = serverFiles.get(store.name);
+            return !!doc && JSON.parse(doc).items.some(item => item.id === 'outage-work');
+        });
         await store.flush();
-        await sleep(30);
         const ids = serverDoc(store).map(item => item.id).sort();
-        assert.deepEqual(ids, ['existing-1', 'outage-work'], 'работа окна сбоя не потеряна, файл не затёрт');
+        assert.equal(landed, true, 'работа окна сбоя не потеряна (probeCalls=' + probeCalls + ')');
+        assert.deepEqual(ids, ['existing-1', 'outage-work']);
     });
 });

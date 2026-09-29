@@ -15,38 +15,12 @@
  * `src/file-store.js`, shared with the gallery, the reference pool and presets.
  * This module is the template-shaped wrapper around it; see that file for the
  * contract and the rationale.
- *
- * Unlike the large stores, templates deliberately KEEP the settings copy
- * (`stripLegacyOnLoad: false`) as a downgrade/backup fallback — they are a few
- * kilobytes, so keeping a copy costs nothing and an older extension version can
- * still read them.
- *
- * If the user-files endpoints are unavailable (older ST), the module reports
- * mode 'legacy' and `prompt-templates.js` keeps using its settings-backed store.
  */
 
-import { IMAGE_CONNECTION_SETTINGS_KEY, getCtx, getImageConnectionSettings } from './core.js';
 import { createFileStore } from './file-store.js';
 
 export const TEMPLATE_FILE_NAME = 'uris_templates.json';
 export const TEMPLATE_STORE_VERSION = 1;
-
-/** Legacy migration source: the templates array inside the module settings. */
-function legacyTemplatesInSettings() {
-    const ctx = getCtx();
-    if (!ctx.extensionSettings) ctx.extensionSettings = {};
-    if (!ctx.extensionSettings.ur_image_studio || typeof ctx.extensionSettings.ur_image_studio !== 'object') {
-        ctx.extensionSettings.ur_image_studio = {};
-    }
-    const settings = ctx.extensionSettings.ur_image_studio;
-    if (!settings[IMAGE_CONNECTION_SETTINGS_KEY] || typeof settings[IMAGE_CONNECTION_SETTINGS_KEY] !== 'object') {
-        settings[IMAGE_CONNECTION_SETTINGS_KEY] = getImageConnectionSettings({});
-    }
-    if (!Array.isArray(settings[IMAGE_CONNECTION_SETTINGS_KEY].templates)) {
-        settings[IMAGE_CONNECTION_SETTINGS_KEY].templates = [];
-    }
-    return settings[IMAGE_CONNECTION_SETTINGS_KEY].templates;
-}
 
 const store = createFileStore({
     label: 'templates',
@@ -54,8 +28,6 @@ const store = createFileStore({
     version: TEMPLATE_STORE_VERSION,
     key: 'templates',
     empty: () => [],
-    legacyRead: () => legacyTemplatesInSettings(),
-    stripLegacyOnLoad: false,
 });
 
 /** Resolve the store mode (and perform load/migration) exactly once per session. */

@@ -8,8 +8,7 @@
  * and `docs/plans/2026-09-12-storage-externalization.md`.
  */
 import {
-    getCtx, getImageConnectionSettings, IMAGE_CONNECTION_SETTINGS_KEY,
-    VALID_ASPECT_RATIOS, VALID_IMAGE_SIZES, uid, log, saveSettings,
+    VALID_ASPECT_RATIOS, VALID_IMAGE_SIZES, uid, log,
 } from './core.js';
 import { createFileStore } from './file-store.js';
 import { recordDiagnosticEvent } from './diagnostic-events.js';
@@ -17,39 +16,12 @@ import { recordDiagnosticEvent } from './diagnostic-events.js';
 export const PRESETS_FILE_NAME = 'uris_presets.json';
 export const PRESETS_STORE_VERSION = 1;
 
-/** Shared image-connections settings object — the legacy preset store. */
-function imageSettings() {
-    const ctx = getCtx();
-    if (!ctx.extensionSettings) ctx.extensionSettings = {};
-    if (!ctx.extensionSettings.ur_image_studio || typeof ctx.extensionSettings.ur_image_studio !== 'object') {
-        ctx.extensionSettings.ur_image_studio = {};
-    }
-    const settings = ctx.extensionSettings.ur_image_studio;
-    if (!settings[IMAGE_CONNECTION_SETTINGS_KEY] || typeof settings[IMAGE_CONNECTION_SETTINGS_KEY] !== 'object') {
-        settings[IMAGE_CONNECTION_SETTINGS_KEY] = getImageConnectionSettings({});
-    }
-    return settings[IMAGE_CONNECTION_SETTINGS_KEY];
-}
-
 const presetsStore = createFileStore({
     label: 'param-presets',
     name: PRESETS_FILE_NAME,
     version: PRESETS_STORE_VERSION,
     key: 'presets',
     empty: () => [],
-    legacyRead: () => imageSettings().presets,
-    legacyWrite: value => {
-        imageSettings().presets = value;
-        saveSettings();
-    },
-    legacyStrip: () => {
-        const current = imageSettings().presets;
-        const freedBytes = Array.isArray(current) ? JSON.stringify(current).length : 0;
-        delete imageSettings().presets;
-        saveSettings();
-        return freedBytes;
-    },
-    stripLegacyOnLoad: true,
     countEntries: value => (Array.isArray(value) ? value.length : null),
 });
 

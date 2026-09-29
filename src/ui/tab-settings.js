@@ -4,7 +4,7 @@
  * settings panel) and data/diagnostics actions shared with that panel.
  */
 import {
-    state, saveSettings, applyUiScale, applyFontScale, showConfirmModal, error, DISPLAY_NAME, escapeHtml, MODULE_NAME,
+    state, saveSettings, applyUiScale, applyFontScale, showConfirmModal, error, DISPLAY_NAME, escapeHtml,
     UI_SCALE_MIN, UI_SCALE_MAX, UI_SCALE_STEP, UI_SCALE_DEFAULT, normalizeUiScale,
     FONT_SCALE_MIN, FONT_SCALE_MAX, FONT_SCALE_STEP, FONT_SCALE_DEFAULT, normalizeFontScale,
     NOTIFY_SOUNDS, normalizeNotifyVolume, debounce,
@@ -14,7 +14,7 @@ import { runExport, runImportInteractive } from '../data-port.js';
 import { exportDiagnosticDump, clearAllDiagnostics } from '../diagnostic-dump.js';
 import { exportNetDump } from '../netdump.js';
 import { reportFailure, URIS_SCOPES } from '../error-pool.js';
-import { listFileStores, measureSettingsFootprint } from '../file-store.js';
+import { listFileStores } from '../file-store.js';
 import { refreshActive, renderTabs } from './tabs.js';
 import { applyInlineRuntime } from './tab-media.js';
 
@@ -28,16 +28,12 @@ function formatBytes(bytes) {
     return `${(bytes / (1024 * 1024)).toFixed(2)} МБ`;
 }
 
-const STORE_MODE_LABEL = { file: 'файл', legacy: 'настройки', readonly: 'только чтение', unknown: 'проверка…', info: 'остаток' };
+const STORE_MODE_LABEL = { file: 'файл', readonly: 'только чтение', unknown: 'проверка…' };
 
 /**
- * Read-only storage report. This is how the user verifies the whole point of the
- * file-store work without opening a console: where each data set lives, and how
- * much is left in settings.json.
- *
- * Rows are rendered from the registered stores. A store only knows its mode
- * after `ready()` resolves, so 'unknown' is shown until the first load and the
- * panel re-reads on every tab render.
+ * Read-only storage report: where each data set lives (always a server file),
+ * how big it is, and whether the last write landed. A 'readonly' badge is the
+ * signal to act on — writes are being refused to protect data.
  */
 function storageRowsHtml() {
     const row = (label, mode, detail) => `
@@ -54,15 +50,6 @@ function storageRowsHtml() {
         if (store.lastWriteOk === false) parts.push('ошибка записи');
         return row(store.label, store.mode, parts.join(' · '));
     });
-
-    // The module's settings blob is not a store with a mode — the meaningful
-    // signal is whether data is still stuck there. Cards left in the index mean
-    // the migration never ran, which is the one thing worth shouting about.
-    const footprint = measureSettingsFootprint(MODULE_NAME);
-    const leftoverCards = Number.isFinite(footprint.entries.galleryIndex) ? footprint.entries.galleryIndex : 0;
-    const settingsParts = [formatBytes(footprint.settingsBytes)];
-    if (leftoverCards > 0) settingsParts.push(`карточек в настройках: ${leftoverCards}`);
-    rows.push(row('settings.json (модуль)', leftoverCards > 0 ? 'legacy' : 'info', settingsParts.join(' · ')));
 
     return rows.join('');
 }
@@ -180,7 +167,7 @@ export function render(root) {
             <section class="uris-settings-section">
                 <h3>Хранилище</h3>
                 <div class="uris-store-list" id="urisStoreList">${storageRowsHtml()}</div>
-                <small class="uris-hint">Данные (галерея, референсы, пресеты, шаблоны) лежат отдельными файлами на сервере SillyTavern — <code>data/&lt;user&gt;/user/files/</code>. В <code>settings.json</code> остаются только настройки. Режим «настройки» означает, что серверные файлы недоступны (старая версия ST): данные хранятся в <code>settings.json</code>.</small>
+                <small class="uris-hint">Данные (галерея, референсы, пресеты, шаблоны) лежат отдельными файлами на сервере SillyTavern — <code>data/&lt;user&gt;/user/files/</code>. В <code>settings.json</code> остаются только настройки. «Только чтение» означает отказ записи ради защиты данных — причина в диагностике.</small>
             </section>
         </div>`;
     bindScaleControls(root);

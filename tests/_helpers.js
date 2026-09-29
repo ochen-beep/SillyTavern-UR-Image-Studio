@@ -18,9 +18,15 @@ import { gzipSync, zstdCompressSync } from 'node:zlib';
  * @param {(url: string, options: object, viaProxy: boolean) => object|Promise<object>} [handler]
  * @returns {() => void} restoreFn — восстанавливает оригинальный fetch
  */
+// In-memory user-files surface: file-store'ы в тестах обязаны получать честный
+// ответ (в новых мирах нет settings-фолбэка — недоступная поверхность = ready()
+// ждёт вечно). Тесты, которым нужно конкретное содержимое, перекрывают fetch
+// целиком и обслуживают эти маршруты сами.
+const stubServerFiles = new Map();
+
 export function mockFetch(handler) {
     const original = globalThis.fetch;
-    const wrapped = async (url, options) => {
+    const wrapped = async (url, options = {}) => {
         // Декодируем /proxy/<encoded> → исходный URL.
         let realUrl = url;
         let viaProxy = false;
@@ -28,6 +34,19 @@ export function mockFetch(handler) {
         if (typeof url === 'string' && url.startsWith(proxyPrefix)) {
             realUrl = decodeURIComponent(url.slice(proxyPrefix.length));
             viaProxy = true;
+        }
+        if (realUrl === '/api/files/verify') {
+            return { ok: true, status: 200, json: async () => ({}), text: async () => '' };
+        }
+        if (realUrl === '/api/files/upload' && options.method === 'POST') {
+            const body = JSON.parse(options.body);
+            stubServerFiles.set(body.name, Buffer.from(body.data, 'base64').toString('utf8'));
+            return { ok: true, status: 200, json: async () => ({}), text: async () => '' };
+        }
+        if (typeof realUrl === 'string' && realUrl.startsWith('/user/files/')) {
+            const name = decodeURIComponent(realUrl.slice('/user/files/'.length));
+            if (!stubServerFiles.has(name)) return { ok: false, status: 404, text: async () => '', json: async () => ({}) };
+            return { ok: true, status: 200, text: async () => stubServerFiles.get(name), json: async () => ({}) };
         }
         const resp = handler
             ? await handler(realUrl, options, viaProxy)

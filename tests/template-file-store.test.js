@@ -89,10 +89,10 @@ afterEach(() => {
 });
 
 describe('template file store', () => {
-    it('migrates the legacy settings copy into the server file on first load', async () => {
+    it('a settings blob with templates starts from the empty file value', async () => {
         extensionSettings.ur_image_studio = {
             imageConnections: {
-                templates: [{ id: 't1', name: 'Director', type: 'instruction', instruction: 'Direct.' }],
+                templates: [{ id: 'stale', name: 'Old', type: 'instruction', instruction: 'Old.' }],
             },
         };
 
@@ -100,8 +100,8 @@ describe('template file store', () => {
         await store.flushTemplateWrites();
 
         assert.equal(store.templateStoreMode(), 'file');
-        assert.deepEqual(listed, [{ id: 't1', name: 'Director', type: 'instruction', instruction: 'Direct.' }]);
-        assert.deepEqual(fileTemplates(), [{ id: 't1', name: 'Director', type: 'instruction', instruction: 'Direct.' }]);
+        assert.deepEqual(listed, [], 'настройки больше не источник данных');
+        assert.equal(fileTemplates(), null, 'пустой стор файл не создаёт');
     });
 
     it('keeps create, update, and delete durable in the server file', async () => {
@@ -196,18 +196,14 @@ describe('template file store', () => {
         assert.deepEqual(listed.map(t => t.id), ['imported']);
     });
 
-    it('falls back to the settings store when the user-files endpoint is missing', async () => {
+    it('no user-files API → readonly, writes refused, nothing uploaded', async () => {
         verifyAvailable = false;
 
         const created = await templates.createInstructionTemplate({ name: 'Legacy' });
         await store.flushTemplateWrites();
 
-        assert.equal(store.templateStoreMode(), 'legacy');
+        assert.equal(created, null, 'в readonly шаблон не создаётся (отказ показан тостом)');
+        assert.equal(store.templateStoreMode(), 'readonly');
         assert.equal(uploads.length, 0, 'no user-files traffic');
-        assert.equal(saveCalls, 1, 'settings store persists via saveSettingsDebounced');
-        assert.deepEqual(
-            extensionSettings.ur_image_studio.imageConnections.templates,
-            [{ ...created }],
-        );
     });
 });

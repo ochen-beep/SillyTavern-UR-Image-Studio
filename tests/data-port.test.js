@@ -21,6 +21,23 @@ const localforage = {
     async removeItem(key) { memoryStore.delete(key); },
 };
 
+const serverFiles = new Map();
+globalThis.fetch = async (url, options = {}) => {
+    const u = String(url);
+    if (u === '/api/files/verify') return { ok: true, status: 200, json: async () => ({}), text: async () => '' };
+    if (u === '/api/files/upload' && options.method === 'POST') {
+        const body = JSON.parse(options.body);
+        serverFiles.set(body.name, Buffer.from(body.data, 'base64').toString('utf8'));
+        return { ok: true, status: 200, json: async () => ({}), text: async () => '' };
+    }
+    if (u.startsWith('/user/files/')) {
+        const name = decodeURIComponent(u.slice('/user/files/'.length));
+        if (!serverFiles.has(name)) return { ok: false, status: 404, text: async () => '', json: async () => ({}) };
+        return { ok: true, status: 200, text: async () => serverFiles.get(name), json: async () => ({}) };
+    }
+    return { ok: true, status: 200, json: async () => ({}), text: async () => '' };
+};
+
 globalThis.SillyTavern = {
     getContext: () => ({
         extensionSettings: settingsContainer,
@@ -39,6 +56,7 @@ const {
 
 function seed() {
     memoryStore.clear();
+    serverFiles.clear();
     chatId = null;
     chatMetadata = {};
     extensionSettings = { enabled: true };
@@ -278,14 +296,26 @@ test('v9 exports portable shared records without image bytes, recovery state, or
     extensionSettings = {
         imageConnections: {
             connections: [{ id: 'conn-1', apiKey: 'browser-secret', selectedRoute: { id: 'r1', apiFamily: 'openai' } }],
-            templates: [{ id: 'template-1' }], presets: [{ id: 'preset-1' }],
-            refs: [{ id: 'ref-1', dataUrl: 'data:image/png;base64,raw', imagePath: 'user/images/ref.png' }],
-            folders: [{ id: 'folder-1' }], galleryIndex: [{ id: 'card-1', imageUrl: 'data:image/png;base64,raw', prompt: 'keep' }],
             pendingOperation: { id: 'pending' }, recovery: { id: 'recover' }, selectedRouteId: 'r1',
         },
         apiKey: 'custom-secret', recoveryState: { unsafe: true }, enabled: true,
     };
     settingsContainer[MODULE_NAME] = extensionSettings;
+    // Коллекции живут в серверных файлах — сидим стор файлом (dataUrl в refs
+    // обязан не доехать до бэкапа, imagePath — доехать).
+    serverFiles.set('uris_refs.json', JSON.stringify({ v: 1, data: {
+        refs: [{ id: 'ref-1', dataUrl: 'data:image/png;base64,raw', imagePath: 'user/images/ref.png' }],
+        folders: [{ id: 'folder-1' }],
+    } }));
+    serverFiles.set('uris_templates.json', JSON.stringify({ v: 1, templates: [{ id: 'template-1' }] }));
+    serverFiles.set('uris_presets.json', JSON.stringify({ v: 1, presets: [{ id: 'preset-1' }] }));
+    // Сторы memoize ready() на процесс — сбрасываем, чтобы файл-сид перечитался.
+    const refsLib = await import('../src/refs-library.js');
+    const presetLib = await import('../src/param-presets.js');
+    const templateLib = await import('../src/template-file-store.js');
+    refsLib.resetRefStoreForTests();
+    presetLib.resetParamPresetStoreForTests();
+    templateLib.resetTemplateFileStoreForTests();
 
     const backup = await exportUrisData();
 

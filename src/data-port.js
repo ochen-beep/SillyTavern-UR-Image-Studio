@@ -389,22 +389,20 @@ export async function exportUrisData(options = {}) {
 
     if (includeSettings) {
         const settings = getCtx().extensionSettings[MODULE_NAME] || null;
-        // In file-store mode the settings copy can be stale or already stripped,
-        // so overlay the LIVE contents of every file store before projecting.
-        // Each accessor returns null in legacy mode (the settings copy is
-        // authoritative there) — the exporter then behaves exactly as before.
-        const sharedSource = settings?.imageConnections ? cloneExact(settings.imageConnections) : null;
-        if (sharedSource) {
-            const freshTemplates = await getTemplateRecordsForExport();
-            if (freshTemplates) sharedSource.templates = freshTemplates;
-            const freshPool = await getRefsForExport();
-            if (freshPool) {
-                sharedSource.refs = freshPool.refs;
-                sharedSource.folders = freshPool.folders;
-            }
-            const freshPresets = await getParamPresetsForExport();
-            if (freshPresets) sharedSource.presets = freshPresets;
+        // The settings blob may hold nothing — overlay the LIVE contents of
+        // every file store before projecting. Each accessor returns null while
+        // the store is not in file mode (readonly, still probing) — the exporter
+        // then falls back to the blob and behaves exactly as before.
+        const sharedSource = settings?.imageConnections ? cloneExact(settings.imageConnections) : {};
+        const freshTemplates = await getTemplateRecordsForExport();
+        if (freshTemplates) sharedSource.templates = freshTemplates;
+        const freshPool = await getRefsForExport();
+        if (freshPool) {
+            sharedSource.refs = freshPool.refs;
+            sharedSource.folders = freshPool.folders;
         }
+        const freshPresets = await getParamPresetsForExport();
+        if (freshPresets) sharedSource.presets = freshPresets;
         data.shared = normalizeShared(sharedSource);
         data.data.extensionSettings = settings
             ? sanitizeBackupValue(Object.fromEntries(Object.entries(settings).filter(([key]) => key !== 'imageConnections' && key !== 'recoveryState')))
@@ -645,15 +643,12 @@ export async function importUrisData(data, options = {}) {
             log('Replace mode: removed current chat binding', chatId);
         }
 
-        // Mirror the restored records into the server file stores so they stay in
-        // lockstep with what the import produced (no-op in legacy mode, where the
-        // settings restore above already carries them). Awaited: a fresh import
-        // must not depend on a debounced/unload write to survive.
-        //
-        // The records are cloned BEFORE any store call: `ready()` migrates and
-        // then strips the settings copy, so reading `restoredShared.refs` lazily
-        // would hand the store `undefined` and overwrite the file with an empty
-        // set — losing exactly what the import just restored.
+        // Mirror the restored records into the server file stores so they stay
+        // in lockstep with what the import produced (the settings sections stay
+        // in the blob for old-backup format compatibility only — nothing reads
+        // them anymore). Awaited: a fresh import must not depend on a
+        // debounced/unload write to survive. The records are cloned BEFORE any
+        // store call so the store can never see a half-restored blob.
         try {
             const sharedCarries = section => Object.hasOwn(incomingShared, section);
             const restoredShared = ctx.extensionSettings[MODULE_NAME]?.[IMAGE_CONNECTION_SETTINGS_KEY];

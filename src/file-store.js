@@ -25,21 +25,21 @@
  * `template-file-store.js`, generalized so gallery / references / presets reuse
  * one tested implementation instead of three copies.
  *
- * Migration is never destructive-before-durable: the settings copy is only
- * dropped after a file write has been confirmed, so an interrupted migration
- * simply repeats on the next load.
+ * Modes: 'file' (the server surface answered and the mirror reflects the file),
+ * 'readonly' (a refusal protects data from being overwritten), 'unknown' (the
+ * surface has not answered yet — `ready()` keeps re-probing and stays pending;
+ * with the settings.json fallback gone there is no honest data source to work
+ * from, and a mutation built on nothing must not reach the file).
  *
- * Legacy mode: when the user-files endpoints are unavailable (older ST) the
- * store reports mode 'legacy' and callers keep using their settings-backed
- * path — no data is moved and nothing breaks. A transient probe failure is
- * re-probed after a throttle window; a 404 on the endpoint itself is permanent.
- *
- * Two refusals protect user data from being overwritten rather than preserved:
+ * Refusals protect user data from being overwritten rather than preserved:
  *   - the initial read failed for a non-404 reason → the mirror may be an empty
  *     base, so writes wait until a re-read confirms the file's existence
  *     (404 → safe to write; present → mode stays, writes refused for the session);
  *   - the document was written by a NEWER extension build (doc.v > version) →
- *     mode 'readonly': loaded best-effort, never "repaired" away by an older one.
+ *     mode 'readonly': loaded best-effort, never "repaired" away by an older one;
+ *   - the user-files surface itself is absent (probe 404 — old SillyTavern) →
+ *     mode 'readonly' for the session: there is nowhere to store data, and
+ *     pretending otherwise would lose it.
  *
  * Concurrent writers (`mergeWithServer: true`): the store writes the WHOLE
  * document from its in-memory mirror, so any writer that is not this session —
@@ -59,8 +59,8 @@ import { recordDiagnosticEvent } from './diagnostic-events.js';
 
 /** Below this body size a keepalive unload flush is attempted (fetch keepalive cap ≈64KB). */
 export const KEEPALIVE_BODY_LIMIT = 60 * 1024;
-/** How often a retryable legacy downgrade re-probes the user-files surface. */
-const LEGACY_RETRY_MS = 10 * 1000;
+/** How often an unanswered user-files probe is retried inside `ready()`. */
+const PROBE_RETRY_MS = 10 * 1000;
 const FAILURE_TOAST_INTERVAL = 5000;
 const VERIFY_URL = '/api/files/verify';
 const UPLOAD_URL = '/api/files/upload';
@@ -88,20 +88,6 @@ function clone(value) {
     return JSON.parse(JSON.stringify(value));
 }
 
-/** Ids present in a record array — used to report what a stale settings copy held. */
-function idsOf(value) {
-    if (!Array.isArray(value)) return [];
-    return value.map(item => (item && typeof item === 'object' ? item.id : undefined)).filter(id => id != null);
-}
-
-/** "Empty" as in "no legacy copy worth migrating": null, [], {} all count. */
-function isEmptyValue(value) {
-    if (value === null || value === undefined) return true;
-    if (Array.isArray(value)) return value.length === 0;
-    if (typeof value === 'object') return Object.keys(value).length === 0;
-    return false;
-}
-
 function defaultCountEntries(value) {
     if (Array.isArray(value)) return value.length;
     if (value && typeof value === 'object') return Object.keys(value).length;
@@ -110,41 +96,6 @@ function defaultCountEntries(value) {
 
 function isPlainObject(value) {
     return value !== null && typeof value === 'object' && !Array.isArray(value);
-}
-
-/**
- * Union the records a legacy session produced into the freshly loaded file
- * state, by `id`, file first. Used ONLY on the legacy→file retry transition of
- * stores whose settings copy is supposed to be gone (`stripLegacyOnLoad`):
- * there, anything the mirror holds beyond the file is work the session did
- * while the server surface was unreachable, and dropping it silently is worse
- * than the rare resurrection of an old record when a strip had failed earlier.
- * Returns null when nothing was appended or the shapes do not match.
- */
-function mergeLegacyRecovery(fileValue, priorValue) {
-    const additionsOf = (fileArr, priorArr) => {
-        const ids = new Set(fileArr.filter(item => isPlainObject(item) && 'id' in item).map(item => item.id));
-        return priorArr.filter(item => isPlainObject(item) && 'id' in item && !ids.has(item.id));
-    };
-    if (Array.isArray(fileValue) && Array.isArray(priorValue)) {
-        const additions = additionsOf(fileValue, priorValue);
-        return additions.length ? [...fileValue, ...additions] : null;
-    }
-    if (isPlainObject(fileValue) && isPlainObject(priorValue)) {
-        const fileKeys = Object.keys(fileValue).sort();
-        const priorKeys = Object.keys(priorValue).sort();
-        const sameShape = fileKeys.length === priorKeys.length
-            && fileKeys.every((k, i) => k === priorKeys[i] && Array.isArray(fileValue[k]) && Array.isArray(priorValue[k]));
-        if (!sameShape) return null;
-        const out = { ...fileValue };
-        let changed = false;
-        for (const k of fileKeys) {
-            const additions = additionsOf(fileValue[k], priorValue[k]);
-            if (additions.length) { out[k] = [...fileValue[k], ...additions]; changed = true; }
-        }
-        return changed ? out : null;
-    }
-    return null;
 }
 
 /** Records with ids merge by id; arrays without ids and scalars are opaque. */
@@ -276,15 +227,6 @@ function mergeServerValue(baseValue, serverValue, localValue) {
  * @property {number} [version]           Document version stored as `v`.
  * @property {string} [key]               Property holding the value: `{ v, <key>: value }`.
  * @property {() => any} [empty]          Initial value when there is nothing to load.
- * @property {() => any} [legacyRead]     Read the settings-backed copy (migration source).
- * @property {(value: any) => void} [legacyWrite]  Write the settings-backed copy (legacy mode).
- * @property {() => number|void} [legacyStrip]     Remove the settings copy; return freed bytes.
- * @property {(input: {fileValue: any, legacyValue: any}) => {value: any, migrate?: boolean}} [resolveLoad]
- *                                        Decide what the loaded value is. Default: union by id.
- * @property {boolean} [stripLegacyOnLoad] Drop the settings copy once the file is
- *                                        authoritative. False for stores that keep it as a
- *                                        downgrade fallback (templates); true for large ones,
- *                                        where keeping a copy would defeat the whole point.
  * @property {number} [keepaliveLimit]    Max body size for the unload flush.
  * @property {string} [label]             Human-readable name for logs / the diagnostics panel.
  * @property {() => void} [onWriteFailure] Extra failure notification (toast).
@@ -306,20 +248,16 @@ export function createFileStore(config) {
         version = 1,
         key = 'data',
         empty = () => null,
-        legacyRead = () => null,
-        legacyWrite = null,
-        legacyStrip = null,
-        stripLegacyOnLoad = false,
         keepaliveLimit = KEEPALIVE_BODY_LIMIT,
         label = name,
         onWriteFailure = null,
         countEntries = defaultCountEntries,
-        legacyRetryMs = LEGACY_RETRY_MS,
+        probeRetryMs = PROBE_RETRY_MS,
         mergeWithServer = false,
     } = config;
 
-    let mode = 'unknown';          // 'unknown' | 'file' | 'legacy' | 'readonly'
-    let readyPromise = null;       // memoized probe + load/migrate
+    let mode = 'unknown';          // 'unknown' | 'file' | 'readonly'
+    let readyPromise = null;       // memoized probe + load (retries inside while the surface is silent)
     let mirror = null;             // source of truth once ready
     // Mirror state the last confirmed server document was built from — the
     // three-way merge base for `mergeWithServer` writes. Null until loaded.
@@ -331,7 +269,6 @@ export function createFileStore(config) {
     let writeJob = null;           // in-flight write loop (null when idle)
     let lastWriteOk = true;
     let lastFailureToastAt = 0;
-    let legacyStripped = false;
     // The initial read failed (non-404): file existence is unconfirmed, so a
     // full-file overwrite built on the (possibly empty) mirror is forbidden
     // until a re-read settles the question.
@@ -339,17 +276,13 @@ export function createFileStore(config) {
     // Session-level persist refusal. 'file-unreadable-at-load': the re-read
     // proved the file exists while the mirror was built without it.
     // 'newer-version': the document was written by a newer extension build.
+    // 'no-user-files': the user-files surface is absent (old SillyTavern).
     let writeBlockedReason = null;
     const refusedNotified = new Set();
-    // A transient probe failure must not pin the whole session to legacy
-    // settings mode: ready() re-probes after the throttle window and, on
-    // recovery, unions the legacy-session work into the file state.
-    let legacyRetryable = false;
-    let lastLegacyAttemptAt = 0;
     const diagnostics = {
         label, mode: 'unknown', loaded: false, readResult: null,
         entries: null, bytes: null, lastWriteAt: null, lastWriteOk: null,
-        lastError: null, freedBytes: null,
+        lastError: null,
     };
 
     function emit(event, fields = {}) {
@@ -424,6 +357,7 @@ export function createFileStore(config) {
             const messages = {
                 'newer-version': `«${label}»: данные записаны более новой версией расширения — обновите UR Image Studio; запись отключена.`,
                 'file-unreadable-at-load': `«${label}»: не удалось прочитать файл при запуске — запись заблокирована, чтобы не потерять данные. Перезагрузите страницу.`,
+                'no-user-files': `«${label}»: SillyTavern не поддерживает файловое хранилище (обновите SillyTavern); запись отключена.`,
             };
             const message = messages[reason] || `«${label}»: запись отключена (${reason}).`;
             if (onWriteFailure) onWriteFailure(new Error(reason));
@@ -434,102 +368,43 @@ export function createFileStore(config) {
 
     // ── Load ──
 
-    function readLegacy() {
-        try {
-            const value = legacyRead();
-            return isEmptyValue(value) ? null : value;
-        } catch (cause) {
-            warn(`file-store[${label}]: legacy read failed:`, cause?.message || cause);
-            return null;
-        }
-    }
-
-    function resolveDefault({ fileValue, legacyValue }) {
-        // A valid file is authoritative. The settings copy only ever feeds the
-        // initial migration, so merging it back in cannot resurrect records the
-        // user already deleted (that is the failure mode a union-by-id would
-        // have introduced). Leftovers are reported instead of silently dropped.
-        if (fileValue === null || fileValue === undefined) {
-            return { value: legacyValue ?? empty(), migrate: false };
-        }
-        const orphans = legacyValue !== null && legacyValue !== undefined
-            ? idsOf(legacyValue).filter(id => !idsOf(fileValue).includes(id))
-            : [];
-        if (orphans.length) {
-            warn(`file-store[${label}]: ignoring ${orphans.length} settings entr(ies) absent from the file`);
-            emit('store-load', { store: label, result: 'file-authoritative', orphans: orphans.length, level: 'warn' });
-            // For stores whose settings copy is supposed to be GONE, orphans
-            // mean real divergence (a failed strip, or work written by a legacy
-            // session) — that is worth a visible heads-up, not just console noise.
-            // Templates keep their copy by design, so they stay console-only.
-            if (stripLegacyOnLoad) {
-                try {
-                    globalThis.toastr?.warning?.(`«${label}»: ${orphans.length} записей в настройках не совпадают с файлом. Подробности — в диагностике.`);
-                } catch { /* no toastr in tests */ }
-            }
-        }
-        return { value: fileValue, migrate: false };
-    }
-
-    const resolveLoad = config.resolveLoad || resolveDefault;
-
-    /** Drop the settings copy. Only ever called after the file is authoritative. */
-    function stripLegacy() {
-        if (!legacyStrip || legacyStripped) return;
-        legacyStripped = true;
-        try {
-            const freed = legacyStrip();
-            const freedBytes = typeof freed === 'number' ? freed : null;
-            diagnostics.freedBytes = freedBytes;
-            emit('store-strip', { store: label, freedBytes });
-            log(`file-store[${label}]: stripped legacy settings copy`, freedBytes === null ? '' : `(freed ${freedBytes} bytes)`);
-        } catch (cause) {
-            legacyStripped = false;   // retry on the next load
-            warn(`file-store[${label}]: legacy strip failed:`, cause?.message || cause);
-        }
-    }
-
     /**
-     * Stay on the settings-backed store. The legacy value still has to reach the
-     * mirror, otherwise the first mutation would build on an empty base and wipe
-     * whatever the settings copy held.
+     * One probe + load attempt. Returns the store mode, or null when the
+     * surface is unreachable right now (the caller retries).
      */
-    function enterLegacyMode(reason) {
-        mode = 'legacy';
-        diagnostics.mode = mode;
-        // A network blip on the probe is transient — retry later. A 404 on the
-        // endpoint itself means this SillyTavern has no user-files surface at
-        // all: permanent for the session, no point re-probing.
-        legacyRetryable = reason === 'probe-error';
-        lastLegacyAttemptAt = Date.now();
-        const legacyValue = readLegacy();
-        mirror = legacyValue === null ? empty() : legacyValue;
-        diagnostics.loaded = true;
-        diagnostics.entries = countEntries(mirror);
-        emit('store-mode', { store: label, result: 'legacy', reason });
-        log(`file-store[${label}]: mode=legacy (${reason}) — staying on settings`);
-        return mode;
-    }
-
-    async function detectAndLoad({ retry = false } = {}) {
+    async function detectAndLoadOnce() {
         const started = Date.now();
-        // The mirror as the retry found it: in legacy mode it holds the base
-        // plus whatever the session wrote while the surface was unreachable.
-        const priorMirror = retry ? mirror : null;
 
         let probe;
         try {
             probe = await fetch(VERIFY_URL, { method: 'POST', headers: stHeaders(), body: JSON.stringify({ urls: [] }) });
         } catch (cause) {
-            warn(`file-store[${label}]: user-files endpoint unavailable:`, cause?.message || cause);
-            return enterLegacyMode('probe-error');
+            // The surface is unreachable right now. Returning null sends the
+            // caller back into the ready() retry loop: with no settings
+            // fallback there is no honest data source to load, and a mutation
+            // built on nothing must never reach the file.
+            warn(`file-store[${label}]: user-files endpoint unreachable:`, cause?.message || cause);
+            return null;
         }
-        if (!probe.ok) return enterLegacyMode(`probe-${probe.status}`);
+        if (!probe.ok) {
+            // The endpoint answered but does not exist (404 — old SillyTavern):
+            // permanent for the session, nowhere to store data.
+            mode = 'readonly';
+            diagnostics.mode = mode;
+            writeBlockedReason = 'no-user-files';
+            mirror = empty();
+            syncBase = clone(mirror);
+            diagnostics.loaded = true;
+            diagnostics.readResult = `probe-${probe.status}`;
+            diagnostics.entries = countEntries(mirror);
+            emit('store-mode', { store: label, result: 'readonly', reason: 'no-user-files' });
+            log(`file-store[${label}]: mode=readonly (no user-files surface, probe ${probe.status})`);
+            refusePersist('no-user-files');
+            return mode;
+        }
 
-        // Set before the initial persist so migration writes are not skipped.
         mode = 'file';
         diagnostics.mode = mode;
-        legacyRetryable = false;
 
         let text = null;
         let readResult = 'missing';
@@ -549,7 +424,7 @@ export function createFileStore(config) {
         }
 
         // A document from a newer build cannot be managed by this one: load it
-        // read-only, never repair it away, never strip the settings copy.
+        // read-only, never repair it away.
         if (readResult === 'newer') {
             mode = 'readonly';
             diagnostics.mode = mode;
@@ -573,9 +448,7 @@ export function createFileStore(config) {
         // until the write loop re-reads the file and settles the question.
         unreadableFile = readResult === 'error';
 
-        const legacyValue = readLegacy();
-        const resolved = resolveLoad({ fileValue, legacyValue });
-        mirror = resolved.value === undefined ? empty() : resolved.value;
+        mirror = fileValue === null || fileValue === undefined ? empty() : fileValue;
         // Merge base: the server document this session last synced to. A found
         // file is exactly that; with no usable file the mirror is the best
         // description of the server state (nothing/repair) for a first merge.
@@ -592,53 +465,27 @@ export function createFileStore(config) {
         });
         log(`file-store[${label}]: mode=file, loaded (${readResult}) — ${diagnostics.entries} entr(ies), ${diagnostics.bytes} bytes`);
 
-        // Retry transition legacy→file: carry the session's legacy-mode work
-        // into the file state and persist the union BEFORE the settings copy
-        // is stripped (same never-destructive-before-durable ordering).
-        if (retry && stripLegacyOnLoad && priorMirror && readResult === 'found') {
-            const merged = mergeLegacyRecovery(mirror, priorMirror);
-            if (merged !== null) {
-                mirror = merged;
-                diagnostics.entries = countEntries(mirror);
-                log(`file-store[${label}]: merged legacy-session records into the recovered file`);
-                await schedulePersist();
-            }
-        }
-
-        if (readResult === 'found') {
-            // The file is authoritative — the settings copy is now dead weight.
-            if (stripLegacyOnLoad) stripLegacy();
-            return mode;
-        }
-
-        // Nothing to migrate and nothing to repair: do not create an empty file.
-        if (legacyValue === null && readResult !== 'corrupt') return mode;
-
-        // Migration (or corrupt-file repair): persist FIRST, strip only once durable.
-        if (legacyValue !== null) {
-            emit('store-migrate', { store: label, result: 'started', entries: countEntries(mirror), source: 'settings' });
-            log(`file-store[${label}]: migrating ${countEntries(mirror)} entr(ies) from settings`);
-        }
-        const uploaded = await schedulePersist();
-        if (uploaded && stripLegacyOnLoad) stripLegacy();
+        // A corrupt document is repaired with the empty mirror; a missing one
+        // is not created until the first real mutation.
+        if (readResult === 'corrupt') await schedulePersist();
         return mode;
     }
 
     /**
-     * Resolve the store mode (and perform load/migration) once per session.
-     * A retryable legacy downgrade re-runs this through `ready()` after the
-     * throttle window; a session blocked for safety stays blocked.
+     * Resolve the store mode once per session. While the user-files surface is
+     * unreachable the promise stays pending and the probe repeats after the
+     * throttle window: there is nothing honest to resolve with, and callers'
+     * `await ready()` simply waits for storage to answer.
      */
     function ready() {
         if (!readyPromise) {
-            readyPromise = detectAndLoad();
-            return readyPromise;
-        }
-        // A transient probe failure downgraded this session to legacy mode.
-        // Re-probe (throttled) so one blip at startup doesn't pin every write
-        // to settings.json for the rest of the session.
-        if (mode === 'legacy' && legacyRetryable && Date.now() - lastLegacyAttemptAt >= legacyRetryMs) {
-            readyPromise = detectAndLoad({ retry: true });
+            readyPromise = (async () => {
+                for (;;) {
+                    const result = await detectAndLoadOnce();
+                    if (result !== null) return result;
+                    await new Promise(resolve => setTimeout(resolve, probeRetryMs));
+                }
+            })();
         }
         return readyPromise;
     }
@@ -772,20 +619,6 @@ export function createFileStore(config) {
 
         if (writeBlockedReason) return refusePersist(writeBlockedReason);
         if (mode === 'readonly') return refusePersist('newer-version');
-
-        if (mode === 'legacy') {
-            if (!legacyWrite) return Promise.resolve(false);
-            try {
-                legacyWrite(clone(mirror));
-                diagnostics.lastWriteAt = new Date().toISOString();
-                emit('store-write', { store: label, result: 'settings', entries: countEntries(mirror) });
-                return Promise.resolve(true);
-            } catch (cause) {
-                lastWriteOk = false;
-                notifyFailure(cause);
-                return Promise.resolve(false);
-            }
-        }
         if (mode !== 'file') return Promise.resolve(false);
 
         pendingPayload = buildPayload();
@@ -864,7 +697,6 @@ export function createFileStore(config) {
         /**
          * Apply a synchronous mutator to the mirror and schedule the write. The
          * mutator's return value is passed through as the operation result.
-         * Works in both modes: legacy mode writes the settings copy back.
          *
          * `persist: false` is for recompute-then-compare flows (reconcile): the
          * caller mutates, decides whether anything actually changed, and calls
@@ -913,15 +745,12 @@ export function createFileStore(config) {
             writeJob = null;
             lastWriteOk = true;
             lastFailureToastAt = 0;
-            legacyStripped = false;
             unreadableFile = false;
             writeBlockedReason = null;
             refusedNotified.clear();
-            legacyRetryable = false;
-            lastLegacyAttemptAt = 0;
             Object.assign(diagnostics, {
                 mode: 'unknown', loaded: false, readResult: null, entries: null,
-                bytes: null, lastWriteAt: null, lastWriteOk: null, lastError: null, freedBytes: null,
+                bytes: null, lastWriteAt: null, lastWriteOk: null, lastError: null,
             });
         },
     };
@@ -951,37 +780,4 @@ export function flushAllFileStores() {
  */
 export function resetFileStoresForTests() {
     STORES.clear();
-}
-
-/**
- * Measure the current settings footprint of the module. This is the number the
- * whole exercise is about: a 7,8 MB settings.json should drop to a few hundred KB
- * once gallery/references/presets live in files.
- * @returns {{settingsBytes: number, moduleBytes: number, entries: {[k: string]: number}}}
- */
-export function measureSettingsFootprint(moduleName) {
-    const empty = { settingsBytes: 0, connectionsBytes: 0, entries: {} };
-    const ctx = getCtx();
-    const settings = ctx?.extensionSettings?.[moduleName];
-    if (!settings) return empty;
-    // Serialization is the measurement, and it runs on a UI render path — a
-    // circular or exotic value must degrade to a zero row, never break the tab.
-    try {
-        const moduleJson = JSON.stringify(settings);
-        const connections = settings.imageConnections;
-        const entries = {};
-        if (connections && typeof connections === 'object') {
-            for (const [k, v] of Object.entries(connections)) {
-                if (Array.isArray(v)) entries[k] = v.length;
-            }
-        }
-        return {
-            settingsBytes: moduleJson.length,
-            connectionsBytes: connections ? JSON.stringify(connections).length : 0,
-            entries,
-        };
-    } catch (cause) {
-        warn('file-store: settings footprint unavailable:', cause?.message || cause);
-        return empty;
-    }
 }

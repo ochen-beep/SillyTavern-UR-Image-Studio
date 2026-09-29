@@ -19,7 +19,7 @@
  * folders and are only referenced by `imagePath`.
  */
 
-import { getCtx, getImageConnectionSettings, IMAGE_CONNECTION_SETTINGS_KEY, uid, log, warn, saveSettings } from './core.js';
+import { uid, log, warn } from './core.js';
 import { listNativeImages } from './native-image-storage.js';
 import { canonicalizeNativeImagePath, NATIVE_IMAGE_FOLDER } from './native-image-path.js';
 import { createFileStore } from './file-store.js';
@@ -52,43 +52,16 @@ const ALLOWED = [
     'hidden',
 ];
 
-/** The shared image-connections settings object — the legacy card store. */
-function imageSettings() {
-    const ctx = getCtx();
-    if (!ctx.extensionSettings) ctx.extensionSettings = {};
-    if (!ctx.extensionSettings.ur_image_studio || typeof ctx.extensionSettings.ur_image_studio !== 'object') {
-        ctx.extensionSettings.ur_image_studio = {};
-    }
-    const moduleSettings = ctx.extensionSettings.ur_image_studio;
-    if (!moduleSettings[IMAGE_CONNECTION_SETTINGS_KEY] || typeof moduleSettings[IMAGE_CONNECTION_SETTINGS_KEY] !== 'object') {
-        moduleSettings[IMAGE_CONNECTION_SETTINGS_KEY] = getImageConnectionSettings(moduleSettings);
-    }
-    return moduleSettings[IMAGE_CONNECTION_SETTINGS_KEY];
-}
-
 const galleryStore = createFileStore({
     label: 'gallery',
     name: GALLERY_FILE_NAME,
     version: GALLERY_STORE_VERSION,
     key: GALLERY_STORE_KEY,
     empty: () => [],
-    legacyRead: () => imageSettings().galleryIndex,
-    legacyWrite: value => {
-        imageSettings().galleryIndex = value;
-        saveSettings();
-    },
-    legacyStrip: () => {
-        const current = imageSettings().galleryIndex;
-        const freedBytes = Array.isArray(current) ? JSON.stringify(current).length : 0;
-        delete imageSettings().galleryIndex;
-        saveSettings();
-        return freedBytes;
-    },
-    stripLegacyOnLoad: true,
     countEntries: value => (Array.isArray(value) ? value.length : null),
 });
 
-/** Resolve the card store (probe / load / migrate) exactly once per session. */
+/** Resolve the card store (probe / load) exactly once per session. */
 export function ensureGalleryStoreReady() {
     return galleryStore.ready();
 }

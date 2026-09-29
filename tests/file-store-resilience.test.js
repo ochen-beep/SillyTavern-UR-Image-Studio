@@ -80,13 +80,7 @@ function makeStore(overrides = {}) {
         key,
         version: 1,
         empty: () => [],
-        legacyRead: () => moduleSettings[key],
-        legacyWrite: value => { moduleSettings[key] = value; },
-        legacyStrip: () => {
-            const bytes = moduleSettings[key] ? JSON.stringify(moduleSettings[key]).length : 0;
-            delete moduleSettings[key];
-            return bytes;
-        },
+        probeRetryMs: 5,
         ...overrides,
     });
 }
@@ -203,58 +197,56 @@ describe('file-store resilience: newer-version document', () => {
         assert.ok(toastErrors.length > 0, 'the user is told to update');
     });
 
-    it('doc.v < store version → corrupt repair (existing forward-migration behavior)', async () => {
-        const store = makeStore({ version: 2, stripLegacyOnLoad: true });
+    it('doc.v < store version → corrupt repair with the empty mirror', async () => {
+        const store = makeStore({ version: 2 });
         serverFiles.set(store.name, JSON.stringify({ v: 1, items: [{ id: 'old' }] }));
-        moduleSettings.items = [{ id: 'migrated' }];
 
         await store.ready();
         await store.flush();
         assert.equal(store.diagnostics().readResult, 'corrupt');
-        assert.deepEqual(serverDoc(store), [{ id: 'migrated' }]);
+        assert.deepEqual(serverDoc(store), []);
     });
 });
 
-// ── F4: transient probe failure is retried, session work survives ──
+// ── F4: an unreachable surface is waited out, never written blind ──
 
-describe('file-store resilience: legacy retry after transient probe failure', () => {
-    it('probe blip → legacy session work is merged into the file once the probe recovers', async () => {
-        const store = makeStore({ stripLegacyOnLoad: true, legacyRetryMs: 5 });
-        moduleSettings.items = [{ id: 'base' }];
-
+describe('file-store resilience: probe outage', () => {
+    it('a mutation during an outage lands in the file once the probe answers', async () => {
+        const store = makeStore();
         probeThrows = true;
-        await store.ready();
-        assert.equal(store.mode(), 'legacy');
+        // ready() не резолвится, пока поверхность молчит — мутация ждёт в нём.
+        const readyPromise = store.ready();
+        let settled = false;
+        readyPromise.then(() => { settled = true; });
+        await new Promise(resolve => setTimeout(resolve, 20));
+        assert.equal(settled, false, 'нет честного источника данных — ready() ждёт');
 
-        await store.mutate(list => list.push({ id: 'session' }));
-        assert.deepEqual(moduleSettings.items.map(i => i.id), ['base', 'session'], 'legacy mode writes settings');
-
-        // The server file exists and holds its own content; the probe recovers.
+        const mutation = store.mutate(list => list.push({ id: 'session' })).catch(() => {});
         probeThrows = false;
-        serverFiles.set(store.name, JSON.stringify({ v: 1, items: [{ id: 'file-1' }, { id: 'base' }] }));
-        await new Promise(resolve => setTimeout(resolve, 10));
-
-        await store.ready();
+        serverFiles.set(store.name, JSON.stringify({ v: 1, items: [{ id: 'file-1' }] }));
+        await Promise.all([readyPromise, mutation]);
         assert.equal(store.mode(), 'file');
+        await store.flush();
         assert.deepEqual(
             store.snapshot().map(i => i.id).sort(),
-            ['base', 'file-1', 'session'],
-            'session work survives the transition, file records win on id conflicts',
+            ['file-1', 'session'],
+            'работа окна сбоя доезжает до файла, файловая запись не теряется',
         );
-        await store.flush();
-        assert.equal(uploads.length, 1, 'the merged state is persisted');
-        assert.equal(Object.hasOwn(moduleSettings, 'items'), false, 'settings copy stripped after durable merge');
+        assert.equal(uploads.length >= 1, true, 'состояние сохранено');
     });
 
-    it('probe 404 (no user-files endpoint) is permanent and never retried', async () => {
-        const store = makeStore({ stripLegacyOnLoad: true, legacyRetryMs: 0 });
+    it('probe 404 (no user-files endpoint) is permanent: readonly, never retried into a write', async () => {
         verifyAvailable = false;
-        await store.ready();
-        assert.equal(store.mode(), 'legacy');
+        const store = makeStore();
+        assert.equal(await store.ready(), 'readonly');
+        assert.equal(store.diagnostics().lastError, 'no-user-files');
 
         verifyAvailable = true;
-        await store.ready();
-        assert.equal(store.mode(), 'legacy', 'a missing endpoint is a permanent condition, not a blip');
+        await store.flush();
+        assert.equal(store.mode(), 'readonly', 'a missing endpoint is a permanent condition, not a blip');
+        await store.mutate(list => list.push({ id: 'late' }));
+        await store.flush();
+        assert.equal(uploads.length, 0, 'nowhere to store: no upload is ever attempted');
     });
 });
 
