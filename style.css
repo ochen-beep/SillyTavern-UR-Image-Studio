@@ -1672,6 +1672,17 @@
     transition: background .12s, color .12s;
 }
 .uris-mobile-back:hover { color: var(--uris-text-strong); background: rgba(255,255,255,.05); }
+/* Чип имени папки в тулбаре сетки = кнопка смены папки (нижний лист). */
+.uris-mobile-folder-switch {
+    display: inline-flex; align-items: center; gap: 6px; min-width: 0;
+    max-width: 100%; padding: 6px 10px; border: 0; border-radius: 99px;
+    background: var(--uris-surface-btn); color: var(--uris-text-strong);
+    cursor: pointer; font: inherit; font-size: var(--uris-font-sm);
+}
+.uris-mobile-folder-switch i { font-size: calc(10px * var(--uris-font-scale, 1)); color: var(--uris-text-dim); }
+.uris-mobile-folder-switch .uris-mobile-toolbar-title {
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
 .uris-mobile-list {
     flex: 1; overflow-y: auto; padding: 8px; display: flex; flex-direction: column; gap: 6px;
     touch-action: pan-y;   /* см. фикс .uris-window button выше */
@@ -1686,12 +1697,19 @@
 .uris-mobile-folder-icon { color: var(--uris-text-dim); }
 .uris-mobile-folder-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .uris-mobile-folder-count { font-size: var(--uris-font-xs); color: var(--uris-text-dim); }
+/* Коллаж 2×2 из первых четырёх референсов — превью папки в списке. */
 .uris-mobile-folder-previews { display: flex; gap: 2px; }
+.uris-mobile-folder-collage {
+    display: grid; grid-template-columns: 1fr 1fr; gap: 1px;
+    width: 38px; height: 34px; border-radius: 4px; overflow: hidden;
+    flex: 0 0 auto; background: var(--uris-surface-btn);
+}
 .uris-mobile-folder-thumb {
-    width: 28px; height: 36px; border-radius: 3px;
+    width: 100%; height: 100%;
     background-size: cover; background-position: center;
     background-color: var(--uris-surface-btn);
 }
+.uris-mobile-folder-thumb-empty { opacity: .35; }
 .uris-mobile-folder-arrow { color: var(--uris-text-dim); }
 .uris-mobile-grid { flex: 1; }
 .uris-mobile-search-wrap { padding: 8px 10px 0; }
@@ -1706,6 +1724,13 @@
 .uris-mobile-search:focus,
 .uris-mobile-folder-search:focus { border-color: var(--uris-accent); }
 .uris-mobile-card-scroll { flex: 1; overflow-y: auto; padding: 10px; display: flex; flex-direction: column; gap: 4px; touch-action: pan-y; }
+/* Клонировать/Удалить — липкий низ под большим пальцем, 44px. */
+.uris-mobile-card-scroll .uris-ed-footer {
+    position: sticky; bottom: 0; z-index: 2;
+    margin-top: 4px; padding: 8px 0 calc(8px + env(safe-area-inset-bottom, 0px));
+    background: linear-gradient(to top, var(--uris-surface-card) 65%, transparent);
+}
+.uris-mobile-card-scroll .uris-ed-footer .uris-btn { min-height: 44px; flex: 1; }
 
 /* Picker overlay */
 /* Как и lightbox: НЕ inset:0, а явные top/left + width/height — иначе в

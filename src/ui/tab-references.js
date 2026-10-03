@@ -23,6 +23,7 @@ import {
     createFolderField, openFolderSheet, orderSidebarFolders, nextFolderSortMode, filterFolders,
 } from './folder-picker.js';
 import { showFolderManager } from './folder-manager.js';
+import { openCardActionMenu, bindCardContextMenu } from './card-action-menu.js';
 
 // Layout state
 let _activeFolderFilter = 'all';
@@ -478,9 +479,29 @@ async function _renderMobileAll(root) {
         <div class="uris-references uris-refs-mobile-stack">
             <div class="uris-mobile-screen" id="urisMobileScreen"></div>
         </div>`;
+    // Остаточное состояние «карточка без refId» (смена чата/ре-рендер посреди
+    // правки) иначе молча оставляет вкладку пустой — откатываемся в сетку.
+    if (_mobileScreen === 'card' && !_editingRefId) _mobileScreen = 'grid';
+    // Неизвестное/остаточное состояние (null после десктопного ресайза, «карточка
+    // без refId» посреди правки) иначе молча оставляет вкладку пустой —
+    // откатываемся: неизвестное — в список папок, битую карточку — в сетку.
+    if (_mobileScreen !== 'folders' && _mobileScreen !== 'grid' && _mobileScreen !== 'card') _mobileScreen = 'folders';
+    if (_mobileScreen === 'card' && !_editingRefId) _mobileScreen = 'grid';
     if (_mobileScreen === 'folders') return _renderMobileFolders(root);
     if (_mobileScreen === 'grid')   return _renderMobileGrid(root);
-    if (_mobileScreen === 'card')   return _renderMobileCard(root);
+    return _renderMobileCard(root);
+}
+
+/**
+ * Коллаж 2×2 из первых четырёх референсов — превью папки в мобильном списке:
+ * узнавание без чтения имени (40+ папок). Экспорт для тестов.
+ * @param {{ imagePath?: string }[] | null} refs
+ */
+export function mobileFolderCollageHtml(refs) {
+    const list = (Array.isArray(refs) ? refs : []).slice(0, 4).map(r =>
+        `<span class="uris-mobile-folder-thumb" style="background-image:url('${escapeHtml(r?.imagePath || '')}')"></span>`);
+    while (list.length < 4) list.push('<span class="uris-mobile-folder-thumb uris-mobile-folder-thumb-empty"></span>');
+    return `<span class="uris-mobile-folder-collage">${list.join('')}</span>`;
 }
 
 async function _renderMobileFolders(root) {
@@ -489,9 +510,7 @@ async function _renderMobileFolders(root) {
     const [folders, refs] = await Promise.all([listFolders(), listRefs()]);
     const prefs = getFolderPrefs();
     const countById = new Map(folders.map(f => [f.id, filterRefsByFolder(refs, f.id).length]));
-    const previewDots = (rs) => rs.slice(0, 3).map(r =>
-        `<span class="uris-mobile-folder-thumb" style="background-image:url('${escapeHtml(r.imagePath)}')"></span>`
-    ).join('');
+    const previewCollage = rs => mobileFolderCollageHtml(rs);
     host.innerHTML = `
         <div class="uris-mobile-toolbar">
             <button class="uris-mobile-add-folder">+ Создать папку</button>
@@ -518,14 +537,14 @@ async function _renderMobileFolders(root) {
                 <span class="uris-mobile-folder-icon">◈</span>
                 <span class="uris-mobile-folder-name">Все карточки</span>
                 <span class="uris-mobile-folder-count">${refs.length}</span>
-                <span class="uris-mobile-folder-previews">${previewDots(refs)}</span>
+                <span class="uris-mobile-folder-previews">${previewCollage(refs)}</span>
                 <span class="uris-mobile-folder-arrow">›</span>
             </button>
             <button class="uris-mobile-folder-item" data-folder="none">
                 <span class="uris-folder-dot uris-folder-dot-mute"></span>
                 <span class="uris-mobile-folder-name">Без папки</span>
                 <span class="uris-mobile-folder-count">${noFolder.length}</span>
-                <span class="uris-mobile-folder-previews">${previewDots(noFolder)}</span>
+                <span class="uris-mobile-folder-previews">${previewCollage(noFolder)}</span>
                 <span class="uris-mobile-folder-arrow">›</span>
             </button>
             ${ordered.map(f => {
@@ -534,7 +553,7 @@ async function _renderMobileFolders(root) {
                     <span class="uris-folder-dot" style="background:${escapeHtml(f.color)}"></span>
                     <span class="uris-mobile-folder-name">${escapeHtml(f.name)}</span>
                     <span class="uris-mobile-folder-count">${inFolder.length}</span>
-                    <span class="uris-mobile-folder-previews">${previewDots(inFolder)}</span>
+                    <span class="uris-mobile-folder-previews">${previewCollage(inFolder)}</span>
                     <span class="uris-mobile-folder-arrow">›</span>
                 </button>`;
             }).join('')}
@@ -579,8 +598,11 @@ async function _renderMobileGrid(root) {
     host.innerHTML = `
         <div class="uris-mobile-toolbar">
             <button class="uris-mobile-back" title="Назад" aria-label="Назад">‹</button>
-            ${activeFolder ? `<span class="uris-folder-dot" style="background:${escapeHtml(activeFolder.color)}"></span>` : ''}
-            <span class="uris-mobile-toolbar-title">${escapeHtml(title)}</span>
+            <button type="button" class="uris-mobile-folder-switch" title="Сменить папку" aria-label="Сменить папку">
+                ${activeFolder ? `<span class="uris-folder-dot" style="background:${escapeHtml(activeFolder.color)}"></span>` : ''}
+                <span class="uris-mobile-toolbar-title">${escapeHtml(title)}</span>
+                <i class="fa-solid fa-chevron-down"></i>
+            </button>
             <span class="uris-mobile-folder-count" id="urisMobileCount">${searched.length}</span>
             <button class="uris-mobile-add-ref"><i class="fa-solid fa-plus"></i> Референс</button>
             <input type="file" class="uris-ref-file" accept="image/*" multiple hidden>
@@ -612,6 +634,31 @@ async function _renderMobileGrid(root) {
                 _mobileScreen = 'card';
                 _renderMobileAll(root);
             });
+            // Долгий тап / ПКМ: быстрые действия без открытия редактора.
+            bindCardContextMenu(tile, ({ x, y }) => {
+                const ref = list.find(r => r.id === tile.dataset.refId);
+                if (!ref) return;
+                openCardActionMenu({
+                    title: ref.name || 'Референс',
+                    x, y,
+                    items: [
+                        { id: 'edit', icon: 'fa-pencil', label: 'Правка', onSelect: () => {
+                            _editingRefId = ref.id;
+                            _mobileScreen = 'card';
+                            _renderMobileAll(root);
+                        } },
+                        { id: 'clone', icon: 'fa-clone', label: 'Клонировать', onSelect: async () => {
+                            await cloneRef(ref);
+                            _renderTiles();
+                        } },
+                        { id: 'del', icon: 'fa-trash', label: 'Удалить…', danger: true, onSelect: async () => {
+                            if (!(await showConfirmModal(`Удалить референс «${ref.name || 'Без названия'}»?`))) return;
+                            await deleteRef(ref.id);
+                            _renderTiles();
+                        } },
+                    ],
+                });
+            });
         });
     };
     _renderTiles();
@@ -624,7 +671,39 @@ async function _renderMobileGrid(root) {
         _mobileScreen = 'folders';
         _renderMobileAll(root);
     });
+    // Смена папки без «Назад»: нижний лист со списком (поиск, пины сверху),
+    // сетка остаётся видна — паттерн фото-приложений для десятков коллекций.
+    host.querySelector('.uris-mobile-folder-switch')?.addEventListener('click', () => openFolderSwitcher(root));
     _bindMobileAddRef(host, root);
+}
+
+/**
+ * Нижний лист переключения папки из мобильной сетки: «Все»/«Без папки» +
+ * реальные папки в порядке сайдбара (пины сверху, счётчики в имени).
+ * pick-one — лист закрывается первым же выбором.
+ */
+function openFolderSwitcher(root) {
+    void (async () => {
+        const [folders, refs] = await Promise.all([listFolders(), listRefs()]);
+        const prefs = getFolderPrefs();
+        const countById = new Map(folders.map(f => [f.id, filterRefsByFolder(refs, f.id).length]));
+        const ordered = orderSidebarFolders(folders, { pinnedIds: prefs.pinned, sort: prefs.sort, countById });
+        const entries = [
+            { id: 'all', name: `Все референсы · ${refs.length}`, color: '' },
+            { id: 'none', name: `Без папки · ${filterRefsByFolder(refs, 'none').length}`, color: '' },
+            ...ordered.map(f => ({ ...f, name: `${f.name} · ${countById.get(f.id) || 0}` })),
+        ];
+        openFolderSheet({
+            title: 'Папка',
+            folders: entries,
+            mode: 'pick-one',
+            onPick: (folder) => {
+                _activeFolderFilter = folder.id;
+                _mobileSearchQuery = '';
+                _renderMobileAll(root);
+            },
+        });
+    })();
 }
 
 async function _renderMobileCard(root) {

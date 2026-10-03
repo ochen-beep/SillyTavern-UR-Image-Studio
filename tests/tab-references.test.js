@@ -587,3 +587,150 @@ test('editor: «Клонировать» на мобильной карточк�
 
     root.removeChild(el);
 });
+
+// ── Мобильный проход 2026-10-03: коллаж папок, переключатель из сетки, жест ──
+
+// Модуль tab-references держит _mobileScreen между тестами (state персистит
+// импорт), а ранние тесты подменяют getContext — стабилизируем обе вещи.
+async function openMobileGrid(el) {
+    globalThis.SillyTavern = { getContext: () => _ctx, libs: { localforage: makeLocalforage() } };
+    let guard = 0;
+    while (!el.querySelector('.uris-mobile-folder-item') && guard++ < 4) {
+        await el.querySelector('.uris-mobile-back')?.click();
+        await new Promise(resolve => setTimeout(resolve, 0));
+    }
+    await [...el.querySelectorAll('.uris-mobile-folder-item')].find(i => i.dataset.folder === 'all').click();
+    await new Promise(resolve => setTimeout(resolve, 0));
+}
+
+test('mobileFolderCollageHtml: до 4 миниатюр, пустые ячейки добиваются плейсхолдерами', async () => {
+    const { mobileFolderCollageHtml } = await import('../src/ui/tab-references.js');
+    const four = mobileFolderCollageHtml([
+        { imagePath: '/a.png' }, { imagePath: '/b.png' },
+        { imagePath: '/c.png' }, { imagePath: '/d.png' },
+        { imagePath: '/e.png' },
+    ]);
+    assert.equal((four.match(/uris-mobile-folder-thumb(?!\s*")|uris-mobile-folder-thumb"/g) || []).length >= 4, true);
+    assert.equal((four.match(/background-image/g) || []).length, 4, 'ровно четыре миниатюры даже при пяти референсах');
+    assert.equal(four.includes('uris-mobile-folder-thumb-empty'), false, 'все ячейки заняты');
+
+    const one = mobileFolderCollageHtml([{ imagePath: '/a.png' }]);
+    assert.equal((one.match(/uris-mobile-folder-thumb-empty/g) || []).length, 3, 'одна занята, три плейсхолдера');
+
+    const empty = mobileFolderCollageHtml([]);
+    assert.equal((empty.match(/uris-mobile-folder-thumb-empty/g) || []).length, 4, 'пустая папка — весь коллаж-плейсхолдер');
+});
+
+test('mobile folders screen: строки папок несут коллаж, а не точки', async () => {
+    console.log('=== START folders-collage test');
+    const { document, root } = makeFakeDocument();
+    globalThis.document = document;
+    globalThis.document.body = root;
+    const { createRef } = await import('../src/refs-library.js');
+    await createRef({ name: 'A', imagePath: '/a.png' });
+    await createRef({ name: 'B', imagePath: '/b.png' });
+    globalThis.SillyTavern = { getContext: () => _ctx, libs: { localforage: makeLocalforage() } };
+    const { render } = await import('../src/ui/tab-references.js');
+    const el = makeTabEl(document, 380);
+    root.appendChild(el);
+
+    await render(el);
+    let guard = 0;
+    while (!el.querySelector('.uris-mobile-folder-item') && guard++ < 4) {
+        await el.querySelector('.uris-mobile-back')?.click();
+        await new Promise(resolve => setTimeout(resolve, 0));
+    }
+    const collages = [...el.querySelectorAll('.uris-mobile-folder-collage')];
+    assert.ok(collages.length >= 1, `коллаж в строках списка папок; cw: ${el.clientWidth}, children: [${el.children.map(c => c.className || c.tagName).join(' | ')}], screen: ${(el.querySelector('.uris-mobile-screen')?.innerHTML || el.innerHTML || '').slice(0, 200)}`);
+    // fake-dom: только простые селекторы — класс + dataset-фильтр
+    const allRow = [...el.querySelectorAll('.uris-mobile-folder-item')].find(n => n.dataset.folder === 'all');
+    assert.equal(allRow.querySelectorAll('.uris-mobile-folder-thumb').length, 4, '2×2 = четыре ячейки');
+    assert.equal(allRow.querySelectorAll('.uris-mobile-folder-thumb-empty').length, 2, 'две референса — два плейсхолдера');
+
+    root.removeChild(el);
+});
+
+test('mobile grid: тап по имени папки открывает лист переключения, выбор меняет сетку', async t => {
+    const { document, root } = makeFakeDocument();
+    globalThis.document = document;
+    globalThis.document.body = root;
+    const { createRef, createFolder } = await import('../src/refs-library.js');
+    await createRef({ name: 'Mira', imagePath: '/mira.png' });
+    const folder = await createFolder('Пейзажи');
+    await createRef({ name: 'Hill', imagePath: '/hill.png', folders: [folder.id] });
+    const { render } = await import('../src/ui/tab-references.js');
+    const el = makeTabEl(document, 380);
+    root.appendChild(el);
+
+    await render(el);
+    await openMobileGrid(el);
+
+    // Открыть лист переключения папки
+    el.querySelector('.uris-mobile-folder-switch').click();
+    await new Promise(resolve => setTimeout(resolve, 0));
+    const sheet = document.body.children.find(n => n.querySelector?.('.uris-folder-sheet-list'));
+    assert.ok(sheet, 'лист папок открыт');
+    const rowNames = [...sheet.querySelectorAll('.uris-fs-row')].map(r => r.textContent);
+    assert.ok(rowNames.some(n => n.includes('Все референсы · 2')), 'строка «Все» со счётчиком');
+    assert.ok(rowNames.some(n => n.includes('Пейзажи · 1')), 'папка со счётчиком');
+
+    // Выбор папки: лист закрылся, заголовок обновился, сетка отфильтровалась
+    const target = [...sheet.querySelectorAll('.uris-fs-row')].find(r => r.textContent.includes('Пейзажи'));
+    target.click();
+    await new Promise(resolve => setTimeout(resolve, 0));
+    assert.equal(sheet.parentNode, null, 'лист закрыт после выбора');
+    assert.match(el.querySelector('.uris-mobile-toolbar-title').textContent, /Пейзажи/);
+    const tiles = [...el.querySelectorAll('.uris-pool-tile')].map(tile => tile.dataset.refId);
+    assert.equal(tiles.length, 1, 'сетка отфильтрована по папке');
+    t.mock.timers.reset();
+});
+
+test('mobile grid: долгий тап/ПКМ по плитке открывает меню Правка/Клонировать/Удалить', async () => {
+    const { document, root } = makeFakeDocument();
+    globalThis.document = document;
+    globalThis.document.body = root;
+    const { createRef } = await import('../src/refs-library.js');
+    await createRef({ name: 'Mira', imagePath: '/mira.png' });
+    const { render } = await import('../src/ui/tab-references.js');
+    const el = makeTabEl(document, 380);
+    root.appendChild(el);
+
+    await render(el);
+    await openMobileGrid(el);
+    const tile = el.querySelector('.uris-pool-tile');
+    let pd = false;
+    tile.dispatchEvent({ type: 'contextmenu', clientX: 5, clientY: 6, preventDefault: () => { pd = true; } });
+
+    const overlay = document.body.children.find(n => n.querySelector?.('.uris-action-menu'));
+    assert.ok(pd, 'нативное меню подавлено');
+    assert.ok(overlay, 'меню открыто');
+    const labels = [...overlay.querySelectorAll('.uris-action-menu-item')].map(b => b.textContent.trim());
+    assert.deepEqual(labels, ['Правка', 'Клонировать', 'Удалить…']);
+    root.removeChild(el);
+});
+
+test('mobile render after a desktop pass falls back to the folder list (no blank tab)', async () => {
+    const { document, root } = makeFakeDocument();
+    globalThis.document = document;
+    globalThis.document.body = root;
+    const { render } = await import('../src/ui/tab-references.js');
+    const el = makeTabEl(document, 600);   // desktop pass: resize handler parks _mobileScreen = null
+    root.appendChild(el);
+    await render(el);
+
+    Object.defineProperty(el, 'clientWidth', { value: 380, configurable: true });
+    await render(el);                       // back to portrait: must NOT be a blank tab
+
+    const screen = el.querySelector('.uris-mobile-screen');
+    assert.ok(screen?.children.length, 'портрет после ландшафта рендерит экран, а не пустоту');
+    // Список папок — в одном тапе от любого экрана (нормализация остаточного
+    // состояния в _renderMobileAll не оставляет тупика без выхода).
+    let guard = 0;
+    while (!el.querySelector('.uris-mobile-folder-item') && guard++ < 4) {
+        await el.querySelector('.uris-mobile-back')?.click();
+        await new Promise(resolve => setTimeout(resolve, 0));
+    }
+    assert.ok(el.querySelectorAll('.uris-mobile-folder-item').length >= 1,
+        'список папок достижим с любого экрана');
+    root.removeChild(el);
+});
