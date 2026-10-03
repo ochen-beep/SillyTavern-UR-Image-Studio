@@ -71,8 +71,10 @@ test('пункты меню не меньше 44px — зона пальца', (
 });
 
 test('референсы: коллаж 2×2 в строках папок, чип-переключатель и липкий футер', () => {
-    assert.match(mobileRuleBody('.uris-mobile-folder-collage'), /grid-template-columns:\s*1fr 1fr/);
+    // Эти классы встречаются только в мобильном render-пути (tab-references,
+    // _renderMobile*), поэтому скоупятся DOM-путём, а не @media.
+    assert.match(ruleBody('.uris-mobile-folder-collage'), /grid-template-columns:\s*1fr 1fr/);
     assert.match(ruleBody('.uris-mobile-folder-switch'), /cursor:\s*pointer/);
-    assert.match(mobileRuleBody('.uris-mobile-card-scroll .uris-ed-footer'), /position:\s*sticky/);
-    assert.match(mobileRuleBody('.uris-mobile-card-scroll .uris-ed-footer .uris-btn'), /min-height:\s*44px/);
+    assert.match(ruleBody('.uris-mobile-card-scroll .uris-ed-footer'), /position:\s*sticky/);
+    assert.match(ruleBody('.uris-mobile-card-scroll .uris-ed-footer .uris-btn'), /min-height:\s*44px/);
 });
