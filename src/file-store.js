@@ -52,6 +52,10 @@
  * additions on either side survive, genuine conflicts resolve by edit time, and
  * deletions are honored only when the other side did not modify the record. The
  * merged result becomes the mirror, so reads afterwards reflect the true state.
+ *
+ * Large collections (gallery index, reference pool) use the sharded sibling
+ * `createShardedFileStore` — same contract, shard-sized writes; see
+ * docs/2026-10-03-sharded-file-store-design.md.
  */
 
 import { getCtx, log, warn } from './core.js';
