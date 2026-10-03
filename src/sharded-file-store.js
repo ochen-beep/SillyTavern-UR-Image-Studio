@@ -131,7 +131,8 @@ function parseMonolith(text, version, key) {
     return { reason: parsed.reason, value: records };
 }
 
-// ── Store factory ── (capabilities accumulate in Tasks 3–9)
+// ── Store factory ── (the public contract is complete: ready / mode /
+// snapshot / mutate / replace / persist / flush / flushOnUnload / footprint)
 
 export function createShardedFileStore(config) {
     const {
@@ -959,8 +960,60 @@ export function createShardedFileStore(config) {
             return lastWriteOk;
         },
         persist() { return schedulePersist(); },
-        async flush() { return lastWriteOk; },                             // Task 9
-        flushOnUnload() {},                                                // Task 9
+        /** Await quiescence: every mutation issued so far has reached the server. */
+        async flush() {
+            let guard = 0;
+            while (writeJob && guard++ < 1000) await writeJob;
+            if (metaStore) await metaStore.flush();
+            return lastWriteOk;
+        },
+
+        /**
+         * Last-chance durability on page unload: dirty shards whose payloads
+         * fit the keepalive cap fly with `keepalive: true` (idempotent
+         * full-file writes). Over-limit shards are skipped with one aggregated
+         * event — the same honest behavior as file-store, at shard size.
+         * Dirty flags are NOT cleared: the write loop re-sending identical
+         * content later is harmless.
+         */
+        flushOnUnload() {
+            if (mode !== 'file' || (!dirtyShards.size && !manifestDirty)) return;
+            let sent = 0, skipped = 0, bytes = 0;
+            for (const id of [...dirtyShards]) {
+                const state = shardState.get(id);
+                if (!state) continue;
+                const json = JSON.stringify(shardDoc(label, version, id, state.records));
+                if (json.length > keepaliveLimit) { skipped++; continue; }
+                try {
+                    void fetch(UPLOAD_URL, {
+                        method: 'POST',
+                        headers: stHeaders(),
+                        body: JSON.stringify({ name: shardFileName(id), data: textToBase64(json) }),
+                        keepalive: true,
+                    });
+                    sent++;
+                    bytes += json.length;
+                } catch { /* nothing else can be done during teardown */ }
+            }
+            if (manifestDirty) {
+                const json = JSON.stringify(manifestDoc(label, version, shards.map(row => ({ ...row }))));
+                if (json.length <= keepaliveLimit) {
+                    try {
+                        void fetch(UPLOAD_URL, {
+                            method: 'POST',
+                            headers: stHeaders(),
+                            body: JSON.stringify({ name: manifestName, data: textToBase64(json) }),
+                            keepalive: true,
+                        });
+                        sent++;
+                        bytes += json.length;
+                    } catch { /* teardown */ }
+                } else skipped++;
+            }
+            if (sent || skipped) {
+                emit('store-unload-flush', { store: label, result: sent ? 'sent' : 'skipped', shards: sent, skipped, bytes });
+            }
+        },
         footprint() {
             return {
                 label,

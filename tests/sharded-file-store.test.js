@@ -220,6 +220,49 @@ describe('load from manifest', () => {
     });
 });
 
+describe('flush surface', () => {
+    it('flush() awaits quiescence of the write loop and the meta store', async () => {
+        const store = makeStore();
+        await store.ready();
+        await store.mutate(list => { list.unshift(card(0)); });
+        assert.equal(await store.flush(), true);
+        assert.equal(uploads.filter(u => u.keepalive).length, 0);
+    });
+
+    it('flushOnUnload sends small dirty shards with keepalive and skips big ones', async () => {
+        // mutate() awaits its write, so a dirty shard only exists at unload
+        // time when the write FAILED (the loop re-queued it) — the same
+        // "payload stays pending, unload flush retries it" state as file-store.
+        const small = makeStore();
+        await small.ready();
+        failUploads = true;
+        await small.mutate(list => { list.unshift(card(0)); });
+        failUploads = false;
+        small.flushOnUnload();
+        assert.ok(uploads.some(u => u.keepalive), 'a small dirty shard rides the keepalive');
+        const big = makeStore({ keepaliveLimit: 10 });
+        await big.ready();
+        failUploads = true;
+        await big.mutate(list => { list.unshift(card(0)); });
+        failUploads = false;
+        const before = uploads.filter(u => u.keepalive).length;
+        big.flushOnUnload();   // payload way over 10 bytes → skipped honestly
+        assert.equal(uploads.filter(u => u.keepalive).length, before, 'over-limit flush is skipped');
+    });
+
+    it('footprint reports manifest file, total entries and last write bytes', async () => {
+        const store = makeStore();
+        await store.ready();
+        await store.mutate(list => { list.unshift(card(0)); });
+        const fp = store.footprint();
+        assert.equal(fp.file, manifestName(store));
+        assert.equal(fp.entries, 1);
+        assert.equal(fp.mode, 'file');
+        assert.equal(fp.lastWriteOk, true);
+        assert.ok(fp.bytes > 0);
+    });
+});
+
 describe('mutation and documents', () => {
     it('a mutation writes the shard doc (kind/store/id) and the manifest row', async () => {
         const store = makeStore();
@@ -241,14 +284,14 @@ describe('mutation and documents', () => {
         const store = makeStore();
         await store.ready();
         await store.mutate(list => { list.unshift(card(0)); });
-        // flush() is a Task 9 stub; the count below holds only because mutate awaits its write.
+        // flush() awaits the write loop; the count below holds only because mutate awaits its write.
         await store.flush();
         const before = uploads.length;
         await store.mutate(list => {
             const item = list.find(r => r.id === 'c0000');
             item.prompt = 'changed';
         });
-        // flush() is a Task 9 stub; the assert below holds only because mutate awaits its write.
+        // flush() awaits the write loop; the assert below holds only because mutate awaits its write.
         await store.flush();
         assert.equal(uploads.length - before, 2, 'shard + manifest (rows are cheap and always refreshed)');
         const shard = JSON.parse(serverFiles.get(shardName(store, 's0000')));
