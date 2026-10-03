@@ -37,6 +37,10 @@ beforeEach(() => {
             getRequestHeaders: () => ({}),
         }),
     };
+    // A fresh server namespace per test: the gallery store is sharded now, so a
+    // previous test's manifest + shards would otherwise win over the re-seeded
+    // monolith below (the monolith is only the migration source).
+    serverFiles.clear();
     serverFiles.set('uris_gallery.json', JSON.stringify({ v: 1, cards: [
         { id: 'card-1', imagePath: 'user/images/Test/one.png', prompt: 'первый', provenance: { chatId: 'test-chat' }, status: 'ready', createdAt: 1 },
         { id: 'card-2', imagePath: 'user/images/Test/two.png', prompt: 'второй', provenance: { chatId: 'test-chat' }, status: 'ready', createdAt: 2 },
@@ -117,6 +121,9 @@ test('рендер галереи не сканирует сервер; скан
 // Подпись модели на миниатюре: карточка с modelId рендерит .uris-model-badge,
 // карточка без модели (legacy / reconcile чужих файлов) — не рендерит ничего.
 test('миниатюра показывает модель генерации, только если она известна', async () => {
+    // Fresh namespace again: the monolith re-seed below must be the migration
+    // source, not be shadowed by the previous test's manifest + shards.
+    serverFiles.clear();
     serverFiles.set('uris_gallery.json', JSON.stringify({ v: 1, cards: [
         { id: 'm-1', imagePath: 'user/images/Test/m1.png', prompt: 'с моделью', modelId: 'gemini-2.5-flash-image', provenance: { chatId: 'test-chat' }, status: 'ready', createdAt: 1 },
         { id: 'm-2', imagePath: 'user/images/Test/m2.png', prompt: 'без модели', provenance: { chatId: 'test-chat' }, status: 'ready', createdAt: 2 },

@@ -32,10 +32,16 @@ function installFileFetch() {
     };
 }
 
-/** The stored card array from the in-memory server file. */
+/** The stored card array from the in-memory server files (manifest + shards). */
 function galleryFileDoc() {
-    const text = serverFiles.get('uris_gallery.json');
-    return text ? JSON.parse(text).cards : [];
+    const manifestText = serverFiles.get('uris_gallery_manifest.json');
+    if (!manifestText) return [];
+    const cards = [];
+    for (const row of (JSON.parse(manifestText).shards || [])) {
+        const text = serverFiles.get(`uris_gallery_shard_${row.id}.json`);
+        if (text) cards.push(...JSON.parse(text).records);
+    }
+    return cards;
 }
 
 beforeEach(async () => {

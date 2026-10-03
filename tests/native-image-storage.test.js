@@ -169,7 +169,7 @@ test('gallery facade materializes legacy provider URLs before indexing a native 
         if (url === 'https://images.example/legacy.png') {
             return { ok: true, blob: async () => new Blob(['image-bytes'], { type: 'image/png' }) };
         }
-        return { ok: true, json: async () => ({ path: 'user/images/UR%20Image%20Studio/uris_legacy.png' }) };
+        return { ok: true, text: async () => '', json: async () => ({ path: 'user/images/UR%20Image%20Studio/uris_legacy.png' }) };
     };
     const { addToGallery } = await import('../src/storage.js');
 
@@ -202,7 +202,7 @@ test('gallery authority is shared index only and clearGallery removes only the a
             },
         },
     };
-    globalThis.fetch = async () => ({ ok: true, json: async () => ['one.png', 'two.png'] });
+    globalThis.fetch = async () => ({ ok: true, text: async () => '', json: async () => ['one.png', 'two.png'] });
     const { addToGallery, clearGallery, getGallery } = await import('../src/storage.js');
 
     await addToGallery('chat-a', { id: 'a', imagePath: 'user/images/UR%20Image%20Studio/one.png', prompt: 'one' });
@@ -224,7 +224,7 @@ test('gallery mutations cannot cross chat ownership boundaries', async () => {
         saveSettingsDebounced: () => {},
     };
     globalThis.SillyTavern = { getContext: () => context };
-    globalThis.fetch = async () => ({ ok: true, json: async () => ['one.png'] });
+    globalThis.fetch = async () => ({ ok: true, text: async () => '', json: async () => ['one.png'] });
     const { addToGallery, getGallery, removeFromGallery, updateGalleryEntry } = await import('../src/storage.js');
 
     await addToGallery('chat-a', {
@@ -243,7 +243,7 @@ test('addToGallery keeps passed chat ownership over supplied provenance', async 
         saveSettingsDebounced: () => {},
     };
     globalThis.SillyTavern = { getContext: () => context };
-    globalThis.fetch = async () => ({ ok: true, json: async () => ['one.png'] });
+    globalThis.fetch = async () => ({ ok: true, text: async () => '', json: async () => ['one.png'] });
     const { addToGallery, getGallery } = await import('../src/storage.js');
 
     const card = await addToGallery('chat-a', {
@@ -268,7 +268,7 @@ test('addToGallery rejects a foreign chat ID collision before materializing an i
     globalThis.SillyTavern = { getContext: () => context };
     globalThis.fetch = async (url) => {
         calls.push(url);
-        return { ok: true, json: async () => ({ path: 'user/images/UR%20Image%20Studio/forbidden.png' }) };
+        return { ok: true, text: async () => '', json: async () => ({ path: 'user/images/UR%20Image%20Studio/forbidden.png' }) };
     };
     const { addToGallery, getGallery } = await import('../src/storage.js');
 
@@ -373,7 +373,7 @@ test('getCharacterImageFolder uses the studio folder when no chat is open', asyn
 test('getGallery excludes hidden cards but keeps them in the shared index', async () => {
     const context = { extensionSettings: {}, getRequestHeaders: () => ({}), saveSettingsDebounced: () => {} };
     globalThis.SillyTavern = { getContext: () => context, libs: { localforage: { getItem: async () => '' } } };
-    globalThis.fetch = async () => ({ ok: true, json: async () => [] });
+    globalThis.fetch = async () => ({ ok: true, text: async () => '', json: async () => [] });
     const { addCard, listCards } = await import('../src/gallery-index.js');
     const { getGallery } = await import('../src/storage.js');
 
@@ -389,7 +389,7 @@ test('getGallery excludes hidden cards but keeps them in the shared index', asyn
 test('deleteGalleryCard hides the card when deleteFile is false', async () => {
     const context = { extensionSettings: {}, getRequestHeaders: () => ({}), saveSettingsDebounced: () => {} };
     globalThis.SillyTavern = { getContext: () => context, libs: { localforage: { getItem: async () => '' } } };
-    globalThis.fetch = async () => ({ ok: true, json: async () => [] });
+    globalThis.fetch = async () => ({ ok: true, text: async () => '', json: async () => [] });
     const { addCard, listCards } = await import('../src/gallery-index.js');
     const { deleteGalleryCard, getGallery } = await import('../src/storage.js');
 
@@ -407,8 +407,8 @@ test('deleteGalleryCard removes the card and deletes the file when deleteFile is
     const context = { extensionSettings: {}, getRequestHeaders: () => ({}), saveSettingsDebounced: () => {} };
     globalThis.SillyTavern = { getContext: () => context, libs: { localforage: { getItem: async () => '' } } };
     globalThis.fetch = async (url, options) => {
-        calls.push({ url, body: options ? JSON.parse(options.body) : null });
-        return { ok: true, json: async () => [] };
+        calls.push({ url, body: options?.body ? JSON.parse(options.body) : null });
+        return { ok: true, text: async () => '', json: async () => [] };
     };
     const { addCard } = await import('../src/gallery-index.js');
     const { deleteGalleryCard, getGallery } = await import('../src/storage.js');
@@ -427,7 +427,7 @@ test('deleteGalleryCard degrades to hide when the file path is shared by another
     const calls = [];
     const context = { extensionSettings: {}, getRequestHeaders: () => ({}), saveSettingsDebounced: () => {} };
     globalThis.SillyTavern = { getContext: () => context, libs: { localforage: { getItem: async () => '' } } };
-    globalThis.fetch = async (url) => { calls.push(url); return { ok: true, json: async () => [] }; };
+    globalThis.fetch = async (url) => { calls.push(url); return { ok: true, text: async () => '', json: async () => [] }; };
     const { addCard, listCards } = await import('../src/gallery-index.js');
     const { deleteGalleryCard } = await import('../src/storage.js');
 

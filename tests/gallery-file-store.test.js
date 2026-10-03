@@ -1,8 +1,9 @@
 // @ts-check
 /**
- * Gallery cards on the server-side card file (`uris_gallery.json`):
- * migration out of extensionSettings, the one-time strip that actually shrinks
- * settings.json, and the write-on-change discipline of reconcile.
+ * Gallery cards on the sharded server files (`uris_gallery_manifest.json` +
+ * `uris_gallery_shard_*.json`; `uris_gallery.json` is only the migration
+ * source): migration out of extensionSettings, the one-time strip that actually
+ * shrinks settings.json, and the write-on-change discipline of reconcile.
  */
 import assert from 'node:assert/strict';
 import { after, afterEach, beforeEach, describe, it } from 'node:test';
@@ -70,9 +71,21 @@ function settingsIndex() {
 }
 
 function fileCards() {
-    const text = serverFiles.get(gallery.GALLERY_FILE_NAME);
-    if (!text) return null;
-    return JSON.parse(text).cards;
+    const manifestText = serverFiles.get(gallery.GALLERY_MANIFEST_NAME);
+    if (!manifestText) return null;
+    const cards = [];
+    for (const row of (JSON.parse(manifestText).shards || [])) {
+        const text = serverFiles.get(`${gallery.GALLERY_SHARD_PREFIX}${row.id}.json`);
+        if (text) cards.push(...JSON.parse(text).records);
+    }
+    return cards;
+}
+
+/** Everything the gallery store has on the server (manifest + shard bodies). */
+function galleryFileTexts() {
+    return [...serverFiles.entries()]
+        .filter(([name]) => name === gallery.GALLERY_MANIFEST_NAME || name.startsWith(gallery.GALLERY_SHARD_PREFIX))
+        .map(([, text]) => text);
 }
 
 function seedSettingsCards(cards) {
@@ -152,7 +165,7 @@ describe('gallery file store: writes', () => {
         });
         await gallery.flushGalleryWrites();
 
-        const raw = serverFiles.get(gallery.GALLERY_FILE_NAME);
+        const raw = galleryFileTexts().join('\n');
         assert.equal(/must-not-persist|nope|data:image|secret-bytes/.test(raw), false);
         assert.equal(fileCards()[0].provenance.source, 'openrouter');
     });
@@ -217,13 +230,19 @@ describe('gallery file store: two-session lost update', () => {
         await gallery.addCard({ id: 'a', imagePath: img('a.png'), prompt: 'a' });
         await gallery.flushGalleryWrites();
 
-        // Вторая вкладка: тот же код (mergeWithServer), своё зеркало, общий файл.
-        const { createFileStore, resetFileStoresForTests } = await import('../src/file-store.js');
-        const tabB = createFileStore({
+        // Вторая вкладка: тот же код (merge per shard), своё зеркало, общие файлы.
+        const { createShardedFileStore } = await import('../src/sharded-file-store.js');
+        const { resetFileStoresForTests } = await import('../src/file-store.js');
+        const tabB = createShardedFileStore({
             label: 'gallery-tab-b',
-            name: gallery.GALLERY_FILE_NAME,
+            manifestName: gallery.GALLERY_MANIFEST_NAME,
+            shardPrefix: gallery.GALLERY_SHARD_PREFIX,
+            monolithName: gallery.GALLERY_FILE_NAME,
+            monolithKey: 'cards',
             version: gallery.GALLERY_STORE_VERSION,
-            key: 'cards',
+            shardTarget: 250,
+            append: 'front',
+            placeByStamp: true,
             empty: () => [],
             countEntries: value => (Array.isArray(value) ? value.length : null),
             mergeWithServer: true,
@@ -251,14 +270,17 @@ describe('gallery file store: two-session lost update', () => {
         await gallery.addCard({ id: 'a', imagePath: img('a.png'), prompt: 'a' });
         await gallery.flushGalleryWrites();
 
-        // Внешний писатель (Syncthing/старая сборка) кладёт свой документ целиком.
+        // Внешний писатель (Syncthing/старая сборка) кладёт свой шард целиком.
         const foreignCard = {
             id: 'b', imagePath: img('b.png'), prompt: 'b',
             createdAt: Date.now(), updatedAt: Date.now(), status: 'ready',
         };
-        serverFiles.set(gallery.GALLERY_FILE_NAME, JSON.stringify({ v: 1, cards: [foreignCard] }));
+        serverFiles.set(`${gallery.GALLERY_SHARD_PREFIX}s0000.json`, JSON.stringify({
+            v: gallery.GALLERY_STORE_VERSION, kind: 'shard', store: 'gallery', id: 's0000',
+            records: [foreignCard],
+        }));
 
-        // Локальная сессия пишет снова: pre-write merge перечитывает файл и
+        // Локальная сессия пишет снова: pre-write merge перечитывает шард и
         // вбирает чужую карточку в свою запись (карточка «a» при этом честно
         // удалена внешней полнодокументной записью — сервер её уже не имел).
         await gallery.addCard({ id: 'c', imagePath: img('c.png'), prompt: 'c' });
