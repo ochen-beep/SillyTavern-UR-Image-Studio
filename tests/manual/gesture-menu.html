@@ -1,0 +1,70 @@
+<!doctype html>
+<!--
+    Ручная проверка карточного меню жестов (card-action-menu.js, мобильный
+    проход 2026-10-03): долгий тап на телефоне / ПКМ на десктопе открывает
+    меню; тап по картинке карточки — обычное действие (просмотр).
+
+    Проверить НА ТЕЛЕФОНЕ (или в devtools-эмуляции тача):
+      1. Долгий тап (~0.5 с) по плитке → шит снизу с 5 действиями; скролл
+         сразу после касания меню НЕ открывает (порог движения).
+      2. Тап по картинке → «просмотр» (алерт-стаб). Долгий тап НЕ должен
+         открывать просмотр после закрытия меню.
+      3. ПКМ на десктопе → поповер у курсора (не ниже кромки, не за краем
+         при клике у правого/нижнего края окна).
+      4. Esc / тап по фону закрывают меню; нативное браузерное меню
+         (contextmenu) не появляется.
+      5. Повторный долгий тап по другой плитке — меню переезжает, двойных
+         оверлеев нет.
+-->
+<html lang="ru">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>URIS — карточное меню жестов</title>
+    <link rel="stylesheet" href="../../style.css">
+    <style>
+        body { margin: 0; background: #1a1a2e; color: #eee; font-family: system-ui, sans-serif; }
+        .probe-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; padding: 12px; max-width: 720px; margin: 0 auto; }
+        .probe-card { aspect-ratio: 3/4; background: #334; border: 1px solid #556; border-radius: 6px;
+                      display: grid; place-items: center; cursor: pointer; user-select: none;
+                      -webkit-touch-callout: none; }
+        #probeOut { white-space: pre; font: 12px/1.5 ui-monospace, monospace; padding: 10px;
+                    background: #0b0e13; max-width: 720px; margin: 0 auto 20px; min-height: 40px; }
+        h3 { max-width: 720px; margin: 14px auto 6px; }
+    </style>
+</head>
+<body>
+    <h3>Долгий тап / ПКМ по плитке → меню; тап по центру → «просмотр»</h3>
+    <div class="probe-grid" id="grid"></div>
+    <div id="probeOut">журнал событий…</div>
+    <script type="module">
+        const out = document.getElementById('probeOut');
+        const log = (msg) => { out.textContent = `${new Date().toLocaleTimeString()}  ${msg}\n` + out.textContent; };
+
+        const grid = document.getElementById('grid');
+        for (let i = 1; i <= 6; i++) {
+            const card = document.createElement('div');
+            card.className = 'probe-card';
+            card.textContent = `плитка ${i}`;
+            card.addEventListener('click', () => log(`просмотр плитки ${i} (обычный тап)`));
+            // Тот же жест, что вешает tab-gallery на карточки:
+            const { bindCardContextMenu, openCardActionMenu } = await import('../../src/ui/card-action-menu.js');
+            bindCardContextMenu(card, ({ x, y }) => {
+                log(`меню плитки ${i}`);
+                openCardActionMenu({
+                    title: `Плитка ${i}`,
+                    x, y,
+                    items: [
+                        { id: 'regen', icon: 'fa-rotate-right', label: 'Регенерировать', onSelect: () => log('→ Регенерировать') },
+                        { id: 'copy', icon: 'fa-copy', label: 'Копировать промпт', onSelect: () => log('→ Копировать') },
+                        { id: 'goto', icon: 'fa-arrow-up-right-from-square', label: 'К посту-источнику', onSelect: () => log('→ К посту') },
+                        { id: 'saveRef', icon: 'fa-bookmark', label: 'Сохранить как референс', onSelect: () => log('→ В референсы') },
+                        { id: 'del', icon: 'fa-trash', label: 'Удалить…', danger: true, onSelect: () => log('→ Удалить') },
+                    ],
+                });
+            });
+            grid.appendChild(card);
+        }
+    </script>
+</body>
+</html>
