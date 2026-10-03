@@ -884,6 +884,23 @@ export function createShardedFileStore(config) {
             warn(`sharded-store[${label}]: monolith has an unexpected shape — migration skipped`);
             return 'migrated';
         }
+        if (shardedKey && body && metaStore && meta?.keys?.length) {
+            // Satellite arrays (refs folders) ride the meta store, never shards;
+            // the legacy monolith is their only pre-migration home. Without this
+            // hand-off a tombstoned monolith would destroy the companion data.
+            // Runs before the shard commit: a retried migration re-writes the
+            // same satellite (mergeWithServer makes the repeat idempotent).
+            await metaStore.ready();
+            const satellite = {};
+            for (const key of meta.keys) {
+                if (Array.isArray(body[key])) satellite[key] = clone(body[key]);
+            }
+            await metaStore.mutate(m => {
+                for (const k of Object.keys(m)) delete m[k];
+                Object.assign(m, satellite);
+            });
+            await metaStore.flush();
+        }
         // A retried migration (an earlier attempt failed mid-write) starts
         // from a clean slate: re-adopting chunks onto the leftover placement
         // state would renumber them past the already-written shards and

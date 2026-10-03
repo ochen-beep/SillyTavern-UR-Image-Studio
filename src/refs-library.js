@@ -4,11 +4,15 @@
  * Replaces references-profiles.js (v3-redesign).
  * Spec: docs/archive/plans/2026-07-14-references-chat-scoped-pool.md §2.
  *
- * The pool and its folders persist in ONE server file per user,
- * `data/<user>/user/files/uris_refs.json`, not in `extensionSettings` — they are
- * user-authored data (with an unbounded `description`), and the settings blob is
- * re-POSTed wholesale on every unrelated settings change. See `src/file-store.js`
- * and `docs/plans/2026-09-12-storage-externalization.md`.
+ * The pool and its folders persist in SERVER files per user — originally the
+ * single `data/<user>/user/files/uris_refs.json` — not in `extensionSettings`:
+ * they are user-authored data (with an unbounded `description`), and the
+ * settings blob is re-POSTed wholesale on every unrelated settings change. See
+ * `src/file-store.js` and `docs/plans/2026-09-12-storage-externalization.md`.
+ * Since 2026-10-03 the pool lives in `createShardedFileStore`: refs ride
+ * fixed-size `uris_refs_shard_*.json` files behind `uris_refs_manifest.json`
+ * (`uris_refs.json` remains only as the one-time migration source) and the
+ * folders ride the small `uris_refs_meta.json` satellite file.
  *
  * Folder preferences (pinned / sort / hideEmpty) deliberately STAY in settings:
  * they are device-local UI state and must not travel with an import.
@@ -22,11 +26,14 @@ import { imageToDataUrl } from './references.js';
 import { normalizeAliases } from './scene-context.js';
 import { canonicalizeNativeImagePath } from './native-image-path.js';
 import { normalizeReferenceCap } from './reference-limits.js';
-import { createFileStore } from './file-store.js';
+import { createShardedFileStore } from './sharded-file-store.js';
 import { recordDiagnosticEvent } from './diagnostic-events.js';
 import { isStudioActive, getStudioBinding, saveStudioBinding } from './studio-scope.js';
 
 export const REFS_FILE_NAME = 'uris_refs.json';
+export const REFS_MANIFEST_NAME = 'uris_refs_manifest.json';
+export const REFS_SHARD_PREFIX = 'uris_refs_shard_';
+export const REFS_META_NAME = 'uris_refs_meta.json';
 export const REFS_STORE_VERSION = 1;
 
 /** Shared image-connections settings object, creating the nesting on demand. */
@@ -50,17 +57,27 @@ function documentKey(collection) {
     return collection === 'ref-folders' ? 'folders' : collection;
 }
 
-const refsStore = createFileStore({
+const refsStore = createShardedFileStore({
     label: 'references',
-    name: REFS_FILE_NAME,
+    manifestName: REFS_MANIFEST_NAME,
+    shardPrefix: REFS_SHARD_PREFIX,
+    monolithName: REFS_FILE_NAME,
+    monolithKey: 'data',
     version: REFS_STORE_VERSION,
-    key: 'data',
-    // The pool file is edited by every device this user's data syncs to
-    // (Syncthing mirror, second browser): writes must merge with the server
-    // document instead of clobbering it with a possibly stale mirror.
-    mergeWithServer: true,
+    shardTarget: 250,
+    append: 'back',
+    placeByStamp: false,
+    shardedKey: 'refs',
+    // refs: insertion-ordered array; folders are a small satellite array that
+    // must not ride the manifest (the manifest has to be rebuildable from a
+    // shard scan alone — user-files has no directory listing).
+    meta: { name: REFS_META_NAME, keys: ['folders'], empty: () => ({ folders: [] }) },
     empty: () => ({ refs: [], folders: [] }),
     countEntries: value => (Array.isArray(value?.refs) ? value.refs.length : null),
+    // The pool file is edited by every device this user's data syncs to
+    // (Syncthing mirror, second browser): merge-per-shard keeps the
+    // concurrent-writer safety of the whole-document merge.
+    mergeWithServer: true,
 });
 
 /** Resolve the pool store (probe / load / migrate) exactly once per session. */

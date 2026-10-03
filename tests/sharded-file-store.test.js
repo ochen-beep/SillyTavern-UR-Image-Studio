@@ -788,6 +788,29 @@ describe('replace and meta', () => {
         assert.deepEqual(store.snapshot().map(r => r.id), ['c0009', 'c0008', 'c0007', 'c0006', 'c0005']);
     });
 
+    it('refs monolith migration: refs go to shards, folders go to the meta file', async () => {
+        const n = labelCounter + 1;   // evaluated before makeStore increments
+        const store = makeStore({
+            shardedKey: 'refs',
+            append: 'back',
+            placeByStamp: false,
+            monolithKey: 'data',
+            empty: () => ({ refs: [], folders: [] }),
+            countEntries: value => (Array.isArray(value?.refs) ? value.refs.length : null),
+            meta: { name: `t${n}_meta.json`, keys: ['folders'], empty: () => ({ folders: [] }) },
+        });
+        serverFiles.set(`t${n}_old.json`, JSON.stringify({
+            v: 1, data: { refs: [card(1), card(0)], folders: [{ id: 'f1', name: 'x' }] },
+        }));
+        assert.equal(await store.ready(), 'file');
+        assert.deepEqual(store.snapshot().refs.map(r => r.id), ['c0001', 'c0000']);
+        assert.deepEqual(store.snapshot().folders.map(f => f.id), ['f1']);
+        const metaFile = JSON.parse(serverFiles.get(`t${n}_meta.json`));
+        assert.deepEqual(metaFile.data.folders.map(f => f.id), ['f1']);
+        const tomb = JSON.parse(serverFiles.get(`t${n}_old.json`));
+        assert.equal(tomb.kind, 'migrated');
+    });
+
     it('meta carries a satellite array in its own file; mutate syncs it', async () => {
         // makeStore increments labelCounter, but the overrides object is
         // evaluated at the call site — pre-compute the label for meta.name.
