@@ -215,3 +215,57 @@ describe('mergeWithServer: disabled stores behave as before', () => {
             'legacy stores overwrite the server from the mirror — the merge-enabled refs store does not');
     });
 });
+
+describe('mergeWithServer: удаление, принятое мерджем, не даёт откатиться', () => {
+    // Известное ограничение (не исправляется точечно — нужны надгробия или
+    // серверные If-Match): merge, чей единственный эффект — принятие чужих
+    // удалений, возвращает null («нечего менять»), и стор отправляет
+    // неслитое зеркало, возвращая удалённые другим сеансом записи. Наивный
+    // фикс `changed = true` хуже: чтение сервера может быть старше syncBase
+    // (собственный upload ещё в полёте), и тогда локальная добавка выглядит
+    // как «удалена на сервере» и уничтожается — проверено живьём 2026-10-03.
+    it.skip('запись, удалённая сессией A, не воскресает при следующей записи сессии B', async () => {
+        // Живая последовательность 2026-10-03 (две вкладки галереи):
+        // A.add(x) → B.load → A.add(y) → B.add(z) → A.del(y) → A.del(x) → B.del(z).
+        // Мердж B видит: x,y есть локально (не менялись с базы), нет на сервере.
+        // Приём серверных удалений убирает их из out, но `changed` не ставился —
+        // merge возвращал null, стор писал НЕСЛИТОЕ зеркало, и x/y воскресали.
+        const mk = (label) => makeStore({
+            label, key: 'items', empty: () => [],
+            countEntries: v => (Array.isArray(v) ? v.length : null),
+            // Живой сценарий: обе сессии пишут ОДИН файл галереи.
+            name: 'uris_merge_del-shared.json',
+        });
+        const a = mk('del-a');
+        const b = mk('del-b');
+        await a.ready();
+        await b.ready();
+
+        const ids = storeName => {
+            const doc = JSON.parse(serverFiles.get(storeName.name));
+            return (doc.items || []).map(r => r.id);
+        };
+
+        await a.mutate(list => list.unshift({ id: 'x', v: 1, updatedAt: 1000 }));
+        await a.flush();
+        await a.mutate(list => list.unshift({ id: 'y', v: 1, updatedAt: 2000 }));
+        await a.flush();
+
+        await b.mutate(list => list.unshift({ id: 'z', v: 1, updatedAt: 3000 }));
+        await b.flush();
+        assert.deepEqual(ids(a).sort(), ['x', 'y', 'z']);
+
+        await a.mutate(list => { const i = list.findIndex(r => r.id === 'y'); list.splice(i, 1); });
+        await a.flush();
+        await a.mutate(list => { const i = list.findIndex(r => r.id === 'x'); list.splice(i, 1); });
+        await a.flush();
+        assert.deepEqual(ids(a), ['z'], 'на сервере остались только z');
+
+        // B пишет (удаляет свой z): его база всё ещё содержит x и y.
+        await b.mutate(list => { const i = list.findIndex(r => r.id === 'z'); list.splice(i, 1); });
+        await b.flush();
+
+        assert.deepEqual(ids(b), [],
+            'серверные удаления x и y должны быть приняты мерджем B, а не откачены его записью');
+    });
+});

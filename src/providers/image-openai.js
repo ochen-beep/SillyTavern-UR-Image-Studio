@@ -79,6 +79,7 @@ function wireQuality(route, quality) {
 
 function generationUrl(endpoint) { return `${endpointBase(endpoint)}/images/generations`; }
 function editUrl(endpoint) { return `${endpointBase(endpoint)}/images/edits`; }
+function modelsUrl(endpoint) { return `${endpointBase(endpoint)}/models`; }
 
 function sizesForRoute(route) {
   return isDalleModel(route) ? ASPECT_SIZES_DALLE : ASPECT_SIZES;
@@ -272,9 +273,13 @@ function shouldFallbackToProxyJson(error, connection) {
 // Safety of each hop: 1→2 fires only on a preflight-proven unsent request
 // (OPTIONS oracle); 2→3 fires only after an HTTP response proved the gateway
 // REJECTED the JSON dialect rather than rendering it (auth/quota statuses are
-// not dialect facts and never fall through). Explicit orders are never
-// second-guessed: a pinned editProtocol or an explicit delivery keeps the
-// shipped single-dialect behavior.
+// not dialect facts and never fall through). A proxied 400 is status-ambiguous
+// — ST /proxy/ remaps upstream 401/403 to 400 (see capability-observer), so a
+// broken key arrives indistinguishable from a dialect rejection — so it first
+// passes a free GET /models auth check (proxiedAuthBroken): a failing probe
+// proves auth and stops the chain, a passing probe proves the dialect was
+// really rejected. Explicit orders are never second-guessed: a pinned
+// editProtocol or an explicit delivery keeps the shipped single-dialect behavior.
 
 /** Auth/quota rejections say nothing about the wire dialect — never fall through on them. */
 function isDialectCandidate(error) {
@@ -354,6 +359,27 @@ async function dispatchEditWithDialectChain({ endpoint, route, request, referenc
     noteEditDialectOutcome({ connId: diagnostic.connId, endpoint, dialect, ok, rejectKind }).catch(() => {});
   };
   const readParsed = async response => ({ ...parse(await readJsonResponse(response, 'OpenAI Images')), warnings: paramWarnings(route, request) });
+  // Бесплатная проверка ключа GET /models через ту же прокси-доставку. Нужна
+  // только для 400 на проксированной ноге: прямые 401/403 отсекает
+  // isDialectCandidate, а 400 под прокси — это либо честный отказ диалекта,
+  // либо ремапнутая auth-ошибка. Сломанный ключ падает и на пробе → платную
+  // img2img-ногу не тратим, отдаём исходную ошибку. Живой ключ получает каталог
+  // → 400 был отказом диалекта → цепочка идёт дальше. Сетевой сбой пробы —
+  // исход неопределён, не мешаем (поведение прежнее).
+  const proxiedAuthBroken = async () => {
+    try {
+      const proxyRoute = { ...route, transport: { ...route.transport, initialDelivery: 'proxy' } };
+      const response = await transport.requestJson(
+        modelsUrl(endpoint),
+        diagnosticRequestOptions({ method: 'GET', headers, signal }, diagnostic, { bodyKind: 'json' }),
+        proxyRoute,
+        connection.timeoutMs,
+      );
+      return response.ok === false && [400, 401, 402, 403, 429].includes(response.status);
+    } catch {
+      return false;
+    }
+  };
   const runJsonLeg = async () => {
     const parsed = await readParsed(await sendJsonEdit({ endpoint, route, request, references, transport, headers, signal, connection, diagnostic, proxyFirst: true }));
     note('json', true);
@@ -390,6 +416,7 @@ async function dispatchEditWithDialectChain({ endpoint, route, request, referenc
       return await runJsonLeg();
     } catch (jsonError) {
       if (!isDialectCandidate(jsonError)) throw jsonError;
+      if (jsonError.httpStatus === 400 && await proxiedAuthBroken()) throw jsonError;
       return await runImg2imgLeg(jsonError);
     }
   }
@@ -432,6 +459,9 @@ async function dispatchEditWithDialectChain({ endpoint, route, request, referenc
       return await runJsonLeg();
     } catch (jsonError) {
       if (!isDialectCandidate(jsonError)) throw jsonError;
+      // 400 под прокси — ремапнутая auth возможна: дешёвая проверка ключа
+      // прежде, чем тратить img2img-ногу.
+      if (jsonError.httpStatus === 400 && await proxiedAuthBroken()) throw jsonError;
       // (3) generations + image через прокси.
       return await runImg2imgLeg(jsonError);
     }

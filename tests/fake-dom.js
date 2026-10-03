@@ -131,6 +131,16 @@ export function makeFakeDocument() {
                 child.parentNode = null;
                 return child;
             },
+            remove() { if (this.parentNode) this.parentNode.removeChild(this); },
+            // Поддерево (winEl.contains(target) в Esc-гарде окна): узел сам,
+            // потомок или чужой — false.
+            contains(node) {
+                if (!node) return false;
+                for (let cursor = node; cursor; cursor = cursor.parentNode) {
+                    if (cursor === this) return true;
+                }
+                return false;
+            },
             replaceWith(other) {
                 if (this.parentNode) {
                     const idx = this.parentNode.children.indexOf(this);
@@ -171,8 +181,16 @@ export function makeFakeDocument() {
         // Документ-уровневые слушатели (keydown в оверлеях): только хранение,
         // диспетчеризация глобальных событий тестам не нужна.
         _docListeners: [],
-        addEventListener(type, fn, options) { this._docListeners.push({ type, fn }); },
-        removeEventListener(type, fn, options) { this._docListeners = this._docListeners.filter(l => l.type !== type || l.fn !== fn); },
+        // Третий аргумент бывает boolean (bindWindowEscape: capture=true) —
+        // браузерная легальная форма; нормализуем в { capture }.
+        addEventListener(type, fn, options) {
+            const opts = options === true ? { capture: true } : options;
+            this._docListeners.push({ type, fn, capture: opts?.capture === true });
+        },
+        removeEventListener(type, fn, options) {
+            const opts = options === true ? { capture: true } : options;
+            this._docListeners = this._docListeners.filter(l => l.type !== type || l.fn !== fn || !!opts?.capture !== !!l.capture);
+        },
         querySelector(sel) { return root.querySelector(sel); },
         querySelectorAll(sel) { return root.querySelectorAll(sel); },
         getElementById(id) { return root.querySelector('#' + id); },

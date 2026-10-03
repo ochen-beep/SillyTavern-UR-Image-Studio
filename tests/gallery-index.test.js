@@ -64,6 +64,9 @@ test('persists sanitized card metadata without bytes or secrets', async () => {
     });
 
     assert.equal(card.id, 'card-1');
+    // Запись коалесцируется: читаем файл после flush, а не по таймингу микротасков.
+    const { flushGalleryWrites } = await import('../src/gallery-index.js');
+    await flushGalleryWrites();
     const stored = galleryFileDoc()[0];
     assert.equal(JSON.stringify(stored).includes('must-not-persist'), false);
     assert.equal(JSON.stringify(stored).includes('data:image'), false);

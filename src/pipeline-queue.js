@@ -121,6 +121,17 @@ function uid() {
     return `q${_queueSeq}`;
 }
 
+/**
+ * Строка ленты завершена; retry-снапшот элемента больше не нужен в state —
+ * кнопка «Повторить» читает его копию из самой строки ленты, а Map без чистки
+ * росла всю сессию, удерживая промпт и submission каждого завершённого элемента
+ * (строки ленты вытесняются по MAX_ROWS, снапшоты — нет).
+ */
+function finishItem(queueId, status, detail = '') {
+    noteFinished(queueId, status, detail);
+    state.queueRetrySnapshots?.delete(queueId);
+}
+
 /** Подпись строки очереди: пост, из которого пришла генерация. */
 function queueLabel(item) {
     return item?.chatId === STUDIO_CHAT_ID ? 'Студия' : `Пост #${Number(item?.msgId) + 1}`;
@@ -171,11 +182,11 @@ async function processQueue() {
                         onStart: () => noteRunning(queueId),
                     });
                 recordDiagnosticEvent({ event: 'queue-complete', stage: 'queue', chatHash: hashDiagnosticId(item.chatId), msgId: item.msgId, outcome: 'completed' });
-                noteFinished(queueId, 'success');
+                finishItem(queueId, 'success');
                 resolve(entry);
             } catch (e) {
                 if (e.name === 'AbortError') {
-                    noteFinished(queueId, 'cancelled');
+                    finishItem(queueId, 'cancelled');
                     reject(new DOMException('Aborted by user', 'AbortError'));
                     // A whole-queue stop aborts the shared controller; a per-item
                     // cancel (abortGeneration on this item's ownController) does
@@ -194,11 +205,12 @@ async function processQueue() {
                     const retriedItem = { ...item, retriedAmbiguous: true };
                     const retryQueueId = uid();
                     state.queue.push({ item: retriedItem, resolve, reject, queueId: retryQueueId });
-                    noteFinished(queueId, 'error', `${e.message || ''} · авто-повтор поставлен в очередь`.trim());
                     // Строке авто-повтора — тот же снапшот «Повторить»: если
                     // откажется и она, у пользователя останется ручная кнопка.
-                    noteQueued({ id: retryQueueId, label: `${queueLabel(item)} · авто-повтор`, lane: 'queue', retry: state.queueRetrySnapshots?.get(queueId) || null });
-                    state.queueRetrySnapshots?.delete(queueId);
+                    // Читается ДО finishItem, который снимает снапшот с state.
+                    const retrySnapshot = state.queueRetrySnapshots?.get(queueId) || null;
+                    finishItem(queueId, 'error', `${e.message || ''} · авто-повтор поставлен в очередь`.trim());
+                    noteQueued({ id: retryQueueId, label: `${queueLabel(item)} · авто-повтор`, lane: 'queue', retry: retrySnapshot });
                     recordDiagnosticEvent({
                         event: 'queue-auto-retry', stage: 'queue', chatHash: hashDiagnosticId(item.chatId), msgId: item.msgId,
                         details: { reason: 'IMAGE_DELIVERY_AMBIGUOUS', retryQueueId },
@@ -206,7 +218,7 @@ async function processQueue() {
                     continue;
                 }
                 error('Q item failed:', e.message);
-                noteFinished(queueId, 'error', e.message || '');
+                finishItem(queueId, 'error', e.message || '');
                 recordDiagnosticEvent({ event: 'queue-error', level: 'error', stage: 'queue', chatHash: hashDiagnosticId(item.chatId), msgId: item.msgId, outcome: 'error', details: { errorName: e?.name || null } });
                 reject(e);
             }
@@ -216,7 +228,7 @@ async function processQueue() {
         state.queueAbort = null;
         // Reject remaining tasks
         for (const remaining of state.queue) {
-            noteFinished(remaining.queueId, 'cancelled');
+            finishItem(remaining.queueId, 'cancelled');
             remaining.reject(new DOMException('Queue stopped', 'AbortError'));
         }
         state.queue = [];
@@ -245,7 +257,7 @@ export function cancelQueuedItem(queueId) {
     const index = state.queue.findIndex(entry => entry.queueId === queueId);
     if (index === -1) return false;
     const [entry] = state.queue.splice(index, 1);
-    noteFinished(entry.queueId, 'cancelled');
+    finishItem(entry.queueId, 'cancelled');
     entry.reject(new DOMException('Queue stopped', 'AbortError'));
     return true;
 }
@@ -267,7 +279,7 @@ export function cancelForeignQueueItems(currentChatId) {
     const ids = new Set(foreign.map(entry => entry.queueId));
     state.queue = state.queue.filter(entry => !ids.has(entry.queueId));
     for (const { queueId, reject } of foreign) {
-        noteFinished(queueId, 'cancelled');
+        finishItem(queueId, 'cancelled');
         reject(new DOMException('Queue stopped', 'AbortError'));
     }
     recordDiagnosticEvent({

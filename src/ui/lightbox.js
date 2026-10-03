@@ -25,6 +25,13 @@ import { getCtx } from '../core.js';
 import { cardDimensions, ensureCardDimensions, FALLBACK_DIMENSIONS } from '../image-dimensions.js';
 
 let _active = null;  // open PhotoSwipe instance; a new open closes the previous one
+// Monotonic open sequence: a superseded open must not materialize its viewer
+// after the one that superseded it. Without this, two quick opens (double-click
+// on two cards) both pass the `_active?.close()` line before either has created
+// its instance, both await the dimension probe, and the SLOWER call then mounts
+// its viewer on top of the faster one's live viewer — a zombie viewer the UI
+// believes was closed (observed as a doubled backdrop and dead controls).
+let _openSeq = 0;
 
 /**
  * Open the fullscreen viewer for a single image (reference editor preview,
@@ -50,6 +57,7 @@ export function showSingleImage({ src, width, height, actions, refId, ...text })
  */
 export async function showLightbox(items, index = 0, { chatId = null, root = null } = {}) {
     if (!items?.length) return;
+    const seq = ++_openSeq;
     _active?.close();
     const chatIdResolved = chatId ?? getCtx().chatId ?? null;
     const start = Math.max(0, Math.min(items.length - 1, index));
@@ -78,6 +86,10 @@ export async function showLightbox(items, index = 0, { chatId = null, root = nul
             ...(thumbs[i] ? { element: thumbs[i] } : {}),
         });
     }
+
+    // A newer showLightbox superseded this one while it probed dimensions:
+    // mount nothing — the newer call owns `_active` now.
+    if (seq !== _openSeq) return;
 
     const pswp = new PhotoSwipe({
         dataSource,

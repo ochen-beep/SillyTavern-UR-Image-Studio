@@ -197,14 +197,18 @@ describe('file-store resilience: newer-version document', () => {
         assert.ok(toastErrors.length > 0, 'the user is told to update');
     });
 
-    it('doc.v < store version → corrupt repair with the empty mirror', async () => {
+    it('doc.v < store version → lazy migration: данные подхватываются, файл переписан с новым v', async () => {
         const store = makeStore({ version: 2 });
         serverFiles.set(store.name, JSON.stringify({ v: 1, items: [{ id: 'old' }] }));
 
         await store.ready();
         await store.flush();
-        assert.equal(store.diagnostics().readResult, 'corrupt');
-        assert.deepEqual(serverDoc(store), []);
+        assert.equal(store.diagnostics().readResult, 'older');
+        assert.equal(store.mode(), 'file', 'текущая сборка — старшая версия: она хозяйка файла');
+        const doc = JSON.parse(serverFiles.get(store.name));
+        assert.equal(doc.v, 2, 'версия документа поднята ленивой миграцией');
+        assert.deepEqual(doc.items, [{ id: 'old' }], 'старые данные не уничтожены');
+        assert.deepEqual(store.snapshot(), [{ id: 'old' }]);
     });
 });
 
@@ -284,5 +288,50 @@ describe('file-store resilience: flush and bookkeeping details', () => {
         await store.flush();
         assert.equal(store.diagnostics().entries, 1);
         assert.equal(store.diagnostics().lastWriteOk, true);
+    });
+});
+
+describe('file-store resilience: unload flush vs in-flight write', () => {
+    it('an unload-flushed newer payload must not be overwritten by the older in-flight upload', async () => {
+        const store = makeStore();
+        await store.ready();
+
+        // Первый upload (P1) паркуется в полёте; keepalive (P2) летит сразу.
+        let releaseP1;
+        const gateP1 = new Promise(resolve => { releaseP1 = resolve; });
+        const originalFetch = globalThis.fetch;
+        globalThis.fetch = async (url, options = {}) => {
+            if (url === '/api/files/upload' && options.method === 'POST' && options.keepalive !== true) {
+                await gateP1;
+                const body = JSON.parse(options.body);
+                uploads.push({ ...body, keepalive: false });
+                serverFiles.set(body.name, Buffer.from(body.data, 'base64').toString('utf8'));
+                return { ok: true, status: 200, json: async () => ({}) };
+            }
+            return fetchStub(url, options);
+        };
+        try {
+            store.mutate(list => list.push({ id: 'a' }));      // P1 уходит в полёт (gated)
+            await new Promise(resolve => setTimeout(resolve, 10));
+            store.mutate(list => list.push({ id: 'b' }));      // P2 коалесцирован в pendingPayload
+            await new Promise(resolve => setTimeout(resolve, 10));
+
+            // Страница уходит: keepalive отправляет НОВЫЙ payload P2 и обнуляет pending.
+            store.flushOnUnload();
+            await new Promise(resolve => setTimeout(resolve, 10));
+            assert.deepEqual(serverDoc(store).map(i => i.id), ['a', 'b'], 'keepalive донёс свежий P2');
+
+            // P1 возвращается с сервера ПОСЛЕ P2 (реверс доставки)…
+            releaseP1();
+            await store.flush();
+            // …и не должен перезаписать уже доставленный свежий документ.
+            assert.deepEqual(
+                serverDoc(store).map(i => i.id).sort(),
+                ['a', 'b'],
+                'устаревший P1, вернувшийся после unload-флеша P2, не должен стать итоговым содержимым файла',
+            );
+        } finally {
+            globalThis.fetch = originalFetch;
+        }
     });
 });

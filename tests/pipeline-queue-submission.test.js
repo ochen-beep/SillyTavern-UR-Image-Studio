@@ -521,3 +521,32 @@ test('resubmitQueueRow: студийная строка повторяется �
         restore();
     }
 });
+
+test('retry-снапшоты завершённых элементов очереди не копятся в state', async () => {
+    const restore = mockFetch((url) => {
+        if (String(url).endsWith('/images/generations')) {
+            return { ok: true, status: 200, json: async () => ({ data: [{ b64_json: 'b3JkZXI=' }] }) };
+        }
+        if (String(url) === '/api/images/upload') {
+            return { ok: true, status: 200, json: async () => ({ path: 'user/images/UR%20Image%20Studio/snap.png' }) };
+        }
+        throw new Error(`unexpected ${url}`);
+    });
+    try {
+        const { createQueueItem, enqueueGeneration } = await import('../src/pipeline-queue.js');
+        const { clearQueueLog } = await import('../src/ui/queue-log.js');
+        clearQueueLog({ all: true });
+        const item = await createQueueItem({
+            chatId: 'test-chat', msgId: 0, messageText: 'A cat.',
+            requestedAction: 'current-prompt-stage2', templateId: null,
+            submission: { prompt: 'SNAP', aspectRatio: '1:1', imageSize: '1K', quality: 'auto',
+                references: { includedIds: [], excludedIds: [], revision: 0 } },
+        });
+        await enqueueGeneration(item);
+        coreState.queueRetrySnapshots = coreState.queueRetrySnapshots || new Map();
+        assert.equal(coreState.queueRetrySnapshots.size, 0,
+            'снапшот завершённого (успешно) элемента должен быть удалён — он держит промпт и submission');
+    } finally {
+        restore();
+    }
+});

@@ -59,6 +59,14 @@ const galleryStore = createFileStore({
     key: GALLERY_STORE_KEY,
     empty: () => [],
     countEntries: value => (Array.isArray(value) ? value.length : null),
+    // The card index is edited by every device and every tab this user's data
+    // syncs to — exactly the shared-pool case file-store documents for
+    // `mergeWithServer` (same rationale as refs-library's pool, and the same
+    // 2026-09-14 incident class): without the pre-write merge a second tab
+    // loaded before this session's writes silently rolls them back with its
+    // next full-document write. The re-read cost is one GET per coalesced
+    // write — negligible against the upload itself.
+    mergeWithServer: true,
 });
 
 /** Resolve the card store (probe / load) exactly once per session. */

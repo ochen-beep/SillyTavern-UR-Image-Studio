@@ -19,7 +19,7 @@ A [SillyTavern](https://docs.sillytavern.app/) extension that generates images f
 - External bridge (experimental): `globalThis.URIS` lets other extensions run URIS generations headlessly; all automatic jobs (inline + bridge) share one serialized lane, so only one paid request runs at a time.
 - Completion notifications: short synthesized tones via Web Audio — no audio assets, nothing to upload.
 - Storage: image metadata, templates, presets and the gallery index live in server-side user files, not in `settings.json`; the export/import dump strips API keys and secrets by design.
-- Diagnostics: a rolling network dump (last 200 requests), a persistent event log, a browser-side error pool, and a one-click diagnostic export that never contains prompts, keys, or raw responses.
+- Diagnostics: a rolling network dump (last 50 requests), a persistent event log, a browser-side error pool, and a one-click diagnostic export that never contains prompts, keys, or raw responses.
 - A floating desktop window (drag, resize, wheel-scrollable tab bar) and a full-screen mobile layout.
 
 ## Requirements
@@ -75,7 +75,7 @@ A detailed walkthrough — in Russian, with connections, inline markers and all 
 
 #### Two-stage pipeline
 
-Stage 1 (`src/text-api.js`) calls the text LLM with a template-built instruction plus the chat scene block and returns the image prompt; Stage 2 (`src/dispatch-plan.js` → `src/providers/*`) materializes it. Every generation runs as a draft (`src/generation-drafts.js`) with an epoch guard, so chat switches and cancellation cannot mix results between runs. Retries with backoff wrap both stages.
+Stage 1 (`src/text-api.js`) calls the text LLM with a template-built instruction plus the chat scene block and returns the image prompt; Stage 2 (`src/dispatch-plan.js` → `src/providers/*`) materializes it. Every generation runs as a draft (`src/generation-drafts.js`) with an epoch guard, so chat switches and cancellation cannot mix results between runs. Retries with backoff wrap Stage 1; Stage 2 is never retried automatically — a paid provider POST may have been processed, so a failed generation is re-run only by an explicit user action (or the opt-in single queue retry for provably ambiguous delivery).
 
 #### Image connections and contracts
 
@@ -91,7 +91,7 @@ Image metadata, templates, parameter presets, references and the studio config l
 
 #### External bridge
 
-`globalThis.URIS` (`src/bridge.js`) is a facade, not a public import surface: `generate / abort / getStatus / listConnections / on / off / ready / parseInline`. Bridge generations go through the same pipeline, recovery records, diagnostics and Stop button as manual ones. The Bridge tab hosts Stage 1 / Generation labs for testing consumer integrations.
+`globalThis.URIS` (`src/bridge.js`) is a facade, not a public import surface. Headline methods: `generate / abort / getStatus / listConnections / on / off / ready / parseInline`; the full surface (v. 0.9.8) also exposes `buildPrompt / generateFromScene / getCapabilities / getCard / listActive / listGallery / listPending / listRefs / listTemplates / listTriggers / classifyError / removeCard / apiVersion / displayName` — inspect `URIS.getCapabilities()` at runtime for the authoritative list. Bridge generations go through the same pipeline, recovery records, diagnostics and Stop button as manual ones. The Bridge tab hosts Stage 1 / Generation labs for testing consumer integrations.
 
 #### Diagnostics
 

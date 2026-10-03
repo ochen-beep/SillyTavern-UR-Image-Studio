@@ -210,3 +210,61 @@ describe('gallery file store: reconcile', () => {
         assert.equal(after_.updatedAt, before.updatedAt, 'an unchanged card keeps its timestamp');
     });
 });
+
+describe('gallery file store: two-session lost update', () => {
+    it('a second tab writing between this session writes does not roll back its cards', async () => {
+        await gallery.ensureGalleryStoreReady();
+        await gallery.addCard({ id: 'a', imagePath: img('a.png'), prompt: 'a' });
+        await gallery.flushGalleryWrites();
+
+        // Вторая вкладка: тот же код (mergeWithServer), своё зеркало, общий файл.
+        const { createFileStore, resetFileStoresForTests } = await import('../src/file-store.js');
+        const tabB = createFileStore({
+            label: 'gallery-tab-b',
+            name: gallery.GALLERY_FILE_NAME,
+            version: gallery.GALLERY_STORE_VERSION,
+            key: 'cards',
+            empty: () => [],
+            countEntries: value => (Array.isArray(value) ? value.length : null),
+            mergeWithServer: true,
+        });
+        try {
+            await tabB.ready();
+            await tabB.mutate(list => {
+                list.unshift({
+                    id: 'c', imagePath: img('c.png'), prompt: 'c',
+                    createdAt: Date.now(), updatedAt: Date.now(), status: 'ready',
+                });
+            });
+            await tabB.flush();
+
+            const ids = fileCards().map(c => c.id).sort();
+            assert.deepEqual(ids, ['a', 'c'],
+                'карточка первой вкладки «a» не должна быть затёрта записью второй вкладки');
+        } finally {
+            resetFileStoresForTests();
+        }
+    });
+
+    it('an external stale full-file overwrite is picked up by the pre-write merge', async () => {
+        await gallery.ensureGalleryStoreReady();
+        await gallery.addCard({ id: 'a', imagePath: img('a.png'), prompt: 'a' });
+        await gallery.flushGalleryWrites();
+
+        // Внешний писатель (Syncthing/старая сборка) кладёт свой документ целиком.
+        const foreignCard = {
+            id: 'b', imagePath: img('b.png'), prompt: 'b',
+            createdAt: Date.now(), updatedAt: Date.now(), status: 'ready',
+        };
+        serverFiles.set(gallery.GALLERY_FILE_NAME, JSON.stringify({ v: 1, cards: [foreignCard] }));
+
+        // Локальная сессия пишет снова: pre-write merge перечитывает файл и
+        // вбирает чужую карточку в свою запись (карточка «a» при этом честно
+        // удалена внешней полнодокументной записью — сервер её уже не имел).
+        await gallery.addCard({ id: 'c', imagePath: img('c.png'), prompt: 'c' });
+        await gallery.flushGalleryWrites();
+
+        const ids = fileCards().map(c => c.id).sort();
+        assert.deepEqual(ids, ['b', 'c']);
+    });
+});

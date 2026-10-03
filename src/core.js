@@ -759,7 +759,15 @@ export async function fetchWithTimeout(url, options = {}, timeoutMs = 120000) {
         settled = true;
         clearTimeout(timer);
     };
-    const timeoutError = () => new Error(`Timeout (${Math.round(timeoutMs / 1000)}s)`);
+    // code:'FETCH_TIMEOUT' — типизированный маркер: раньше матчеры искали
+    // слово «Таймаут» в сообщении и не узнавали этот английский sentinel,
+    // из-за чего таймаут платного image-запроса выпадал из журнала доставки
+    // (dispatch-error) и попадал в «неизвестную сетевую ошибку».
+    const timeoutError = () => {
+        const error = new Error(`Timeout (${Math.round(timeoutMs / 1000)}s)`);
+        error.code = 'FETCH_TIMEOUT';
+        return error;
+    };
     timer = setTimeout(() => {
         timedOut = true;
         ctrl.abort();
@@ -840,7 +848,9 @@ export function withDeadline(timeoutMs, signal, run) {
     let timedOut = false;
     const timeoutError = () => {
         const limit = timeoutMs >= 1000 ? `${Math.round(timeoutMs / 1000)}s` : `${timeoutMs}ms`;
-        return new Error(`Timeout (${limit})`);
+        const error = new Error(`Timeout (${limit})`);
+        error.code = 'FETCH_TIMEOUT';
+        return error;
     };
     let rejectDeadline;
     const deadlinePromise = new Promise((_, reject) => { rejectDeadline = reject; });

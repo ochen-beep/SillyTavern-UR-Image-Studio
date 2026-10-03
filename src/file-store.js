@@ -151,7 +151,20 @@ function mergeRecordArray(baseArr, serverArr, localArr) {
                 const was = base.get(id);
                 if (!sameRecord(was, record)) { out.push(record); changed = true; }
                 // untouched locally: deleted remotely — honored unless the whole
-                // remote document is a stale rollback
+                // remote document is a stale rollback. KNOWN LIMITATION
+                // (observed live 2026-10-03, two gallery tabs): the record is
+                // dropped from `out`, but `changed` stays false, so a merge
+                // whose ONLY effect is accepting remote deletions reports
+                // "nothing to change" and the caller re-sends the unmerged
+                // mirror — the deleted records come back. Making this
+                // `changed = true` is NOT a safe fix: the merge read can be
+                // older than syncBase (the session's own previous upload may
+                // not have landed yet), and then an in-flight local addition
+                // looks exactly like a remote deletion and gets destroyed.
+                // Honest resolution needs tombstones or server-side
+                // conditional writes (If-Match); until then, deletions by
+                // another session can be resurrected by this session's next
+                // full-document write.
                 else if (rollback) { out.push(record); }
                 continue;
             }
@@ -267,6 +280,14 @@ export function createFileStore(config) {
     let suppressMergeOnce = false;
     let pendingPayload = null;     // newest content not yet uploaded
     let writeJob = null;           // in-flight write loop (null when idle)
+    // Content an unload keepalive flush sent while the write loop was parked in
+    // an await. The keepalive and the loop's own upload are two concurrent
+    // full-file writes whose ARRIVAL order is not guaranteed to match the send
+    // order: without this marker an older in-flight upload can land after the
+    // flushed newer payload and quietly regress the server file (the flushed
+    // mutations are lost). The loop re-sends the current mirror after such a
+    // race, so the file ends on the newest state regardless of arrival order.
+    let unloadFlushedPayload = null;
     let lastWriteOk = true;
     let lastFailureToastAt = 0;
     // The initial read failed (non-404): file existence is unconfirmed, so a
@@ -330,18 +351,25 @@ export function createFileStore(config) {
 
     /**
      * Parse the stored document. Returns the reason alongside the value so the
-     * caller can tell "unusable" (safe to repair) from "written by a newer
-     * build" (must never be overwritten by this older one).
+     * caller can tell "unusable" (safe to repair) from "written by a different
+     * build" (must never be silently destroyed by a repair write).
      */
     function parseDoc(text) {
         let doc;
         try { doc = JSON.parse(text); } catch { return { reason: 'corrupt' }; }
         if (!doc || typeof doc !== 'object') return { reason: 'corrupt' };
-        if (typeof doc.v === 'number' && doc.v > version) {
-            return { reason: 'newer', value: Object.hasOwn(doc, key) ? doc[key] : undefined };
-        }
-        if (!Object.hasOwn(doc, key) || doc.v !== version) return { reason: 'corrupt' };
-        return { reason: 'found', value: doc[key] };
+        if (!Object.hasOwn(doc, key)) return { reason: 'corrupt' };
+        // A document from a newer build cannot be managed by this one: load it
+        // read-only, never repair it away.
+        if (typeof doc.v === 'number' && doc.v > version) return { reason: 'newer', value: doc[key] };
+        if (doc.v === version) return { reason: 'found', value: doc[key] };
+        // A document from an OLDER build of this store: this build is the newer
+        // authority, so the value loads (lazy migration) and the next persist
+        // rewrites it with the current `v`. Bumping `version` without a shape
+        // migrator is exactly the case this keeps safe — the old data is
+        // adopted, never wiped; a shape-changing bump must add a real migrator.
+        if (typeof doc.v === 'number' && doc.v < version) return { reason: 'older', value: doc[key] };
+        return { reason: 'corrupt' };
     }
 
     /** Refuse session writes with a one-time explanation the user can act on. */
@@ -420,7 +448,7 @@ export function createFileStore(config) {
         if (text) {
             parsed = parseDoc(text);
             readResult = parsed.reason;
-            if (parsed.reason === 'found') fileValue = parsed.value;
+            if (parsed.reason === 'found' || parsed.reason === 'older') fileValue = parsed.value;
         }
 
         // A document from a newer build cannot be managed by this one: load it
@@ -450,9 +478,10 @@ export function createFileStore(config) {
 
         mirror = fileValue === null || fileValue === undefined ? empty() : fileValue;
         // Merge base: the server document this session last synced to. A found
-        // file is exactly that; with no usable file the mirror is the best
-        // description of the server state (nothing/repair) for a first merge.
-        syncBase = readResult === 'found' ? clone(fileValue) : clone(mirror);
+        // (or lazy-migrated older-version) file is exactly that; with no usable
+        // file the mirror is the best description of the server state
+        // (nothing/repair) for a first merge.
+        syncBase = readResult === 'found' || readResult === 'older' ? clone(fileValue) : clone(mirror);
         diagnostics.loaded = true;
         diagnostics.readResult = readResult;
         diagnostics.entries = countEntries(mirror);
@@ -466,8 +495,11 @@ export function createFileStore(config) {
         log(`file-store[${label}]: mode=file, loaded (${readResult}) — ${diagnostics.entries} entr(ies), ${diagnostics.bytes} bytes`);
 
         // A corrupt document is repaired with the empty mirror; a missing one
-        // is not created until the first real mutation.
-        if (readResult === 'corrupt') await schedulePersist();
+        // is not created until the first real mutation. An older-version
+        // document was just adopted (lazy migration): rewrite it immediately so
+        // the version stamp is current even if no mutation ever follows — a
+        // second session must not see the store as "behind" again.
+        if (readResult === 'corrupt' || readResult === 'older') await schedulePersist();
         return mode;
     }
 
@@ -577,7 +609,21 @@ export function createFileStore(config) {
                 syncBase = mirrorSent;
                 // Clear only if nothing newer arrived while this upload was in
                 // flight — otherwise the loop keeps going with the newer content.
-                if (pendingPayload === payload) pendingPayload = null;
+                if (pendingPayload === payload) {
+                    pendingPayload = null;
+                } else if (pendingPayload === null && unloadFlushedPayload && unloadFlushedPayload !== payload) {
+                    // An unload keepalive flew while this upload was in flight and
+                    // carried newer content; this older upload may now have landed
+                    // AFTER it (arrival order beats send order). Re-send the current
+                    // mirror so the file ends on the newest state, not on the stale
+                    // in-flight payload. Same-content flushes (marker === payload)
+                    // need no rewrite — the loop would send byte-identical data.
+                    pendingPayload = buildPayload();
+                }
+                // The marker is consumed: the just-sent payload plus the re-send
+                // above both carry at-least-as-new content as any flush so far.
+                // A flush firing later re-sets it during the next await.
+                unloadFlushedPayload = null;
                 diagnostics.lastWriteAt = new Date().toISOString();
                 diagnostics.bytes = payload.bytes;
                 diagnostics.entries = countEntries(mirror);
@@ -658,6 +704,7 @@ export function createFileStore(config) {
             // Mark sent BEFORE the fetch: this fires from visibilitychange AND
             // pagehide, and a second caller must not re-send the same payload.
             pendingPayload = null;
+            unloadFlushedPayload = payload;
             void fetch(UPLOAD_URL, {
                 method: 'POST',
                 headers: stHeaders(),

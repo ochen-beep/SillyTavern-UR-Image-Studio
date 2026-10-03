@@ -168,11 +168,16 @@ describe('file-store: load', () => {
         assert.deepEqual(serverDoc(store), [{ id: 'old' }]);
     });
 
-    it('a document from an older build is treated as corrupt', async () => {
+    it('a document from an older build is adopted (lazy migration), not wiped', async () => {
         const store = makeStore({ version: 2 });
         serverFiles.set(store.name, JSON.stringify({ v: 1, items: [{ id: 'old' }] }));
         await store.ready();
-        assert.equal(store.diagnostics().readResult, 'corrupt');
+        assert.equal(store.diagnostics().readResult, 'older');
+        assert.deepEqual(store.snapshot(), [{ id: 'old' }], 'данные старой версии загружены');
+        await store.flush();
+        const doc = JSON.parse(serverFiles.get(store.name));
+        assert.equal(doc.v, 2, 'документ переписан с текущей версией');
+        assert.deepEqual(doc.items, [{ id: 'old' }], 'содержимое пережило миграцию');
     });
 
     it('document missing the value key is treated as corrupt', async () => {

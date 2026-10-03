@@ -586,7 +586,7 @@ async function restoreSafeSnapshot(snapshot) {
  * @param {Object} data — object from exportUrisData
  * @param {Object} [options]
  * @param {'merge'|'replace'} [options.mode='merge'] — merge with current or full replace
- * @returns {Promise<{importedKeys: number, importedChatBindings: number, summary: Object}>}
+ * @returns {Promise<{importedRecords: number, importedChatBindings: number, summary: Object}>}
  */
 export async function importUrisData(data, options = {}) {
     const startedAt = Date.now();
@@ -801,7 +801,7 @@ export async function runImport(mode = 'merge', onSuccess) {
         const data = await uploadJson();
         const result = await importUrisData(data, { mode });
         toastr?.success(
-            `Импортировано ${result.importedKeys} записей, конфигураций чата: ${result.importedChatBindings}`,
+            `Импортировано ${result.importedRecords} записей, конфигураций чата: ${result.importedChatBindings}`,
             DISPLAY_NAME
         );
         if (typeof onSuccess === 'function') {
@@ -856,7 +856,7 @@ export async function runImportInteractive() {
         const mode = await pickBackupImportMode(summarizeBackup(normalized));
         if (!mode) return null;
         const result = await importUrisData(normalized, { mode });
-        toastr?.success(`Импортировано ${result.importedKeys} записей.`, DISPLAY_NAME);
+        toastr?.success(`Импортировано ${result.importedRecords} записей.`, DISPLAY_NAME);
         return result;
     } catch (e) {
         error('runImportInteractive:', e);

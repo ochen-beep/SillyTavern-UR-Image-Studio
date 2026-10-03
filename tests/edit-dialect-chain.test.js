@@ -294,3 +294,55 @@ test('chain: img2img body keeps geometry and omits input_fidelity', async () => 
     assert.equal(body.aspect_ratio, undefined);
   } finally { restore(); }
 });
+
+// Ремап 401→400 в ST /proxy/ (живое наблюдение 2026-10-03: невалидный ключ
+// напрямую 401, через прокси 400 «无效的令牌»): платная JSON-нога падает 400-й,
+// и раньше цепочка тратила img2img-ногу и отдавала EDITS_DIALECT_EXHAUSTED
+// вместо честной auth-ошибки. Теперь 400 на прокси проходит бесплатную пробу
+// GET /models: сломанный ключ останавливает цепочку, живой — идёт дальше.
+test('chain: проксированный 400 + сломанный ключ (проба 400) → img2img не тратится', async () => {
+  const transport = scriptedTransport((url, options, kind) => {
+    if (kind === 'multipart') throw Object.assign(new TypeError('Failed to fetch'), { code: 'MULTIPART_CORS_REQUIRED' });
+    if (url.endsWith('/images/edits')) return jsonResponse({ error: { message: '无效的令牌' } }, 400);
+    if (url.endsWith('/models')) return jsonResponse({ error: { message: '无效的令牌' } }, 400);
+    throw new Error(`unexpected ${url}`);
+  });
+  const restore = mockFetch((_url, options) => {
+    if (options?.method === 'OPTIONS') throw new TypeError('Failed to fetch');
+    throw new Error('unexpected direct fetch');
+  });
+  try {
+    await assert.rejects(
+      () => invokeImageProvider({ endpoint: 'https://gw.example', apiKey: 'k', connection: connection(), route: AUTO_ROUTE(), request: request(), transport }),
+      /无效的令牌/,
+      'пользователь видит исходную ошибку платной ноги, а не EDITS_DIALECT_EXHAUSTED',
+    );
+    const kinds = transport.calls.map(c => `${c.kind}:${c.url.split('/v1/')[1]}`);
+    assert.deepEqual(kinds, ['multipart:images/edits', 'json:images/edits', 'json:models'],
+      'img2img-нога не выполняется: бесплатная проба доказала, что 400 — это auth');
+  } finally { restore(); }
+});
+
+test('chain: проксированный 400 + живой ключ (проба 200) → img2img идёт как раньше', async () => {
+  const transport = scriptedTransport((url, options, kind) => {
+    if (kind === 'multipart') throw Object.assign(new TypeError('Failed to fetch'), { code: 'MULTIPART_CORS_REQUIRED' });
+    if (url.endsWith('/images/edits')) return jsonResponse({ error: { message: 'unknown parameter' } }, 400);
+    if (url.endsWith('/models')) return jsonResponse({ data: [{ id: 'gpt-image-2' }] });
+    if (url.endsWith('/images/generations')) return jsonResponse({ data: [{ b64_json: 'aTIyaQ==' }] });
+    throw new Error(`unexpected ${url}`);
+  });
+  const restore = mockFetch((_url, options) => {
+    if (options?.method === 'OPTIONS') throw new TypeError('Failed to fetch');
+    throw new Error('unexpected direct fetch');
+  });
+  try {
+    const result = await invokeImageProvider({
+      endpoint: 'https://gw.example', apiKey: 'k', connection: connection(),
+      route: AUTO_ROUTE(), request: request(), transport,
+    });
+    assert.equal(result.kind, 'dataUrl');
+    const kinds = transport.calls.map(c => `${c.kind}:${c.url.split('/v1/')[1]}`);
+    assert.deepEqual(kinds, ['multipart:images/edits', 'json:images/edits', 'json:models', 'json:images/generations'],
+      'живой ключ: проба пропускает дальше, строгий шлюз получает img2img как раньше');
+  } finally { restore(); }
+});

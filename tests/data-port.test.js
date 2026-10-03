@@ -788,3 +788,18 @@ test('rollback aggregates settings and chat metadata failures', async () => {
         globalThis.SillyTavern.getContext = originalContext;
     }
 });
+
+test('import result contract: importedRecords (не importedKeys) — поле, которое читают тосты', async () => {
+    const result = await importUrisData({
+        version: 7,
+        module: MODULE_NAME,
+        data: { localforage: {} },
+        imageConnections: {
+            server: [],
+            templates: [{ id: 't1', name: 'T', instruction: 'x' }],
+        },
+    });
+    assert.equal(typeof result.importedRecords, 'number', 'тосты читают result.importedRecords');
+    assert.equal(result.importedKeys, undefined, 'regression: тост показывал «Импортировано undefined записей»');
+    assert.equal(typeof result.importedChatBindings, 'number', 'второе поле тоста тоже контрактовано');
+});

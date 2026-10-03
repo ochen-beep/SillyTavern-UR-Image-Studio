@@ -217,7 +217,7 @@ export async function runFullPipelineForDraft(input, onStatus = () => {}, signal
     const runInput = { ...input, chatConfig };
     const flightKey = `${input.chatId}:${input.msgId}:${hashMessageForAuto(input.messageText)}`;
     const existing = autoFlights.get(flightKey);
-    if (existing) return existing;
+    if (existing) return await raceFlightWithSignal(existing, signal);
     const flight = (async () => {
         const run = await runStage1ForDraft(runInput, onStatus, signal, { isAuto: true });
         if (!run.applied || !run.draft?.prompt) return null;
@@ -228,6 +228,26 @@ export async function runFullPipelineForDraft(input, onStatus = () => {}, signal
     finally { if (autoFlights.get(flightKey) === flight) autoFlights.delete(flightKey); }
 }
 
+/**
+ * Присоединение к чужому полёту не наследует его сигнал: полёт выполняется с
+ * сигналом первого вызывающего, и его отмена (Stop в его UI-контексте) раньше
+ * завершала и «чужой» await при живом сигнале второго участника. Гонка против
+ * СВОЕГО сигнала: собственный аборт отклоняет await этого вызывающего, но полёт
+ * продолжается для владельца и остальных присоединившихся.
+ */
+function raceFlightWithSignal(flight, signal) {
+    if (!signal) return flight;
+    if (signal.aborted) return Promise.reject(new DOMException('Aborted by user', 'AbortError'));
+    return new Promise((resolve, reject) => {
+        const onAbort = () => reject(new DOMException('Aborted by user', 'AbortError'));
+        signal.addEventListener('abort', onAbort, { once: true });
+        flight.then(
+            value => { signal.removeEventListener('abort', onAbort); resolve(value); },
+            error => { signal.removeEventListener('abort', onAbort); reject(error); },
+        );
+    });
+}
+
 function hashMessageForAuto(value) {
     let hash = 2166136261;
     for (const char of String(value || '')) {
@@ -236,3 +256,6 @@ function hashMessageForAuto(value) {
     }
     return (hash >>> 0).toString(16);
 }
+
+/** Шов для node-тестов: семантика присоединения к чужому полёту. */
+export { raceFlightWithSignal as _raceFlightWithSignal };

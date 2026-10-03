@@ -306,6 +306,7 @@ async function readBodyJson(response, timeoutMs, externalSignal) {
         if (streamError?.name === 'AbortError') {
             if (externalSignal?.aborted) throw new DOMException('Aborted', 'AbortError');
             const timeout = new Error(`Таймаут (${Math.round(timeoutMs / 1000)}с)`);
+            timeout.code = 'FETCH_TIMEOUT';
             timeout.code = 'CATALOG_TIMEOUT';
             throw timeout;
         }
@@ -380,7 +381,9 @@ async function request(url, apiKey, fetcher, proxiedFetcher, headers, timeoutMs,
         } catch (error) {
             if (error?.name === 'AbortError') {
                 if (externalSignal?.aborted) throw new DOMException('Aborted', 'AbortError');
-                throw new Error(`Таймаут (${Math.round(timeoutMs / 1000)}с)`);
+                const timeout = new Error(`Таймаут (${Math.round(timeoutMs / 1000)}с)`);
+                timeout.code = 'FETCH_TIMEOUT';
+                throw timeout;
             }
             if (!isCorsOrNetworkError(error)) throw error;
             if (mode === 'direct') throw explainCorsBlock(typeof url === 'string' ? url : url.toString(), error);
