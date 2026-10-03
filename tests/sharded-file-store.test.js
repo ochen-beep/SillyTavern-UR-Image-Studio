@@ -814,3 +814,17 @@ describe('replace and meta', () => {
         assert.equal(manifest.shards.length, 1, 'folders never touch the manifest');
     });
 });
+
+describe('gallery-index integration', () => {
+    it('addCard writes a shard + manifest, never the monolith', async () => {
+        const { addCard, listCards, resetGalleryStoreForTests } = await import('../src/gallery-index.js');
+        resetGalleryStoreForTests();
+        await addCard({ imagePath: 'user/images/default/uris_test.png', prompt: 'x', provenance: { chatId: 'c1' } });
+        await listCards({ reconcile: false });
+        const names = [...serverFiles.keys()];
+        assert.ok(names.some(n => n.startsWith('uris_gallery_manifest')), 'manifest written');
+        assert.ok(names.some(n => n.startsWith('uris_gallery_shard_')), 'shard written');
+        assert.equal(names.includes('uris_gallery.json'), false, 'monolith not touched by a fresh store');
+        resetGalleryStoreForTests();
+    });
+});

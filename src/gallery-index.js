@@ -2,13 +2,19 @@
 /**
  * Shared metadata index for images stored in the native ST gallery.
  *
- * The cards live in ONE server file per user, `data/<user>/user/files/uris_gallery.json`,
- * not in `extensionSettings`. They were 4,8 MB of a 7,8 MB settings.json: ST's
- * `saveSettingsDebounced` re-POSTs the whole settings object, so every unrelated
- * settings change (in any extension) rewrote the entire gallery index. The
- * official extension guide forbids exactly this ("Don't store large data in
- * extensionSettings"). See `src/file-store.js` for the shared machinery and
- * `docs/plans/2026-09-12-storage-externalization.md` for the rationale.
+ * The cards live in SERVER files per user — originally the single
+ * `data/<user>/user/files/uris_gallery.json` — not in `extensionSettings`. They
+ * were 4,8 MB of a 7,8 MB settings.json: ST's `saveSettingsDebounced` re-POSTs
+ * the whole settings object, so every unrelated settings change (in any
+ * extension) rewrote the entire gallery index. The official extension guide
+ * forbids exactly this ("Don't store large data in extensionSettings"). See
+ * `src/file-store.js` for the shared machinery and
+ * `docs/plans/2026-09-12-storage-externalization.md` for the rationale. Since
+ * 2026-10-03 the index lives in `createShardedFileStore`: fixed-size
+ * `uris_gallery_shard_*.json` files behind a tiny `uris_gallery_manifest.json`
+ * (`uris_gallery.json` remains only as the one-time migration source), so a
+ * mutation uploads one shard — the write cost is bounded by the shard size,
+ * not the index size.
  *
  * The first load migrates the legacy `extensionSettings` copy into the file and
  * drops it — keeping a copy would defeat the entire point at this size. The
@@ -22,9 +28,11 @@
 import { uid, log, warn } from './core.js';
 import { listNativeImages } from './native-image-storage.js';
 import { canonicalizeNativeImagePath, NATIVE_IMAGE_FOLDER } from './native-image-path.js';
-import { createFileStore } from './file-store.js';
+import { createShardedFileStore } from './sharded-file-store.js';
 
 export const GALLERY_FILE_NAME = 'uris_gallery.json';
+export const GALLERY_MANIFEST_NAME = 'uris_gallery_manifest.json';
+export const GALLERY_SHARD_PREFIX = 'uris_gallery_shard_';
 export const GALLERY_STORE_VERSION = 1;
 const GALLERY_STORE_KEY = 'cards';
 
@@ -52,20 +60,22 @@ const ALLOWED = [
     'hidden',
 ];
 
-const galleryStore = createFileStore({
+const galleryStore = createShardedFileStore({
     label: 'gallery',
-    name: GALLERY_FILE_NAME,
+    manifestName: GALLERY_MANIFEST_NAME,
+    shardPrefix: GALLERY_SHARD_PREFIX,
+    monolithName: GALLERY_FILE_NAME,
+    monolithKey: GALLERY_STORE_KEY,
     version: GALLERY_STORE_VERSION,
-    key: GALLERY_STORE_KEY,
+    shardTarget: 250,
+    append: 'front',
+    placeByStamp: true,
+    placeStamp: r => (Number.isFinite(r?.createdAt) ? r.createdAt : 0),
     empty: () => [],
     countEntries: value => (Array.isArray(value) ? value.length : null),
     // The card index is edited by every device and every tab this user's data
-    // syncs to — exactly the shared-pool case file-store documents for
-    // `mergeWithServer` (same rationale as refs-library's pool, and the same
-    // 2026-09-14 incident class): without the pre-write merge a second tab
-    // loaded before this session's writes silently rolls them back with its
-    // next full-document write. The re-read cost is one GET per coalesced
-    // write — negligible against the upload itself.
+    // syncs to — merge-per-shard carries the same concurrent-writer safety the
+    // whole-document merge used to (2026-09-14 incident class), at shard size.
     mergeWithServer: true,
 });
 
