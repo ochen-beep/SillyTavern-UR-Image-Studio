@@ -37,7 +37,7 @@ import { log, warn } from './core.js';
 import { recordDiagnosticEvent } from './diagnostic-events.js';
 import {
     KEEPALIVE_BODY_LIMIT, textToBase64, stHeaders, mergeServerValue,
-    parseVersionedDoc, registerFileStoreForDiagnostics,
+    parseVersionedDoc, registerFileStoreForDiagnostics, createFileStore,
 } from './file-store.js';
 
 const UPLOAD_URL = '/api/files/upload';
@@ -148,9 +148,23 @@ export function createShardedFileStore(config) {
         mergeWithServer = true,
         keepaliveLimit = KEEPALIVE_BODY_LIMIT,
         onWriteFailure = null,
+        meta = null,
     } = config;
 
     const shardFileName = id => `${shardPrefix}${id}.json`;
+
+    // Small satellite arrays (refs folders) that must not ride the manifest:
+    // the manifest has to be rebuildable from a shard scan alone, so anything
+    // not derivable from the shards lives in its own plain file-store.
+    const metaStore = meta ? createFileStore({
+        label: `${label}-meta`,
+        name: meta.name,
+        version,
+        key: 'data',
+        empty: meta.empty || (() => ({})),
+        mergeWithServer: true,
+        onWriteFailure,
+    }) : null;
 
     let mode = 'unknown';
     let readyPromise = null;
@@ -275,6 +289,30 @@ export function createShardedFileStore(config) {
         mirror = list;
     }
 
+    // ── Meta satellite ──
+
+    /** Hydrate the mirror's satellite keys from the meta store. */
+    async function hydrateMeta() {
+        if (!metaStore || !meta?.keys?.length) return;
+        await metaStore.ready();
+        const satellite = metaStore.snapshot() || meta.empty();
+        for (const key of meta.keys) mirror[key] = clone(satellite[key]);
+    }
+
+    /** Push the mirror's satellite keys into the meta store when they differ. */
+    async function syncMeta(force = false) {
+        if (!metaStore || !meta?.keys?.length) return;
+        const satellite = {};
+        for (const key of meta.keys) satellite[key] = clone(mirror[key]);
+        const current = metaStore.snapshot();
+        if (!force && JSON.stringify(current) === JSON.stringify(satellite)) return;
+        await metaStore.mutate(m => {
+            for (const k of Object.keys(m)) delete m[k];
+            Object.assign(m, satellite);
+        });
+        await metaStore.flush();
+    }
+
     // ── Load ──
 
     /**
@@ -351,7 +389,10 @@ export function createShardedFileStore(config) {
                 emit('store-mode', { store: label, result: 'file', reason: 'missing' });
                 emit('store-load', { store: label, result: 'missing', entries: countEntries(mirror), bytes: 0, ms: Date.now() - started });
             }
-            return mode;   // 'migrated': mirror is built, diagnostics emitted inside
+            // 'migrated': the mirror is built from the shards — the satellite
+            // keys (refs folders) still come from the meta store.
+            if (metaStore) await hydrateMeta();
+            return mode;
         }
 
         const parsed = parseManifest(text, version);
@@ -379,6 +420,7 @@ export function createShardedFileStore(config) {
         if (!ok) return mode;
         manifestBaseRows = (parsed.value.shards || []).map(row => ({ ...row }));
         rebuildMirrorFromShards();
+        if (metaStore) await hydrateMeta();
         totalBytes = text.length;
         emit('store-mode', { store: label, result: 'file', reason: parsed.reason });
         emit('store-load', {
@@ -635,6 +677,8 @@ export function createShardedFileStore(config) {
                     // dropping the row would orphan live foreign data, a
                     // newer build's row would be clobbered. Abort the write —
                     // the next settle re-reads the manifest and retries.
+                    // Per-settle at most one abort, so no dedupe is needed.
+                    emit('store-write-skipped', { store: label, reason: 'adopt-error', shard: row.id, level: 'warn' });
                     manifestDirty = true;
                     lastWriteOk = false;   // flush() must report the unfinished write
                     return false;
@@ -764,19 +808,20 @@ export function createShardedFileStore(config) {
             return 'migrated';
         }
         // Monolith values differ by store: the gallery is a bare array, refs is
-        // `{ refs, folders }` — the sharded collection rides `shardedKey`.
-        const records = body === null ? []
-            : (shardedKey ? (Array.isArray(body[shardedKey]) ? body[shardedKey] : []) : body);
-        if (shardedKey === null && !Array.isArray(records)) {
-            // Task 7: refs-shaped monolith guard — a refs monolith whose
-            // `shardedKey` array is corrupt currently migrates empty and
-            // tombstones; it needs the same honest early-out as the gallery.
-            // A hand-corrupted gallery monolith (`cards` holding an object)
-            // would crash `oldestFirst` and brick the session on a memoized
-            // rejected ready(). Come up empty and loud instead — the mirror is
-            // already `empty()` and the mode is 'file' — and leave the
-            // monolith untouched (no tombstone, no writes) so a hand-fixed
-            // file can still migrate later.
+        // `{ refs, folders }` — the sharded collection rides `shardedKey`. A
+        // collection that is not an array gets the honest early-out, whichever
+        // shape the store has: a hand-corrupted gallery `cards` (an object)
+        // would crash `oldestFirst` and brick the session on a memoized
+        // rejected ready(); a refs monolith whose `shardedKey` went misshapen
+        // would migrate empty and tombstone, silently destroying the companion
+        // data that lives alongside it (the refs folders). The mirror is
+        // already `empty()` and the mode is 'file': come up empty and loud,
+        // and leave the monolith untouched (no tombstone, no writes) so a
+        // hand-fixed file can still migrate later.
+        const records = shardedKey
+            ? (Array.isArray(body[shardedKey]) ? body[shardedKey] : null)
+            : body;
+        if (!Array.isArray(records)) {
             emit('store-migrated', { store: label, result: 'error', reason: 'monolith-shape' });
             warn(`sharded-store[${label}]: monolith has an unexpected shape — migration skipped`);
             return 'migrated';
@@ -839,13 +884,45 @@ export function createShardedFileStore(config) {
             const before = new Map(recordList().map(record => [String(record.id), clone(record)]));
             const result = mutator(mirror);
             const changed = syncFromMirror(before);
+            // Satellite keys ride their own meta store, ahead of the shard
+            // persist: a folders-only edit leaves the shard diff "unchanged",
+            // yet the mirror change must still reach the meta file.
+            if (metaStore) await syncMeta();
             // Awaited: when `mutate` resolves, its write has landed (callers
             // and tests read server state right after; the loop still coalesces
             // mutations issued while it is in flight).
             if (changed && shouldPersist) await schedulePersist();
             return result;
         },
-        async replace(value) { mirror = value; },                          // Task 7
+        /**
+         * Replace the whole value and await durability (backup restore). The
+         * server is clobbered, not merged (suppressMergeOnce): shards are
+         * re-chunked by position from the value.
+         */
+        async replace(value) {
+            await ready();
+            mirror = value === undefined ? empty() : value;
+            shards = [];
+            shardState = new Map();
+            recordShard = new Map();
+            dirtyShards = new Set();
+            emptyShards = new Set();
+            manifestBaseRows = [];
+            const ordered = oldestFirst(recordList());
+            for (let i = 0; i < ordered.length; i += shardTarget) {
+                const chunk = ordered.slice(i, i + shardTarget).map(record => record);
+                if (append === 'front') chunk.reverse();
+                const id = nextShardId();
+                adoptShard(id, chunk);
+                dirtyShards.add(id);
+            }
+            manifestDirty = true;
+            suppressMergeOnce = true;
+            if (metaStore) await syncMeta(true);
+            const job = schedulePersist();
+            if (job) await job;
+            return lastWriteOk;
+        },
         persist() { return schedulePersist(); },
         async flush() { return lastWriteOk; },                             // Task 9
         flushOnUnload() {},                                                // Task 9
@@ -880,6 +957,7 @@ export function createShardedFileStore(config) {
             lastError = null;
             writeBlockedReason = null;
             refusedNotified.clear();
+            if (metaStore) metaStore.reset();
         },
     };
 

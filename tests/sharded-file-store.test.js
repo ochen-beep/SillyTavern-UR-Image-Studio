@@ -62,6 +62,7 @@ const fetchStub = async (url, options = {}) => {
 
 const { createShardedFileStore } = await import('../src/sharded-file-store.js');
 const { resetFileStoresForTests } = await import('../src/file-store.js');
+const journal = await import('../src/diagnostic-events.js');
 
 /** Gallery-shaped test record. */
 function card(i, at = 1_700_000_000_000 + i * 1000) {
@@ -106,6 +107,7 @@ beforeEach(() => {
     toastErrors.length = 0;
     installStubs();
     resetFileStoresForTests();
+    journal.resetDiagnosticEventsForTests();
 });
 
 describe('skeleton', () => {
@@ -319,6 +321,30 @@ describe('migration from monolith', () => {
             'the monolith is not tombstoned — a hand-fix can migrate later');
     });
 
+    it('a refs monolith whose sharded collection is not an array comes up empty, preserving the companion data', async () => {
+        const store = makeStore({
+            shardedKey: 'refs', append: 'back', placeByStamp: false,
+            empty: () => ({ refs: [], folders: [] }),
+            countEntries: v => (Array.isArray(v?.refs) ? v.refs.length : null),
+            monolithKey: 'data',
+        });
+        const monolith = `t${labelCounter}_old.json`;
+        serverFiles.set(monolith, JSON.stringify({
+            v: 1, data: { refs: { broken: true }, folders: [{ id: 'f1', name: 'Пейзажи' }] },
+        }));
+        assert.equal(await store.ready(), 'file');
+        assert.deepEqual(store.snapshot().refs, []);
+        assert.equal(uploads.length, 0, 'a misshapen refs monolith is never migrated nor written over');
+        const preserved = JSON.parse(serverFiles.get(monolith));
+        assert.equal(preserved.data.refs.broken, true, 'the monolith is not tombstoned');
+        assert.equal(preserved.data.folders[0].id, 'f1',
+            'the meta-file companion data is not destroyed by an empty migration');
+        const migrated = journal.listDiagnosticEvents().find(e => e.event === 'store-migrated');
+        assert.ok(migrated, 'the shape guard is loud in the journal');
+        assert.equal(migrated.outcome, 'error');
+        assert.equal(migrated.details.reason, 'monolith-shape');
+    });
+
     it('a tombstoned monolith is ignored (already migrated)', async () => {
         const store = makeStore();
         serverFiles.set(`t${labelCounter}_old.json`, JSON.stringify({ v: 1, kind: 'migrated', store: 'x' }));
@@ -517,6 +543,11 @@ describe('merge per shard', () => {
         failReads.add(shardName(store, 's0001'));
         await store.mutate(list => { list.unshift(card(1)); });   // shard uploads, manifest write aborts
         assert.equal(await store.flush(), false, 'the aborted manifest write is reported as unfinished');
+        const abort = journal.listDiagnosticEvents().find(e => e.event === 'store-write-skipped');
+        assert.ok(abort, 'the silent-looking abort is observable in the journal');
+        assert.equal(abort.level, 'warn');
+        assert.equal(abort.details.reason, 'adopt-error');
+        assert.equal(abort.details.shard, 's0001');
         const untouched = JSON.parse(serverFiles.get(manifestName(store)));
         assert.deepEqual(untouched.shards.map(s => s.id), ['s0000', 's0001'],
             'the server manifest was not clobbered by the aborted write');
@@ -575,5 +606,51 @@ describe('write-loop races', () => {
         assert.deepEqual(manifest.shards.map(s => s.count), [4, 1]);
         assert.ok(store.snapshot().some(r => r.id === 'c0009'));
         assert.equal(await store.flush(), true);
+    });
+});
+
+describe('replace and meta', () => {
+    it('replace() re-chunks the value by position and clobbers the server (no merge)', async () => {
+        const store = makeStore();
+        await store.ready();
+        await store.mutate(list => { list.unshift(card(0)); });
+        await store.flush();
+        // A foreign record lands on the server between our writes:
+        const shard = JSON.parse(serverFiles.get(shardName(store, 's0000')));
+        shard.records.unshift(card(50));
+        serverFiles.set(shardName(store, 's0000'), JSON.stringify(shard));
+        await store.replace([card(9), card(8), card(7), card(6), card(5)]);
+        const written = JSON.parse(serverFiles.get(shardName(store, 's0000')));
+        assert.deepEqual(written.records.map(r => r.id), ['c0008', 'c0007', 'c0006', 'c0005'],
+            'restore clobbers: the foreign record is NOT merged back (shard-internal newest-first)');
+        const manifest = JSON.parse(serverFiles.get(manifestName(store)));
+        assert.deepEqual(manifest.shards.map(s => s.count), [4, 1]);
+        assert.deepEqual(store.snapshot().map(r => r.id), ['c0009', 'c0008', 'c0007', 'c0006', 'c0005']);
+    });
+
+    it('meta carries a satellite array in its own file; mutate syncs it', async () => {
+        // makeStore increments labelCounter, but the overrides object is
+        // evaluated at the call site — pre-compute the label for meta.name.
+        const n = labelCounter + 1;
+        const store = makeStore({
+            shardedKey: 'refs',
+            append: 'back',
+            placeByStamp: false,
+            empty: () => ({ refs: [], folders: [] }),
+            countEntries: value => (Array.isArray(value?.refs) ? value.refs.length : null),
+            meta: { name: `t${n}_meta.json`, keys: ['folders'], empty: () => ({ folders: [] }) },
+        });
+        await store.ready();
+        await store.mutate(data => {
+            data.refs.push(card(0));
+            data.folders.push({ id: 'f1', name: 'Пейзажи' });
+        });
+        await store.flush();
+        const metaFile = JSON.parse(serverFiles.get(`t${n}_meta.json`));
+        assert.deepEqual(metaFile.data.folders.map(f => f.id), ['f1']);
+        assert.deepEqual(store.snapshot().folders.map(f => f.id), ['f1']);
+        assert.deepEqual(store.snapshot().refs.map(r => r.id), ['c0000']);
+        const manifest = JSON.parse(serverFiles.get(manifestName(store)));
+        assert.equal(manifest.shards.length, 1, 'folders never touch the manifest');
     });
 });
