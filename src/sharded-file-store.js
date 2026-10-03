@@ -23,7 +23,7 @@
  * record id and mark dirty shards; the serialized write loop re-reads each
  * dirty shard, three-way merges it (the shared `mergeServerValue`), and
  * uploads it — the same concurrent-writer safety as `mergeWithServer`, at
- * shard size (Tasks 5–6 wire this). Manifest rows are derived data, merged with
+ * shard size. Manifest rows are derived data, merged with
  * the server copy the same way; a foreign shard unknown to this session is
  * adopted, never clobbered.
  *
@@ -161,6 +161,12 @@ export function createShardedFileStore(config) {
     let dirtyShards = new Set();
     let emptyShards = new Set();   // shards to overwrite as `records: []` and drop
     let manifestDirty = false;
+    // Our manifest rows as of the last landed manifest write (or the load) —
+    // the three-way merge base for `writeManifest`, the rows' analogue of
+    // `state.base`. `shards` itself is already post-mutation by the time the
+    // write loop runs, so it cannot serve as the base: every server row would
+    // look like a remote edit and each write would revert to it.
+    let manifestBaseRows = [];
     let suppressMergeOnce = false; // migration / replace clobber the server, no merge
     let writeJob = null;
     let lastWriteOk = true;
@@ -371,6 +377,7 @@ export function createShardedFileStore(config) {
         mirror = empty();
         const ok = await loadShards(parsed.value.shards || []);
         if (!ok) return mode;
+        manifestBaseRows = (parsed.value.shards || []).map(row => ({ ...row }));
         rebuildMirrorFromShards();
         totalBytes = text.length;
         emit('store-mode', { store: label, result: 'file', reason: parsed.reason });
@@ -489,6 +496,7 @@ export function createShardedFileStore(config) {
             const idx = state.records.findIndex(r => String(r.id) === id);
             if (idx !== -1) state.records.splice(idx, 1);
             recomputeRow(sid);
+            if (shardState.get(sid).records.length === 0 && shards.length > 1) emptyShards.add(sid);
             dirtyShards.add(sid);
             changed = true;
         }
@@ -499,7 +507,7 @@ export function createShardedFileStore(config) {
         return changed;
     }
 
-    // ── Persist (minimal core; Task 6 replaces with the merge loop) ──
+    // ── Persist: serialized loop — dirty shards first (merge per shard), manifest last ──
 
     function schedulePersist() {
         if (mirror === null) return Promise.resolve(false);
@@ -509,55 +517,180 @@ export function createShardedFileStore(config) {
         return writeJob;
     }
 
-    /** Upload every dirty shard, then the manifest. true = everything landed. */
+    /**
+     * Merge the server copy of one shard into the local records. Returns the
+     * records to upload (local when there is nothing to blend). A `newer`
+     * shard refuses the write for the session.
+     */
+    async function mergeShardWithServer(id, local) {
+        if (!mergeWithServer || suppressMergeOnce) return { records: local };
+        const text = await readFile(shardFileName(id));
+        if (text === null) return { records: local };   // 404: nothing on server
+        const parsed = parseShard(text, version);
+        if (parsed.reason === 'newer') { refusePersist('newer-version'); return { records: null, refused: true }; }
+        if (parsed.reason !== 'found' && parsed.reason !== 'older') return { records: local };
+        const state = shardState.get(id);
+        const merged = mergeServerValue(state.base || [], parsed.value, local);
+        if (merged === null) return { records: local };
+        return { records: merged };
+    }
+
+    /**
+     * Splice merged records back: the shard state becomes the merged array,
+     * `append: 'front'` shards are re-sorted newest-first (merge appends
+     * foreign additions at the end; the stamp order is the shard contract),
+     * and the mirror is rebuilt so reads see the true state.
+     */
+    function applyMergedRecords(id, records) {
+        const state = shardState.get(id);
+        if (append === 'front') {
+            records.sort((a, b) => placeStamp(b) - placeStamp(a));
+        }
+        state.records = records;
+        recomputeRow(id);
+        rebuildMirrorFromShards();
+    }
+
+    /**
+     * Load and merge a shard this session has never seen (another tab made it).
+     * An empty shard carries nothing to adopt — and skipping it is what keeps
+     * a shard this session just emptied and dropped from being resurrected by
+     * its own manifest row in the same write.
+     */
+    async function adoptForeignShard(row) {
+        try {
+            const text = await readFile(shardFileName(row.id));
+            if (text === null) return false;
+            const parsed = parseShard(text, version);
+            if (parsed.reason !== 'found' && parsed.reason !== 'older') return false;
+            if (!parsed.value.length) return false;
+            adoptShard(row.id, parsed.value);
+            return true;
+        } catch {
+            return false;
+        }
+    }
+
+    /**
+     * Upload one dirty shard with a pre-write merge. The merged content (if
+     * any) becomes the mirror's version of those records before the upload.
+     */
+    async function writeShard(id) {
+        const started = Date.now();
+        const state = shardState.get(id);
+        const { records, refused } = await mergeShardWithServer(id, state.records);
+        if (refused) return false;
+        if (records !== state.records) applyMergedRecords(id, records);
+        const bytes = await uploadDoc(shardFileName(id), shardDoc(label, version, id, records));
+        state.base = clone(records);
+        totalBytes = bytes;
+        emit('store-write', { store: label, result: 'success', shard: id, entries: records.length, bytes, ms: Date.now() - started });
+        return true;
+    }
+
+    /**
+     * Upload the manifest. Foreign shard rows unknown to this session are
+     * adopted first (their records fetched and merged into the mirror), then
+     * the row set is three-way merged (base = our rows at loop start) so
+     * foreign deletions of untouched shards are honored. Rows without local
+     * shard state (undeliverable adoption) are skipped, never invented.
+     */
+    async function writeManifest(manifestBase) {
+        const started = Date.now();
+        let serverRows = null;
+        if (mergeWithServer && !suppressMergeOnce) {
+            const text = await readFile(manifestName);
+            if (text !== null) {
+                const parsed = parseManifest(text, version);
+                if (parsed.reason === 'newer') { refusePersist('newer-version'); return false; }
+                if (parsed.reason === 'found' || parsed.reason === 'older') serverRows = parsed.value.shards;
+                // corrupt → our rows are the only source: the write rebuilds
+            }
+        }
+        if (serverRows) {
+            for (const row of serverRows) {
+                if (rowFor(row.id)) continue;
+                await adoptForeignShard(row);
+            }
+            if (shards.some(row => !manifestBase.some(baseRow => baseRow.id === row.id))) {
+                rebuildMirrorFromShards();   // adopted records must reach the mirror
+            }
+        }
+        const ourRows = shards.map(row => ({ ...row }));
+        let rows = ourRows;
+        if (serverRows) {
+            const merged = mergeServerValue(manifestBase, serverRows, ourRows);
+            if (merged) rows = merged.filter(row => shardState.has(row.id) || emptyShards.has(row.id));
+        }
+        shards = [...rows].sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+        const bytes = await uploadDoc(manifestName, manifestDoc(label, version, shards.map(row => ({ ...row }))));
+        manifestBaseRows = shards.map(row => ({ ...row }));
+        totalBytes = bytes;
+        emit('store-write', { store: label, result: 'success', shard: 'manifest', entries: shards.length, bytes, ms: Date.now() - started });
+        return true;
+    }
+
     async function runWriteLoop() {
         let ok = true;
+        let failed = null;
+        const manifestBase = manifestBaseRows.map(row => ({ ...row }));
         try {
-            while (dirtyShards.size || manifestDirty) {
-                const started = Date.now();
+            while (true) {
                 const id = dirtyShards.values().next().value;
-                if (id !== undefined) {
-                    dirtyShards.delete(id);
-                    const state = shardState.get(id);
+                if (id === undefined) break;
+                dirtyShards.delete(id);
+                if (emptyShards.has(id)) {
+                    // The shard lost every record: overwrite it empty (no
+                    // DELETE route) and drop it from the manifest.
+                    emptyShards.delete(id);
                     try {
-                        totalBytes = await uploadDoc(shardFileName(id), shardDoc(label, version, id, state.records));
-                        state.base = clone(state.records);
+                        await uploadDoc(shardFileName(id), shardDoc(label, version, id, []));
                     } catch (cause) {
                         dirtyShards.add(id);
-                        lastWriteOk = false;
-                        lastError = String(cause?.message || cause);
-                        emit('store-write', { store: label, result: 'error', shard: id, level: 'error', reason: lastError });
-                        notifyFailure(cause);
-                        ok = false;
+                        emptyShards.add(id);
+                        failed = { cause, shard: id };
                         break;
                     }
-                    emit('store-write', {
-                        store: label, result: 'success', shard: id, entries: state.records.length,
-                        bytes: totalBytes, ms: Date.now() - started,
-                    });
+                    shardState.delete(id);
+                    shards = shards.filter(row => row.id !== id);
+                    for (const [rid, sid] of recordShard) if (sid === id) recordShard.delete(rid);
+                    manifestDirty = true;
                     continue;
                 }
-                manifestDirty = false;
                 try {
-                    totalBytes = await uploadDoc(manifestName, manifestDoc(label, version, shards.map(row => ({ ...row }))));
+                    if (!(await writeShard(id))) { ok = false; break; }
                 } catch (cause) {
-                    manifestDirty = true;
-                    lastWriteOk = false;
-                    lastError = String(cause?.message || cause);
-                    emit('store-write', { store: label, result: 'error', shard: 'manifest', level: 'error', reason: lastError });
-                    notifyFailure(cause);
-                    ok = false;
+                    dirtyShards.add(id);   // stays pending: next mutation or flush retries
+                    failed = { cause, shard: id };
                     break;
                 }
-                emit('store-write', {
-                    store: label, result: 'success', shard: 'manifest', entries: shards.length,
-                    bytes: totalBytes, ms: Date.now() - started,
-                });
+            }
+            // `failed` too: a shard upload that threw must not be followed by
+            // a manifest naming that shard — the next load would find the row
+            // and not the file, and go readonly ('shard-unreadable').
+            if (ok && !failed && manifestDirty) {
+                manifestDirty = false;
+                try {
+                    if (!(await writeManifest(manifestBase))) ok = false;
+                } catch (cause) {
+                    manifestDirty = true;
+                    failed = { cause, shard: 'manifest' };
+                }
             }
         } finally {
             writeJob = null;
+            suppressMergeOnce = false;   // consumed: the next settle merges again
         }
-        if (ok) { lastWriteOk = true; lastError = null; }
+        if (failed) {
+            ok = false;
+            lastWriteOk = false;
+            lastError = String(failed.cause?.message || failed.cause);
+            emit('store-write', { store: label, result: 'error', shard: failed.shard, level: 'error', reason: lastError });
+            notifyFailure(failed.cause);
+        } else if (ok) {
+            lastWriteOk = true;
+            lastError = null;
+        }
         return ok;
     }
 
@@ -626,6 +759,7 @@ export function createShardedFileStore(config) {
         }
         rebuildMirrorFromShards();   // the mirror must reflect the migrated records
         manifestDirty = true;
+        suppressMergeOnce = true;   // the monolith is the migration authority
         const outcome = await runWriteLoop();
         if (!outcome) return 'unresolved';
         try {
@@ -694,6 +828,7 @@ export function createShardedFileStore(config) {
             dirtyShards = new Set();
             emptyShards = new Set();
             manifestDirty = false;
+            manifestBaseRows = [];
             suppressMergeOnce = false;
             writeJob = null;
             lastWriteOk = true;

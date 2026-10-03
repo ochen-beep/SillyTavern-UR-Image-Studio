@@ -376,3 +376,76 @@ describe('placement', () => {
             'the mirror is rebuilt into canonical newest-first order');
     });
 });
+
+describe('merge per shard', () => {
+    it('a record another tab added to a shard survives our write, sorted by stamp', async () => {
+        const store = makeStore();
+        await store.ready();
+        await store.mutate(list => { list.unshift(card(0)); });
+        // Another tab (same base) added its own newer card directly on the server.
+        const shard = JSON.parse(serverFiles.get(shardName(store, 's0000')));
+        shard.records.unshift(card(50, 1_700_000_050_000));
+        serverFiles.set(shardName(store, 's0000'), JSON.stringify(shard));
+        await store.mutate(list => { list.unshift(card(1)); });
+        await store.flush();
+        const written = JSON.parse(serverFiles.get(shardName(store, 's0000')));
+        assert.deepEqual(written.records.map(r => r.id), ['c0050', 'c0001', 'c0000'],
+            'merged content sorted newest-first within the shard');
+        assert.ok(store.snapshot().some(r => r.id === 'c0050'), 'the mirror adopted it');
+        const manifest = JSON.parse(serverFiles.get(manifestName(store)));
+        assert.equal(manifest.shards[0].count, 3, 'manifest row reflects the merged shard');
+    });
+
+    it('a shard another tab created (unknown to our manifest) is adopted, not clobbered', async () => {
+        const store = makeStore();
+        await store.ready();
+        await store.mutate(list => { list.unshift(card(0)); });
+        // Foreign tab: new shard s0001 + updated manifest.
+        serverFiles.set(shardName(store, 's0001'), JSON.stringify({
+            v: 1, kind: 'shard', store: 'x', id: 's0001',
+            records: [card(100, 1_700_100_000_000)],
+        }));
+        serverFiles.set(manifestName(store), JSON.stringify({
+            v: 1, kind: 'manifest', store: 'x',
+            shards: [
+                { id: 's0000', count: 1, min: 1_700_000_000_000, max: 1_700_000_000_000 },
+                { id: 's0001', count: 1, min: 1_700_100_000_000, max: 1_700_100_000_000 },
+            ],
+        }));
+        await store.mutate(list => { list.unshift(card(1)); });
+        await store.flush();
+        assert.ok(store.snapshot().some(r => r.id === 'c0100'), 'foreign shard records adopted');
+        const manifest = JSON.parse(serverFiles.get(manifestName(store)));
+        assert.deepEqual(manifest.shards.map(s => s.id), ['s0000', 's0001'],
+            'the foreign shard is kept in the manifest');
+        assert.ok(serverFiles.get(shardName(store, 's0001')), 'the foreign shard file survives');
+    });
+
+    it('a shard emptied by deletions is written empty and dropped from the manifest', async () => {
+        const store = makeStore();
+        await store.ready();
+        for (let i = 0; i < 5; i++) await store.mutate(list => { list.unshift(card(i)); });
+        // counts [4,1]: s0001 holds only c0004.
+        await store.mutate(list => {
+            const i = list.findIndex(r => r.id === 'c0004');
+            list.splice(i, 1);
+        });
+        await store.flush();
+        const manifest = JSON.parse(serverFiles.get(manifestName(store)));
+        assert.deepEqual(manifest.shards.map(s => s.id), ['s0000'], 'the emptied shard left the manifest');
+        const emptied = JSON.parse(serverFiles.get(shardName(store, 's0001')));
+        assert.deepEqual(emptied.records, [], 'the file is overwritten empty, not deleted');
+        assert.deepEqual(store.snapshot().map(r => r.id), ['c0003', 'c0002', 'c0001', 'c0000']);
+    });
+
+    it('migration writes clobber (no merge): an interrupted migration converges', async () => {
+        const store = makeStore();
+        serverFiles.set(`t${labelCounter}_old.json`, JSON.stringify({ v: 1, cards: [card(1), card(0)] }));
+        serverFiles.set(shardName(store, 's0000'), JSON.stringify({
+            v: 1, kind: 'shard', store: 'x', id: 's0000', records: [card(0)],
+        }));
+        assert.equal(await store.ready(), 'file');
+        assert.deepEqual(store.snapshot().map(r => r.id), ['c0001', 'c0000'],
+            'the monolith is the migration authority — the partial shard does not eat its records');
+    });
+});
