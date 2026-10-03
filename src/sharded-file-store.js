@@ -29,8 +29,9 @@
  *
  * Modes follow file-store: 'unknown' → 'file' | 'readonly'. Extra refusal
  * reason: 'shard-unreadable' — the manifest names a shard the server cannot
- * deliver (404/corrupt/newer): the merge base is incomplete, so writes are
- * refused for the session instead of silently clobbering the missing part.
+ * deliver (404/corrupt/newer ONLY; a thrown read is transient and retries via
+ * ready()): the merge base is incomplete, so writes are refused for the
+ * session instead of silently clobbering the missing part.
  * A corrupt manifest does not refuse: the shard sequence is gapless by
  * construction, so the manifest is rebuilt by probing shard GETs until the
  * first 404 and re-written (a store with no readable shards starts empty).
@@ -320,9 +321,13 @@ export function createShardedFileStore(config) {
     // ── Load ──
 
     /**
-     * Load every shard the manifest names, in parallel. Any undeliverable
+     * Load every shard the manifest names, in parallel. A genuinely undeliverable
      * shard (404/corrupt/newer) makes the whole store readonly: the merge base
      * would be incomplete and a write could silently clobber the missing part.
+     * A THROWN read (5xx / surface unreachable) is transient, not absence —
+     * it returns null so the caller's detectAndLoadOnce restarts the whole
+     * load via ready() instead of bricking the session readonly.
+     * @returns {Promise<boolean|null>} true loaded, false readonly, null retry
      */
     async function loadShards(rows) {
         const results = await Promise.all(rows.map(async row => {
@@ -335,11 +340,12 @@ export function createShardedFileStore(config) {
                 }
                 return { id: row.id, reason: parsed.reason };
             } catch {
-                return { id: row.id, reason: 'missing' };
+                return { id: row.id, reason: 'transient' };
             }
         }));
         const bad = results.find(result => result.reason !== 'ok');
         if (bad) {
+            if (bad.reason === 'transient') return null;   // not proof of absence — retry via ready()
             mode = 'readonly';
             writeBlockedReason = 'shard-unreadable';
             emit('store-mode', { store: label, result: 'readonly', reason: 'shard-unreadable', shard: bad.id });
@@ -475,6 +481,7 @@ export function createShardedFileStore(config) {
 
         mirror = empty();
         const ok = await loadShards(parsed.value.shards || []);
+        if (ok === null) return null;   // transient shard read — the load retries via ready()
         if (!ok) return mode;
         manifestBaseRows = (parsed.value.shards || []).map(row => ({ ...row }));
         rebuildMirrorFromShards();
@@ -860,6 +867,13 @@ export function createShardedFileStore(config) {
         }
         const body = parsed.reason === 'found' || parsed.reason === 'older' ? parsed.value : null;
         if (body === null) {
+            if (parsed.reason === 'corrupt') {
+                // A corrupt monolith is not a tombstone: come up empty and
+                // loud, leave the file untouched so a hand-fix can migrate
+                // later (mirrors the monolith-shape guard below).
+                emit('store-migrated', { store: label, result: 'error', reason: 'monolith-corrupt' });
+                warn(`sharded-store[${label}]: monolith is corrupt — migration skipped`);
+            }
             // Already migrated (tombstoned monolith): nothing to move, nothing
             // to write — the store simply comes up empty.
             mirror = empty();
@@ -1024,9 +1038,18 @@ export function createShardedFileStore(config) {
          * recovers a missing manifest, nothing recovers a manifest naming a
          * missing shard. Dirty flags are NOT cleared: the write loop
          * re-sending identical content later is harmless.
+         *
+         * The meta satellite (refs folders) flushes here too: a folders-only
+         * edit leaves no shard/manifest dirt, and without this a failed or
+         * in-flight meta upload at pagehide would silently revert the rename
+         * on reload (the pre-sharding monolith flush carried it). Same
+         * fire-and-forget shape — file-store's own guard no-ops it when
+         * nothing is pending.
          */
         flushOnUnload() {
-            if (mode !== 'file' || (!dirtyShards.size && !manifestDirty)) return;
+            if (mode !== 'file') return;
+            if (metaStore) metaStore.flushOnUnload();
+            if (!dirtyShards.size && !manifestDirty) return;
             let sent = 0, skipped = 0, bytes = 0;
             for (const id of [...dirtyShards]) {
                 const state = shardState.get(id);

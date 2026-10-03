@@ -13,6 +13,7 @@ let verifyAvailable = true;
 let failUploads = false;
 let failUploadsOnce = false;     // one-shot: only the next upload fails, then writes recover
 let failReads = new Set();       // names answering 500 on read even if present in serverFiles
+let failReadsOnce = new Set();   // names answering 500 on their NEXT read only, then recovering
 let parkedUploadName = null;     // uploads of this name park in flight until released
 let releaseParkedUpload = null;  // resolver set while an upload is parked
 let missingNames = new Set();    // names answering 404 even if present in serverFiles
@@ -54,6 +55,7 @@ const fetchStub = async (url, options = {}) => {
     if (url.startsWith('/user/files/')) {
         const name = decodeURIComponent(url.slice('/user/files/'.length));
         if (!serverFiles.has(name) || missingNames.has(name)) return { ok: false, status: 404, text: async () => '', json: async () => ({}) };
+        if (failReadsOnce.has(name)) { failReadsOnce.delete(name); return { ok: false, status: 500, text: async () => 'boom', json: async () => ({}) }; }
         if (failReads.has(name)) return { ok: false, status: 500, text: async () => 'boom', json: async () => ({}) };
         return { ok: true, status: 200, text: async () => serverFiles.get(name), json: async () => ({}) };
     }
@@ -102,6 +104,7 @@ beforeEach(() => {
     failUploads = false;
     failUploadsOnce = false;
     failReads = new Set();
+    failReadsOnce = new Set();
     parkedUploadName = null;
     releaseParkedUpload = null;
     toastErrors.length = 0;
@@ -168,6 +171,31 @@ describe('load from manifest', () => {
         missingNames.add(shardName(store, 's0000'));
         assert.equal(await store.ready(), 'readonly');
         assert.match(toastErrors[0], /часть данных/);
+    });
+
+    it('a transient shard-read failure at load retries; the store still comes up file', async t => {
+        // A 5xx shard read is not proof of absence (unlike a 404): the load
+        // must retry via ready() instead of going readonly for the session.
+        // ready() parks on PROBE_RETRY_MS (10 s) between attempts — fake the clock.
+        t.mock.timers.enable({ apis: ['setTimeout'] });
+        const store = makeStore();
+        serverFiles.set(manifestName(store), JSON.stringify({
+            v: 1, kind: 'manifest', store: 'x',
+            shards: [{ id: 's0000', count: 1, min: 1_700_000_000_000, max: 1_700_000_000_000 }],
+        }));
+        serverFiles.set(shardName(store, 's0000'), JSON.stringify({
+            v: 1, kind: 'shard', store: 'x', id: 's0000', records: [card(0)],
+        }));
+        failReadsOnce.add(shardName(store, 's0000'));
+        let settled = false;
+        const ready = store.ready().then(result => { settled = true; return result; });
+        const turn = () => new Promise(resolve => setImmediate(resolve));
+        for (let i = 0; i < 5 && !settled; i++) {
+            await turn();   // let the in-flight attempt settle (fetch stubs are microtask-based)
+            t.mock.timers.tick(10_000);   // fire the retry sleep once attempt 1 scheduled it
+        }
+        assert.equal(await ready, 'file', 'a 5xx shard read is retried, not a session-long readonly');
+        assert.deepEqual(store.snapshot().map(r => r.id), ['c0000'], 'the shard was adopted on the retry');
     });
 
     it('a corrupt manifest is rebuilt by probing the shard sequence and re-written', async () => {
@@ -289,6 +317,31 @@ describe('flush surface', () => {
         await store.mutate(list => { list.unshift(card(0)); });
         assert.equal(await store.flush(), true);
         assert.equal(uploads.filter(u => u.keepalive).length, 0);
+    });
+
+    it('flushOnUnload carries the dirty meta satellite too (folders-only edit)', async () => {
+        // A folders-only edit leaves no shard/manifest dirt; a failed meta
+        // upload leaves its payload pending — at pagehide it must still ride
+        // the keepalive, or the folder rename silently reverts on reload.
+        const n = labelCounter + 1;
+        const store = makeStore({
+            shardedKey: 'refs', append: 'back', placeByStamp: false, monolithKey: 'data',
+            empty: () => ({ refs: [], folders: [] }),
+            countEntries: value => (Array.isArray(value?.refs) ? value.refs.length : null),
+            meta: { name: `t${n}_meta.json`, keys: ['folders'], empty: () => ({ folders: [] }) },
+        });
+        await store.ready();
+        failUploadsOnce = true;   // the meta upload fails exactly once …
+        await store.mutate(data => { data.folders.push({ id: 'f1', name: 'x' }); });
+        // store.flush() reports the SHARD store's ok (true — no shard writes
+        // were attempted); the pending meta payload is what must not die here.
+        store.flushOnUnload();   // …the folder edit is still pending at pagehide
+        const metaFlush = uploads.find(u => u.keepalive && u.name === `t${n}_meta.json`);
+        assert.ok(metaFlush, 'the dirty meta file rides the unload flush');
+        assert.equal(
+            JSON.parse(Buffer.from(metaFlush.data, 'base64').toString('utf8')).data.folders[0].id, 'f1',
+            'the pending folder edit is inside the flushed payload',
+        );
     });
 
     it('flushOnUnload sends small dirty shards and the manifest with keepalive', async () => {
@@ -479,6 +532,20 @@ describe('migration from monolith', () => {
         assert.equal(uploads.length, 0, 'a misshapen monolith is never migrated nor written over');
         assert.equal(JSON.parse(serverFiles.get(monolith)).cards.foo, 1,
             'the monolith is not tombstoned — a hand-fix can migrate later');
+    });
+
+    it('a corrupt monolith comes up empty and loud, preserving the file', async () => {
+        const store = makeStore();
+        const monolith = `t${labelCounter}_old.json`;
+        serverFiles.set(monolith, '{ not json');
+        assert.equal(await store.ready(), 'file');
+        assert.deepEqual(store.snapshot(), []);
+        assert.equal(uploads.length, 0, 'a corrupt monolith is never migrated nor written over');
+        assert.equal(serverFiles.get(monolith), '{ not json', 'the corrupt file is left untouched');
+        const migrated = journal.listDiagnosticEvents().find(e => e.event === 'store-migrated');
+        assert.ok(migrated, 'the corrupt-monolith skip is loud in the journal');
+        assert.equal(migrated.outcome, 'error');
+        assert.equal(migrated.details.reason, 'monolith-corrupt');
     });
 
     it('a refs monolith whose sharded collection is not an array comes up empty, preserving the companion data', async () => {
