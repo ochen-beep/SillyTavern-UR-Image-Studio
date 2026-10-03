@@ -12,6 +12,9 @@ const uploads = [];              // { name, data, keepalive }
 let verifyAvailable = true;
 let failUploads = false;
 let failUploadsOnce = false;     // one-shot: only the next upload fails, then writes recover
+let failReads = new Set();       // names answering 500 on read even if present in serverFiles
+let parkedUploadName = null;     // uploads of this name park in flight until released
+let releaseParkedUpload = null;  // resolver set while an upload is parked
 let missingNames = new Set();    // names answering 404 even if present in serverFiles
 
 const originalSt = globalThis.SillyTavern;
@@ -40,6 +43,9 @@ const fetchStub = async (url, options = {}) => {
     if (url === '/api/files/upload' && options.method === 'POST') {
         const body = JSON.parse(options.body);
         uploads.push({ ...body, keepalive: options.keepalive === true });
+        if (body.name === parkedUploadName && releaseParkedUpload === null) {
+            await new Promise(resolve => { releaseParkedUpload = resolve; });
+        }
         if (failUploads) return { ok: false, status: 500, text: async () => 'boom' };
         if (failUploadsOnce) { failUploadsOnce = false; return { ok: false, status: 500, text: async () => 'boom' }; }
         serverFiles.set(body.name, Buffer.from(body.data, 'base64').toString('utf8'));
@@ -48,6 +54,7 @@ const fetchStub = async (url, options = {}) => {
     if (url.startsWith('/user/files/')) {
         const name = decodeURIComponent(url.slice('/user/files/'.length));
         if (!serverFiles.has(name) || missingNames.has(name)) return { ok: false, status: 404, text: async () => '', json: async () => ({}) };
+        if (failReads.has(name)) return { ok: false, status: 500, text: async () => 'boom', json: async () => ({}) };
         return { ok: true, status: 200, text: async () => serverFiles.get(name), json: async () => ({}) };
     }
     return { ok: true, status: 200, json: async () => ({}), text: async () => '' };
@@ -93,6 +100,9 @@ beforeEach(() => {
     verifyAvailable = true;
     failUploads = false;
     failUploadsOnce = false;
+    failReads = new Set();
+    parkedUploadName = null;
+    releaseParkedUpload = null;
     toastErrors.length = 0;
     installStubs();
     resetFileStoresForTests();
@@ -447,5 +457,123 @@ describe('merge per shard', () => {
         assert.equal(await store.ready(), 'file');
         assert.deepEqual(store.snapshot().map(r => r.id), ['c0001', 'c0000'],
             'the monolith is the migration authority — the partial shard does not eat its records');
+    });
+
+    it('a record adopted by a merge is never re-placed by a later settle (no duplicates)', async () => {
+        const store = makeStore();
+        await store.ready();
+        await store.mutate(list => { list.unshift(card(0)); });
+        const shard = JSON.parse(serverFiles.get(shardName(store, 's0000')));
+        shard.records.unshift(card(50, 1_700_000_050_000));
+        serverFiles.set(shardName(store, 's0000'), JSON.stringify(shard));
+        await store.mutate(list => { list.unshift(card(1)); });   // merge-adopts c0050
+        await store.mutate(list => { list.unshift(card(2)); });   // the settle that used to re-place it
+        const placed = [];
+        for (const [name, text] of serverFiles) {
+            if (!name.startsWith(store.shardPrefix)) continue;
+            for (const record of JSON.parse(text).records) placed.push(record.id);
+        }
+        assert.equal(placed.filter(id => id === 'c0050').length, 1,
+            'c0050 lives in exactly one shard, exactly once');
+        const manifest = JSON.parse(serverFiles.get(manifestName(store)));
+        assert.equal(manifest.shards.reduce((sum, s) => sum + s.count, 0), store.snapshot().length,
+            'manifest counts sum to the mirror size');
+        const ids = store.snapshot().map(r => r.id);
+        assert.equal(new Set(ids).size, ids.length, 'no duplicate ids in the mirror');
+    });
+
+    it('an edit of a merge-adopted record updates it in place, without duplicating it', async () => {
+        const store = makeStore();
+        await store.ready();
+        await store.mutate(list => { list.unshift(card(0)); });
+        const shard = JSON.parse(serverFiles.get(shardName(store, 's0000')));
+        shard.records.unshift(card(50, 1_700_000_050_000));
+        serverFiles.set(shardName(store, 's0000'), JSON.stringify(shard));
+        await store.mutate(list => { list.unshift(card(1)); });   // merge-adopts c0050
+        await store.mutate(list => {
+            const item = list.find(r => r.id === 'c0050');
+            item.prompt = 'edited';
+        });
+        const written = JSON.parse(serverFiles.get(shardName(store, 's0000')));
+        const copies = written.records.filter(r => r.id === 'c0050');
+        assert.equal(copies.length, 1, 'c0050 appears in its shard exactly once');
+        assert.equal(copies[0].prompt, 'edited', 'the edit landed');
+    });
+
+    it('an undeliverable foreign shard aborts the manifest write; the row survives once it reads', async () => {
+        const store = makeStore();
+        await store.ready();
+        await store.mutate(list => { list.unshift(card(0)); });
+        serverFiles.set(shardName(store, 's0001'), JSON.stringify({
+            v: 1, kind: 'shard', store: 'x', id: 's0001', records: [card(100, 1_700_100_000_000)],
+        }));
+        serverFiles.set(manifestName(store), JSON.stringify({
+            v: 1, kind: 'manifest', store: 'x',
+            shards: [
+                { id: 's0000', count: 1, min: 1_700_000_000_000, max: 1_700_000_000_000 },
+                { id: 's0001', count: 1, min: 1_700_100_000_000, max: 1_700_100_000_000 },
+            ],
+        }));
+        failReads.add(shardName(store, 's0001'));
+        await store.mutate(list => { list.unshift(card(1)); });   // shard uploads, manifest write aborts
+        assert.equal(await store.flush(), false, 'the aborted manifest write is reported as unfinished');
+        const untouched = JSON.parse(serverFiles.get(manifestName(store)));
+        assert.deepEqual(untouched.shards.map(s => s.id), ['s0000', 's0001'],
+            'the server manifest was not clobbered by the aborted write');
+        assert.deepEqual(store.snapshot().map(r => r.id), ['c0001', 'c0000'],
+            'the mirror is untouched by the abort');
+        failReads.delete(shardName(store, 's0001'));
+        await store.mutate(list => { list.unshift(card(2)); });   // retry: the adoption succeeds now
+        assert.equal(await store.flush(), true);
+        const manifest = JSON.parse(serverFiles.get(manifestName(store)));
+        assert.deepEqual(manifest.shards.map(s => s.id), ['s0000', 's0001'], 'the foreign row is preserved');
+        assert.ok(store.snapshot().some(r => r.id === 'c0100'), 'the adopted records reached the mirror');
+    });
+
+    it('a 404 foreign shard may drop its manifest row (nothing to orphan)', async () => {
+        const store = makeStore();
+        await store.ready();
+        await store.mutate(list => { list.unshift(card(0)); });
+        serverFiles.set(manifestName(store), JSON.stringify({
+            v: 1, kind: 'manifest', store: 'x',
+            shards: [
+                { id: 's0000', count: 1, min: 1_700_000_000_000, max: 1_700_000_000_000 },
+                { id: 's0001', count: 1, min: 1_700_100_000_000, max: 1_700_100_000_000 },
+            ],
+        }));
+        missingNames.add(shardName(store, 's0001'));
+        await store.mutate(list => { list.unshift(card(1)); });
+        assert.equal(await store.flush(), true, 'a 404 row is droppable, the write proceeds');
+        const manifest = JSON.parse(serverFiles.get(manifestName(store)));
+        assert.deepEqual(manifest.shards.map(s => s.id), ['s0000'], 'the row-less shard left the manifest');
+    });
+});
+
+describe('write-loop races', () => {
+    it('a mutation coalesced into an in-flight empty-shard overwrite keeps the shard alive', async () => {
+        const store = makeStore();
+        await store.ready();
+        for (let i = 0; i < 5; i++) await store.mutate(list => { list.unshift(card(i)); });
+        // counts [4,1]: deleting c0004 empties s0001 → the loop parks on its empty overwrite…
+        parkedUploadName = shardName(store, 's0001');
+        const deleting = store.mutate(list => {
+            const i = list.findIndex(r => r.id === 'c0004');
+            list.splice(i, 1);
+        });
+        const turn = () => new Promise(resolve => setImmediate(resolve));
+        for (let i = 0; i < 10 && releaseParkedUpload === null; i++) await turn();
+        assert.ok(releaseParkedUpload, 'the empty overwrite is parked in flight');
+        // …and this mutation lands while it is parked: c0009 is placed into the dying s0001.
+        const late = store.mutate(list => { list.unshift(card(9, 1_700_000_009_000)); });
+        for (let i = 0; i < 5; i++) await turn();
+        releaseParkedUpload();
+        await Promise.all([deleting, late]);
+        const written = JSON.parse(serverFiles.get(shardName(store, 's0001')));
+        assert.deepEqual(written.records.map(r => r.id), ['c0009'],
+            'the shard survives with the coalesced record, not deleted-by-drop');
+        const manifest = JSON.parse(serverFiles.get(manifestName(store)));
+        assert.deepEqual(manifest.shards.map(s => s.count), [4, 1]);
+        assert.ok(store.snapshot().some(r => r.id === 'c0009'));
+        assert.equal(await store.flush(), true);
     });
 });

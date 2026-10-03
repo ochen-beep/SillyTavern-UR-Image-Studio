@@ -546,29 +546,40 @@ export function createShardedFileStore(config) {
         if (append === 'front') {
             records.sort((a, b) => placeStamp(b) - placeStamp(a));
         }
+        // Merged-in foreign records must join the placement registry, or the
+        // next sync would see them as unplaced and re-place them as new —
+        // duplicating them across (or within) shards, persistent on reload.
+        for (const record of records) {
+            const key = String(record.id);
+            if (!recordShard.has(key)) recordShard.set(key, id);
+        }
         state.records = records;
         recomputeRow(id);
         rebuildMirrorFromShards();
     }
 
     /**
-     * Load and merge a shard this session has never seen (another tab made it).
-     * An empty shard carries nothing to adopt — and skipping it is what keeps
-     * a shard this session just emptied and dropped from being resurrected by
-     * its own manifest row in the same write.
+     * Load a shard this session has never seen (another tab made it).
+     * @returns {Promise<'adopted'|'missing'|'error'>}
+     *   'adopted' — records fetched and registered;
+     *   'missing' — 404, or an empty file (nothing to adopt, an emptied
+     *   shard): the row may be dropped from the manifest;
+     *   'error'   — unreachable / corrupt / newer build: NOT proof of
+     *   absence, the row must not be silently dropped.
      */
     async function adoptForeignShard(row) {
+        let text;
         try {
-            const text = await readFile(shardFileName(row.id));
-            if (text === null) return false;
-            const parsed = parseShard(text, version);
-            if (parsed.reason !== 'found' && parsed.reason !== 'older') return false;
-            if (!parsed.value.length) return false;
-            adoptShard(row.id, parsed.value);
-            return true;
+            text = await readFile(shardFileName(row.id));
         } catch {
-            return false;
+            return 'error';   // transient read failure — the shard may be healthy
         }
+        if (text === null) return 'missing';
+        const parsed = parseShard(text, version);
+        if (parsed.reason !== 'found' && parsed.reason !== 'older') return 'error';
+        if (!parsed.value.length) return 'missing';
+        adoptShard(row.id, parsed.value);
+        return 'adopted';
     }
 
     /**
@@ -591,9 +602,14 @@ export function createShardedFileStore(config) {
     /**
      * Upload the manifest. Foreign shard rows unknown to this session are
      * adopted first (their records fetched and merged into the mirror), then
-     * the row set is three-way merged (base = our rows at loop start) so
-     * foreign deletions of untouched shards are honored. Rows without local
-     * shard state (undeliverable adoption) are skipped, never invented.
+     * the row set is three-way merged (base = our rows as of the last landed
+     * manifest write). KNOWN LIMITATION, shared with the sibling store's
+     * whole-document merge: a row another tab deleted while we never touched
+     * its shard can be resurrected by our write — without tombstones the
+     * merge cannot tell a foreign deletion from a stale read. An adoption
+     * that fails for any reason other than 404 aborts the write (the row
+     * stays queued); rows without local shard state are skipped, never
+     * invented.
      */
     async function writeManifest(manifestBase) {
         const started = Date.now();
@@ -602,7 +618,11 @@ export function createShardedFileStore(config) {
             const text = await readFile(manifestName);
             if (text !== null) {
                 const parsed = parseManifest(text, version);
-                if (parsed.reason === 'newer') { refusePersist('newer-version'); return false; }
+                if (parsed.reason === 'newer') {
+                    refusePersist('newer-version');
+                    manifestDirty = true;   // refusals do not consume the queued work
+                    return false;
+                }
                 if (parsed.reason === 'found' || parsed.reason === 'older') serverRows = parsed.value.shards;
                 // corrupt → our rows are the only source: the write rebuilds
             }
@@ -610,7 +630,15 @@ export function createShardedFileStore(config) {
         if (serverRows) {
             for (const row of serverRows) {
                 if (rowFor(row.id)) continue;
-                await adoptForeignShard(row);
+                if (await adoptForeignShard(row) === 'error') {
+                    // Not proof of absence (5xx / corrupt / newer build):
+                    // dropping the row would orphan live foreign data, a
+                    // newer build's row would be clobbered. Abort the write —
+                    // the next settle re-reads the manifest and retries.
+                    manifestDirty = true;
+                    lastWriteOk = false;   // flush() must report the unfinished write
+                    return false;
+                }
             }
             if (shards.some(row => !manifestBase.some(baseRow => baseRow.id === row.id))) {
                 rebuildMirrorFromShards();   // adopted records must reach the mirror
@@ -643,13 +671,24 @@ export function createShardedFileStore(config) {
                     // The shard lost every record: overwrite it empty (no
                     // DELETE route) and drop it from the manifest.
                     emptyShards.delete(id);
+                    const started = Date.now();
                     try {
-                        await uploadDoc(shardFileName(id), shardDoc(label, version, id, []));
+                        const bytes = await uploadDoc(shardFileName(id), shardDoc(label, version, id, []));
+                        emit('store-write', { store: label, result: 'success', shard: id, entries: 0, bytes, ms: Date.now() - started });
                     } catch (cause) {
                         dirtyShards.add(id);
                         emptyShards.add(id);
                         failed = { cause, shard: id };
                         break;
+                    }
+                    // A mutation coalesced while the empty overwrite was in
+                    // flight may have placed records into the dying shard.
+                    // Re-validate before dropping, or recordShard would keep
+                    // pointing at deleted state and every later settle would
+                    // throw on it.
+                    if ((shardState.get(id)?.records.length ?? 0) > 0) {
+                        dirtyShards.add(id);   // stays alive; the merge-write below replaces the empty file
+                        continue;
                     }
                     shardState.delete(id);
                     shards = shards.filter(row => row.id !== id);
@@ -729,6 +768,9 @@ export function createShardedFileStore(config) {
         const records = body === null ? []
             : (shardedKey ? (Array.isArray(body[shardedKey]) ? body[shardedKey] : []) : body);
         if (shardedKey === null && !Array.isArray(records)) {
+            // Task 7: refs-shaped monolith guard — a refs monolith whose
+            // `shardedKey` array is corrupt currently migrates empty and
+            // tombstones; it needs the same honest early-out as the gallery.
             // A hand-corrupted gallery monolith (`cards` holding an object)
             // would crash `oldestFirst` and brick the session on a memoized
             // rejected ready(). Come up empty and loud instead — the mirror is
@@ -748,6 +790,7 @@ export function createShardedFileStore(config) {
         recordShard = new Map();
         dirtyShards = new Set();
         emptyShards = new Set();
+        manifestBaseRows = [];
         manifestDirty = false;
         const ordered = oldestFirst(records);
         for (let i = 0; i < ordered.length; i += shardTarget) {
