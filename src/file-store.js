@@ -67,13 +67,13 @@ const UPLOAD_URL = '/api/files/upload';
 
 const STORES = new Map();   // label → store, for the diagnostics panel
 
-function stHeaders() {
+export function stHeaders() {
     const h = getCtx()?.getRequestHeaders?.();
     return { ...(h && typeof h === 'object' ? h : {}), 'Content-Type': 'application/json' };
 }
 
 /** UTF-8-safe base64 (stored values are user text, not Latin1). */
-function textToBase64(text) {
+export function textToBase64(text) {
     const bytes = new TextEncoder().encode(String(text));
     let binary = '';
     for (let i = 0; i < bytes.length; i += 0x8000) {
@@ -210,7 +210,7 @@ function mergeRecordArray(baseArr, serverArr, localArr) {
 }
 
 /** Merge a whole document value; see `mergeRecordArray`. Null = nothing to change. */
-function mergeServerValue(baseValue, serverValue, localValue) {
+export function mergeServerValue(baseValue, serverValue, localValue) {
     const rl = asRecordArray(localValue), rs = asRecordArray(serverValue);
     if (rl && rs) return mergeRecordArray(asRecordArray(baseValue) || [], rs, rl);
     if (isPlainObject(serverValue) && isPlainObject(localValue)) {
@@ -802,7 +802,7 @@ export function createFileStore(config) {
         },
     };
 
-    STORES.set(label, store);
+    registerFileStoreForDiagnostics(store);
     return store;
 }
 
@@ -819,6 +819,27 @@ export function flushAllFileStoresOnUnload() {
 /** Await durability of every registered store (import paths and tests). */
 export function flushAllFileStores() {
     return Promise.all([...STORES.values()].map(store => store.flush()));
+}
+
+/**
+ * Version-contract parse for the sharded sibling: same refusal rules as
+ * `parseDoc` (corrupt / newer / older / found) without the `[key]` extraction —
+ * sharded docs carry `kind`/`store`/`id` alongside `v`, and the manifest value
+ * is the whole body. `value` of `newer`/`found`/`older` is the whole doc.
+ */
+export function parseVersionedDoc(text, { version }) {
+    let doc;
+    try { doc = JSON.parse(text); } catch { return { reason: 'corrupt' }; }
+    if (!doc || typeof doc !== 'object') return { reason: 'corrupt' };
+    if (typeof doc.v === 'number' && doc.v > version) return { reason: 'newer', value: doc };
+    if (doc.v === version) return { reason: 'found', value: doc };
+    if (typeof doc.v === 'number' && doc.v < version) return { reason: 'older', value: doc };
+    return { reason: 'corrupt' };
+}
+
+/** Diagnostics registry lives in file-store; the sharded store registers here too. */
+export function registerFileStoreForDiagnostics(store) {
+    STORES.set(store.label, store);
 }
 
 /**
