@@ -184,6 +184,11 @@ describe('load from manifest', () => {
         const rebuilt = JSON.parse(serverFiles.get(manifestName(store)));
         assert.deepEqual(rebuilt.shards.map(s => s.id), ['s0000', 's0001']);
         assert.deepEqual(rebuilt.shards.map(s => s.count), [2, 1]);
+        const recovered = journal.listDiagnosticEvents().find(e => e.event === 'store-recovered');
+        assert.ok(recovered, 'the happy rebuild is observable in the journal');
+        assert.equal(recovered.outcome, 'ok');
+        assert.equal(recovered.details.shards, 2);
+        assert.equal(recovered.details.entries, 3);
     });
 
     it('a corrupt manifest is rebuilt; the next mutation writes only its own shard', async () => {
@@ -218,6 +223,63 @@ describe('load from manifest', () => {
         const shard = JSON.parse(serverFiles.get(shardName(store, 's0000')));
         assert.deepEqual(shard.records.map(r => r.id), ['c0001', 'c0000']);
     });
+
+    it('a transient failure during manifest recovery retries; ready() resolves file afterwards', async t => {
+        // ready() parks on PROBE_RETRY_MS (10 s) between attempts — fake the clock.
+        t.mock.timers.enable({ apis: ['setTimeout'] });
+        const store = makeStore();
+        serverFiles.set(manifestName(store), '{ not json');
+        serverFiles.set(shardName(store, 's0000'), JSON.stringify({
+            v: 1, kind: 'shard', store: 'x', id: 's0000', records: [card(0)],
+        }));
+        failUploadsOnce = true;   // the recovery's manifest upload fails exactly once
+        let settled = false;
+        const ready = store.ready().then(result => { settled = true; return result; });
+        const turn = () => new Promise(resolve => setImmediate(resolve));
+        for (let i = 0; i < 5 && !settled; i++) {
+            await turn();   // let the in-flight attempt settle (fetch stubs are microtask-based)
+            t.mock.timers.tick(10_000);   // fire the retry sleep once attempt 1 scheduled it
+        }
+        assert.equal(await ready, 'file',
+            'a failed recovery write is retried, not memoized as a rejection');
+        assert.deepEqual(store.snapshot().map(r => r.id), ['c0000'], 'the shard was adopted on the retry');
+        const manifest = JSON.parse(serverFiles.get(manifestName(store)));
+        assert.deepEqual(manifest.shards.map(s => s.id), ['s0000'], 'the manifest was rewritten');
+    });
+
+    it('a persistently failing recovery keeps ready() pending, never rejected', async t => {
+        t.mock.timers.enable({ apis: ['setTimeout'] });
+        const store = makeStore();
+        serverFiles.set(manifestName(store), '{ not json');
+        serverFiles.set(shardName(store, 's0000'), JSON.stringify({
+            v: 1, kind: 'shard', store: 'x', id: 's0000', records: [card(0)],
+        }));
+        failUploads = true;   // every recovery write fails
+        let settled = false;
+        let rejected = false;
+        const ready = store.ready().then(
+            result => { settled = true; return result; },
+            () => { rejected = true; },
+        );
+        const turn = () => new Promise(resolve => setImmediate(resolve));
+        for (let i = 0; i < 4; i++) {
+            await turn();
+            t.mock.timers.tick(10_000);   // two full retry windows
+            await turn();
+        }
+        assert.equal(settled, false, 'ready() stays pending while recovery keeps failing');
+        assert.equal(rejected, false, 'the memoized promise never rejects');
+    });
+
+    it('a corrupt manifest with no readable shards starts empty — no writes, no recovered event', async () => {
+        const store = makeStore();
+        serverFiles.set(manifestName(store), '{ not json');
+        assert.equal(await store.ready(), 'file');
+        assert.deepEqual(store.snapshot(), []);
+        assert.equal(uploads.length, 0, 'nothing recoverable — the store starts empty without writes');
+        assert.equal(journal.listDiagnosticEvents().some(e => e.event === 'store-recovered'), false,
+            'no recovery event when nothing was recovered');
+    });
 });
 
 describe('flush surface', () => {
@@ -229,7 +291,7 @@ describe('flush surface', () => {
         assert.equal(uploads.filter(u => u.keepalive).length, 0);
     });
 
-    it('flushOnUnload sends small dirty shards with keepalive and skips big ones', async () => {
+    it('flushOnUnload sends small dirty shards and the manifest with keepalive', async () => {
         // mutate() awaits its write, so a dirty shard only exists at unload
         // time when the write FAILED (the loop re-queued it) — the same
         // "payload stays pending, unload flush retries it" state as file-store.
@@ -240,14 +302,33 @@ describe('flush surface', () => {
         failUploads = false;
         small.flushOnUnload();
         assert.ok(uploads.some(u => u.keepalive), 'a small dirty shard rides the keepalive');
+        assert.ok(uploads.some(u => u.keepalive && u.name === manifestName(small)),
+            'the manifest rides too when every dirty shard flew (skipped === 0)');
+        const flush = journal.listDiagnosticEvents().find(e => e.event === 'store-unload-flush');
+        assert.ok(flush, 'the aggregated unload-flush event is observable');
+        assert.equal(flush.outcome, 'sent');
+        assert.equal(flush.details.shards, 2, 'one shard + the manifest ride');
+        assert.equal(flush.details.skipped, 0);
+    });
+
+    it('flushOnUnload does not send the manifest when it skipped a dirty shard for size', async () => {
+        // A manifest naming a shard file the server never received would leave
+        // the next session permanently readonly ('shard-unreadable') — a
+        // reload cannot fix that. A MISSING manifest is what rebuildFromScan
+        // recovers from, so the manifest stays behind on purpose.
         const big = makeStore({ keepaliveLimit: 10 });
         await big.ready();
         failUploads = true;
         await big.mutate(list => { list.unshift(card(0)); });
         failUploads = false;
-        const before = uploads.filter(u => u.keepalive).length;
-        big.flushOnUnload();   // payload way over 10 bytes → skipped honestly
-        assert.equal(uploads.filter(u => u.keepalive).length, before, 'over-limit flush is skipped');
+        big.flushOnUnload();   // shard payload way over 10 bytes → skipped honestly
+        assert.equal(uploads.some(u => u.keepalive), false, 'over-limit flush is skipped');
+        assert.equal(uploads.some(u => u.name === manifestName(big)), false,
+            'the manifest never rides over a skipped shard');
+        const flush = journal.listDiagnosticEvents().find(e => e.event === 'store-unload-flush');
+        assert.ok(flush, 'the skip is loud even when nothing flew');
+        assert.equal(flush.outcome, 'skipped');
+        assert.equal(flush.details.skipped, 1);
     });
 
     it('footprint reports manifest file, total entries and last write bytes', async () => {

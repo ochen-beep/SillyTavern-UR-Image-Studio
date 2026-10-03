@@ -356,7 +356,19 @@ export function createShardedFileStore(config) {
      * are gapless s0000…sNNNN by construction, so the sequence is recoverable
      * by probing GETs until the first 404 (user-files has no directory
      * listing). Every readable shard is adopted; the rebuilt manifest is
-     * written immediately so the next session does not re-probe.
+     * written immediately so the next session does not re-probe. The probe
+     * loop catches its own read throws per file (a transient shard read just
+     * ends the scan); a throw OUT of this function means the recovery WRITE
+     * (the manifest upload) failed — the caller returns `null` so ready()
+     * retries the whole load from scratch, which is idempotent: this
+     * function resets the placement state before re-probing.
+     *
+     * Known limit of the gapless probe: a shrinking `replace()` can leave
+     * surplus old shard files on the server; if the manifest is later
+     * corrupted, those stale files are re-adopted — records resurrect rather
+     * than vanish, which is the acceptable direction. A future change may
+     * overwrite surplus files during the recovery; until then this stays a
+     * recovery-path-only limit.
      */
     async function rebuildFromScan() {
         shards = [];
@@ -446,7 +458,17 @@ export function createShardedFileStore(config) {
             mirror = empty();
             mode = 'file';
             writeBlockedReason = null;
-            await rebuildFromScan();
+            // A transient failure in the recovery WRITE (the only unwrapped
+            // throwing calls left inside rebuildFromScan) must not memoize a
+            // rejected readyPromise — that would brick every ready()/mutate()
+            // caller for the session. Return null instead: ready() re-probes,
+            // the (still corrupt) manifest is re-read and the scan re-runs —
+            // idempotent, the scan resets its own placement state first.
+            try {
+                await rebuildFromScan();
+            } catch {
+                return null;   // recovery write failed transiently — retry via ready()
+            }
             emit('store-mode', { store: label, result: 'file', reason: 'corrupt-manifest' });
             return mode;
         }
@@ -972,9 +994,12 @@ export function createShardedFileStore(config) {
          * Last-chance durability on page unload: dirty shards whose payloads
          * fit the keepalive cap fly with `keepalive: true` (idempotent
          * full-file writes). Over-limit shards are skipped with one aggregated
-         * event — the same honest behavior as file-store, at shard size.
-         * Dirty flags are NOT cleared: the write loop re-sending identical
-         * content later is harmless.
+         * event — the same honest behavior as file-store, at shard size. The
+         * manifest is sent only when every dirty shard flew: a skipped shard
+         * means the manifest stays behind on purpose — rebuildFromScan
+         * recovers a missing manifest, nothing recovers a manifest naming a
+         * missing shard. Dirty flags are NOT cleared: the write loop
+         * re-sending identical content later is harmless.
          */
         flushOnUnload() {
             if (mode !== 'file' || (!dirtyShards.size && !manifestDirty)) return;
@@ -995,7 +1020,11 @@ export function createShardedFileStore(config) {
                     bytes += json.length;
                 } catch { /* nothing else can be done during teardown */ }
             }
-            if (manifestDirty) {
+            // Suppressed when any shard was skipped: a manifest naming a file
+            // the server cannot deliver would leave the next session
+            // permanently readonly ('shard-unreadable') — a reload cannot fix
+            // that; a MISSING manifest is the recoverable state.
+            if (manifestDirty && !skipped) {
                 const json = JSON.stringify(manifestDoc(label, version, shards.map(row => ({ ...row }))));
                 if (json.length <= keepaliveLimit) {
                     try {
