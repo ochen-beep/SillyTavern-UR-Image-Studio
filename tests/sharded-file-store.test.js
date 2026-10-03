@@ -112,3 +112,46 @@ after(() => {
     globalThis.fetch = originalFetch;
     globalThis.toastr = originalToastr;
 });
+
+describe('load from manifest', () => {
+    it('assembles the mirror newest-first across shards (gallery order)', async () => {
+        const store = makeStore();
+        serverFiles.set(manifestName(store), JSON.stringify({
+            v: 1, kind: 'manifest', store: 'x',
+            shards: [
+                { id: 's0000', count: 2, min: 1000, max: 2000 },
+                { id: 's0001', count: 2, min: 3000, max: 4000 },
+            ],
+        }));
+        // s0000 = the OLDEST two, stored newest-first inside the shard.
+        serverFiles.set(shardName(store, 's0000'), JSON.stringify({
+            v: 1, kind: 'shard', store: 'x', id: 's0000',
+            records: [card(1, 2000), card(0, 1000)],
+        }));
+        serverFiles.set(shardName(store, 's0001'), JSON.stringify({
+            v: 1, kind: 'shard', store: 'x', id: 's0001',
+            records: [card(3, 4000), card(2, 3000)],
+        }));
+        assert.equal(await store.ready(), 'file');
+        assert.deepEqual(store.snapshot().map(r => r.id), ['c0003', 'c0002', 'c0001', 'c0000']);
+        assert.equal(uploads.length, 0, 'a clean load writes nothing');
+    });
+
+    it('a newer-version manifest makes the store readonly', async () => {
+        const store = makeStore();
+        serverFiles.set(manifestName(store), JSON.stringify({ v: 99, kind: 'manifest', store: 'x', shards: [] }));
+        assert.equal(await store.ready(), 'readonly');
+        assert.equal(toastErrors.length, 1);
+    });
+
+    it('a shard the manifest names but the server cannot deliver → readonly + toast', async () => {
+        const store = makeStore();
+        serverFiles.set(manifestName(store), JSON.stringify({
+            v: 1, kind: 'manifest', store: 'x',
+            shards: [{ id: 's0000', count: 1, min: 1, max: 1 }],
+        }));
+        missingNames.add(shardName(store, 's0000'));
+        assert.equal(await store.ready(), 'readonly');
+        assert.match(toastErrors[0], /часть данных/);
+    });
+});

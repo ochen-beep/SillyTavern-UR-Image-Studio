@@ -125,6 +125,7 @@ export function createShardedFileStore(config) {
         label,
         manifestName,
         shardPrefix,
+        version = 1,
         monolithName = null,
         monolithKey = 'data',
         shardTarget = 250,
@@ -201,7 +202,167 @@ export function createShardedFileStore(config) {
         } catch { /* no toastr in tests */ }
     }
 
-    // ── Placement state helpers ── (filled in Task 3)
+    // ── Placement state helpers ──
+
+    function rowFor(id) { return shards.find(row => row.id === id); }
+
+    function recomputeRow(id) {
+        const state = shardState.get(id);
+        const row = rowFor(id);
+        let min = null, max = null;
+        for (const record of state.records) {
+            const stamp = placeStamp(record);
+            if (min === null || stamp < min) min = stamp;
+            if (max === null || stamp > max) max = stamp;
+        }
+        row.count = state.records.length;
+        row.min = min;
+        row.max = max;
+    }
+
+    function nextShardId() {
+        const last = shards.length ? shards[shards.length - 1].id : null;
+        const n = last ? parseInt(last.slice(1), 10) + 1 : 0;
+        return 's' + String(n).padStart(4, '0');
+    }
+
+    /** Register a shard's records as the local state for `id` (no dirt). */
+    function adoptShard(id, records) {
+        shardState.set(id, { records, base: clone(records) });
+        for (const record of records) recordShard.set(String(record.id), id);
+        shards.push({ id, count: records.length, min: null, max: null });
+        recomputeRow(id);
+    }
+
+    /** The logical collection in mirror order, per `shardedKey`. */
+    function recordList() {
+        if (shardedKey) return Array.isArray(mirror?.[shardedKey]) ? mirror[shardedKey] : [];
+        return Array.isArray(mirror) ? mirror : [];
+    }
+
+    /**
+     * Rebuild the mirror from shard state. Rows are kept sorted by id ASC
+     * (oldest first). Gallery shards store newest-first, so the newest-first
+     * mirror (`append: 'front'`) concatenates shards in REVERSE id order; refs
+     * shards keep insertion order (`append: 'back'`) and concatenate ASC.
+     */
+    function rebuildMirrorFromShards() {
+        shards.sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+        const ordered = append === 'front' ? [...shards].reverse() : shards;
+        const list = ordered.flatMap(row => shardState.get(row.id).records);
+        if (shardedKey) { mirror[shardedKey] = list; return; }
+        mirror = list;
+    }
+
+    // ── Load ──
+
+    /**
+     * Load every shard the manifest names, in parallel. Any undeliverable
+     * shard (404/corrupt/newer) makes the whole store readonly: the merge base
+     * would be incomplete and a write could silently clobber the missing part.
+     */
+    async function loadShards(rows) {
+        const results = await Promise.all(rows.map(async row => {
+            try {
+                const text = await readFile(shardFileName(row.id));
+                if (text === null) return { id: row.id, reason: 'missing' };
+                const parsed = parseShard(text, version);
+                if (parsed.reason === 'found' || parsed.reason === 'older') {
+                    return { id: row.id, reason: 'ok', records: parsed.value };
+                }
+                return { id: row.id, reason: parsed.reason };
+            } catch {
+                return { id: row.id, reason: 'missing' };
+            }
+        }));
+        const bad = results.find(result => result.reason !== 'ok');
+        if (bad) {
+            mode = 'readonly';
+            emit('store-mode', { store: label, result: 'readonly', reason: 'shard-unreadable', shard: bad.id });
+            log(`sharded-store[${label}]: mode=readonly (shard ${bad.id} ${bad.reason})`);
+            refusePersist('shard-unreadable');
+            return false;
+        }
+        for (const result of results) adoptShard(result.id, result.records);
+        return true;
+    }
+
+    async function detectAndLoadOnce() {
+        const started = Date.now();
+        let probe;
+        try {
+            probe = await fetch('/api/files/verify', { method: 'POST', headers: stHeaders(), body: JSON.stringify({ urls: [] }) });
+        } catch {
+            return null;   // surface unreachable — ready() keeps retrying
+        }
+        if (!probe.ok) {
+            mode = 'readonly';
+            mirror = empty();
+            emit('store-mode', { store: label, result: 'readonly', reason: 'no-user-files' });
+            refusePersist('no-user-files');
+            return mode;
+        }
+        mode = 'file';
+
+        let text = null;
+        try { text = await readFile(manifestName); } catch { text = undefined; }
+        if (text === undefined) return null;   // non-404 read failure — retry via ready()
+
+        if (text === null) {
+            // No manifest: fresh store or migration candidate. Task 4 wires
+            // attemptMigration() here; until then treat as fresh.
+            mirror = empty();
+            emit('store-mode', { store: label, result: 'file', reason: 'missing' });
+            emit('store-load', { store: label, result: 'missing', entries: countEntries(mirror), bytes: 0, ms: Date.now() - started });
+            return mode;
+        }
+
+        const parsed = parseManifest(text, version);
+        if (parsed.reason === 'newer') {
+            mode = 'readonly';
+            emit('store-mode', { store: label, result: 'readonly', reason: 'newer-version' });
+            refusePersist('newer-version');
+            return mode;
+        }
+        if (parsed.reason === 'corrupt') {
+            // Task 8 wires rebuildFromScan() here. Until then: empty mirror.
+            mirror = empty();
+            emit('store-mode', { store: label, result: 'file', reason: 'corrupt-manifest' });
+            return mode;
+        }
+
+        mirror = empty();
+        const ok = await loadShards(parsed.value.shards || []);
+        if (!ok) return mode;
+        rebuildMirrorFromShards();
+        totalBytes = text.length;
+        emit('store-mode', { store: label, result: 'file', reason: parsed.reason });
+        emit('store-load', {
+            store: label, result: parsed.reason, entries: countEntries(mirror),
+            bytes: totalBytes, ms: Date.now() - started,
+        });
+        log(`sharded-store[${label}]: mode=file, ${shards.length} shard(s), ${countEntries(mirror)} entr(ies)`);
+        return mode;
+    }
+
+    /**
+     * Resolve the store mode once per session. While the user-files surface is
+     * unreachable the promise stays pending and the probe repeats after the
+     * retry window: there is nothing honest to resolve with, and callers'
+     * `await ready()` simply waits for storage to answer.
+     */
+    function ready() {
+        if (!readyPromise) {
+            readyPromise = (async () => {
+                for (;;) {
+                    const result = await detectAndLoadOnce();
+                    if (result !== null) return result;
+                    await new Promise(resolve => setTimeout(resolve, PROBE_RETRY_MS));
+                }
+            })();
+        }
+        return readyPromise;
+    }
 
     const store = {
         label,
@@ -209,11 +370,7 @@ export function createShardedFileStore(config) {
         manifestName,
         shardPrefix,
 
-        ready: () => readyPromise || (readyPromise = Promise.resolve('file').then(result => {
-            mode = result;
-            if (mirror === null) mirror = empty();
-            return result;
-        })),   // Task 3 replaces with the real probe + load
+        ready,
         mode: () => mode,
         isFileMode: () => mode === 'file',
         snapshot() { return mirror === null ? null : clone(mirror); },
