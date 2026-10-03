@@ -19,28 +19,38 @@ function ruleBody(selector) {
     return css.slice(open + 1, close);
 }
 
-/** Тело ближайшего @media, в котором находится селектор. */
-function mediaOf(selector) {
-    const idx = css.indexOf(`${selector} {`);
-    assert.notEqual(idx, -1, `правило ${selector} не найдено`);
-    const mediaStart = css.lastIndexOf('@media', idx);
-    assert.notEqual(mediaStart, -1, `${selector} должен жить внутри @media`);
-    const brace = css.indexOf('{', mediaStart);
-    return css.slice(mediaStart, brace);
+/**
+ * Тело правила селектора ВНУТРИ @media с заданным условием: у многих
+ * селекторов есть базовое правило вне медиа — искать нужно мобильное.
+ */
+function mobileRuleBody(selector, mediaPattern = /max-width:\s*768px/) {
+    let from = 0;
+    for (;;) {
+        const idx = css.indexOf(`${selector} {`, from);
+        assert.notEqual(idx, -1, `мобильное правило ${selector} не найдено`);
+        const mediaStart = css.lastIndexOf('@media', idx);
+        const mediaText = css.slice(mediaStart, css.indexOf('{', mediaStart));
+        if (mediaPattern.test(mediaText)) return ruleBodyAt(idx);
+        from = idx + 1;
+    }
+}
+
+function ruleBodyAt(idx) {
+    const open = css.indexOf('{', idx);
+    const close = css.indexOf('}', open);
+    return css.slice(open + 1, close);
 }
 
 test('галерея: кнопочные строки карточек спрятаны на мобильном', () => {
-    assert.match(mediaOf('.uris-card-actions'), /max-width:\s*768px/);
-    assert.match(ruleBody('.uris-card-actions'), /display:\s*none/);
+    assert.match(mobileRuleBody('.uris-card-actions'), /display:\s*none/);
 });
 
 test('галерея: тулбар липкий и компактный, подписи спрятаны', () => {
-    assert.match(mediaOf('.uris-gallery-toolbar'), /max-width:\s*768px/);
-    const body = ruleBody('.uris-gallery-toolbar');
+    const body = mobileRuleBody('.uris-gallery-toolbar');
     assert.match(body, /position:\s*sticky/);
     assert.match(body, /top:\s*0/);
-    assert.match(ruleBody('.uris-gallery-toolbar .uris-btn-label'), /display:\s*none/);
-    assert.match(ruleBody('.uris-gallery-toolbar .uris-btn'), /min-height:\s*44px/);
+    assert.match(mobileRuleBody('.uris-gallery-toolbar .uris-btn-label'), /display:\s*none/);
+    assert.match(mobileRuleBody('.uris-gallery-toolbar .uris-btn'), /min-height:\s*44px/);
 });
 
 test('карточное меню: шит снизу <768px, поповер без шита ≥768px', () => {
