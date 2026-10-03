@@ -6,9 +6,10 @@
  *   - слой --uris-z-fab НАД окном (как в DSC): FAB остаётся кликабельным
  *     тогглом поверх открытого окна и мобильного fullscreen-оверлея; модалки
  *     (3500), лайтбокс (5000) и хром ST его перекрывают;
- *   - пульс генерации — по событиям uris:stage2-start / uris:stage2-end
- *     (единый шов для ручных, авто- и очередь-генераций; end в finally —
- *     пульс не зависает при ошибке/отмене).
+ *   - пульс генерации — по uris:stage2-start/end и uris:inline-start/end
+ *     (счётчик: гаснет только после ПОСЛЕДНЕЙ генерации; end в finally —
+ *     пульс не зависает при ошибке/отмене). Биндинг живёт в index.js
+ *     ensureLauncher() — безусловно, для любого launcherMode.
  *
  * Кнопка тянется (Pointer Events + capture, порог 6px отличает клик от драга),
  * позиция живёт в localStorage и валидируется при восстановлении; топ-бар ST
@@ -68,10 +69,14 @@ function clampPosition(pos, viewport, size) {
 // ST's top bar paints above the FAB (3005 vs --uris-z-fab — see style.css):
 // measure how much of it covers the viewport top so positions can be clamped
 // below it. Same measurement as the window drag clamp in window.js.
+// Инсет приоритетен над «низом на экране» — паритет с clampWindowGeometry
+// (window.js): в вырожденном случае (бар выше vh - size) кнопка уходит за
+// нижний край, но НЕ под бар, который рисуется поверх и сделал бы её мёртвой.
 function clampFabPosition(pos, viewport, size, topInset) {
     const clamped = clampPosition(pos, viewport, size);
     if (topInset > 0) {
-        clamped.top = Math.min(Math.max(clamped.top, topInset), viewport.height - size);
+        const inset = Math.min(topInset, Math.max(0, viewport.height - 1));
+        clamped.top = Math.max(inset, Math.min(clamped.top, viewport.height - size));
     }
     return clamped;
 }
@@ -128,6 +133,12 @@ function makeDraggable(icon) {
     let dragging = false;
     let offsetX = 0, offsetY = 0;
     let startX = 0, startY = 0;
+    // Геометрия жеста: inset топ-бара и вьюпорт не меняются в течение драга.
+    // Читаем один раз на pointerdown — иначе каждый pointermove делал
+    // querySelector('#top-bar') + getBoundingClientRect (forced layout),
+    // а мышей на 1000 Гц это тысячи reflow в секунду.
+    let dragViewport = null;
+    let dragTopInset = 0;
 
     icon.addEventListener('pointerdown', (e) => {
         if (e.pointerType === 'mouse' && e.button !== 0) return;
@@ -137,6 +148,8 @@ function makeDraggable(icon) {
         offsetY = e.clientY - r.top;
         startX = r.left;
         startY = r.top;
+        dragViewport = getViewport();
+        dragTopInset = getStTopInsetPx();
         icon.setPointerCapture(e.pointerId);
         e.preventDefault();
     });
@@ -149,7 +162,7 @@ function makeDraggable(icon) {
             dragging = true;
             icon.classList.add('uris_fab_dragging');
         }
-        const pos = clampToViewportWithChrome({ left: rawX, top: rawY });
+        const pos = clampFabPosition({ left: rawX, top: rawY }, dragViewport, FAB_SIZE, dragTopInset);
         icon.style.left = `${pos.left}px`;
         icon.style.top = `${pos.top}px`;
     });
@@ -184,7 +197,7 @@ function onWindowResize() {
     icon.style.top = `${pos.top}px`;
 }
 
-// ── Generation pulse (Stage 2 lifecycle events) ──
+// ── Generation pulse (Stage 2 + inline lifecycle events) ──
 
 /** Пульс на обоих лаунчерах (как у DSC: bar + FAB). */
 function setGenerating(on) {
@@ -193,14 +206,51 @@ function setGenerating(on) {
     }
 }
 
-// Один шов на все пути генерации: stage2-start/end эмитятся из pipeline-stage2
-// для ручных, авто- и очередь-запусков; end — в finally.
-function bindStage2Pulse() {
+/**
+ * Счётчик активных генераций: пульс живёт, пока не завершилась ПОСЛЕДНЯЯ.
+ * Stage 2 сериализован per-post, auto-поток цепочку обходит — ручная
+ * генерация может идти параллельно очереди, и булево от первого end гасило
+ * пульс под живую генерацию (patterns как Set in-flight в
+ * generation-lifecycle-ui.js). start/end парные у обоих эмиттеров
+ * (end — в finally), счётчик не течёт и не уходит в минус.
+ * @param {(on: boolean) => void} setPulse
+ */
+export function makePulseStateMachine(setPulse) {
+    let runs = 0;
+    return {
+        // Срабатывание только на переходах 0→1 и 1→0: очередь шлёт stage2-start
+        // на каждую задачу — без guard'а это bursts идемпотентных, но лишних
+        // DOM-тогглов.
+        start: () => { runs += 1; if (runs === 1) setPulse(true); },
+        end: () => {
+            if (runs === 0) return;
+            runs -= 1;
+            if (runs === 0) setPulse(false);
+        },
+    };
+}
+
+let _pulse = null;
+
+/**
+ * Один шов на все пути генерации: uris:stage2-start/end (ручные, авто,
+ * очередь, мост) и uris:inline-start/end (inline-задачи чата). Биндится
+ * БЕЗУСЛОВНО из index.js ensureLauncher(): пульсирует и бар-кнопка
+ * (#uris_launcher.uris_generating), а не только FAB — раньше слушатели
+ * вешались лишь при монтировании FAB, и в дефолтном launcherMode 'bar'
+ * пульс не работал вовсе.
+ */
+export function bindStage2Pulse() {
     if (_stage2Bound) return;
     if (typeof window === 'undefined' || typeof window.addEventListener !== 'function') return;
     _stage2Bound = true;
-    window.addEventListener('uris:stage2-start', () => setGenerating(true));
-    window.addEventListener('uris:stage2-end', () => setGenerating(false));
+    _pulse = makePulseStateMachine(setGenerating);
+    const onStart = () => _pulse?.start();
+    const onEnd = () => _pulse?.end();
+    window.addEventListener('uris:stage2-start', onStart);
+    window.addEventListener('uris:stage2-end', onEnd);
+    window.addEventListener('uris:inline-start', onStart);
+    window.addEventListener('uris:inline-end', onEnd);
 }
 
 // ── Public API ──
@@ -237,7 +287,6 @@ export function ensureFloatingLauncher({ onToggle } = {}) {
             _resizeBound = true;
             window.addEventListener('resize', onWindowResize);
         }
-        bindStage2Pulse();
     }
     syncFloatingLauncher();
     return icon;

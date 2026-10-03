@@ -12,7 +12,7 @@ import { providerError } from './providers/image-base.js';
 import { summarizeReference } from './references.js';
 import { aspectDeviates } from './aspect-ratio.js';
 import { getDiagnosticSessionId, hashDiagnosticId, recordDiagnosticEvent, listDiagnosticEvents } from './diagnostic-events.js';
-import { savePendingBrowserRequest, updatePendingBrowserRequest } from './browser-image-recovery.js';
+import { savePendingBrowserRequest, updatePendingBrowserRequest, discardPendingBrowserRequest, dispatchErrorKnown } from './browser-image-recovery.js';
 
 const REQUEST_ID = /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/;
 
@@ -151,7 +151,7 @@ export async function generateImageRequest(imageConnId, request, onStatus, signa
     // transport knows nothing about the connection-level useCorsProxy
     // override, and would print 'direct' while the POST goes 'via proxy'.
     request.delivery = deliveryRoute.transport.initialDelivery;
-    if (!apiKey) {
+    if (!apiKey && route?.generationContract !== 'comfyui') {
         if (route?.generationContract === 'pollinations-images') {
             throw providerError('POLLINATIONS_TOKEN_REQUIRED', 'Pollinations requires an sk_ access token in the connection Key field.');
         }
@@ -168,11 +168,13 @@ export async function generateImageRequest(imageConnId, request, onStatus, signa
         name: ref?.name || null,
         mime: summarizeReference(ref).mime,
         bytes: summarizeReference(ref).kb * 1024,
-        encoding: route?.generationContract === 'naistera'
-            ? 'reference_objects'
-            : (route?.generationContract === 'gemini-native'
-                ? 'inlineData'
-                : (conn.editProtocol === 'json' ? 'image_url' : 'multipart:image')),
+        encoding: route?.generationContract === 'comfyui'
+            ? 'upload/image (LoadImage)'
+            : route?.generationContract === 'naistera'
+                ? 'reference_objects'
+                : (route?.generationContract === 'gemini-native'
+                    ? 'inlineData'
+                    : (conn.editProtocol === 'json' ? 'image_url' : 'multipart:image')),
         materialization: ref?.dataUrl ? 'ready' : 'missing',
     }));
     const diagnostic = {
@@ -235,9 +237,18 @@ export async function generateImageRequest(imageConnId, request, onStatus, signa
     try {
         result = await invokeImageProvider(invocation);
     } catch (error) {
-        // A POST may have reached the provider. Keep this local record for explicit
-        // user review/discard; never resume it automatically.
-        await updatePendingBrowserRequest(request.requestId, { status: 'dispatchingUnknown', error: error?.message || String(error) });
+        // В INFO — только фактический результат, никаких промежуточных
+        // статусов. Известный исход (отмена пользователем, ответ провайдера с
+        // httpStatus) закрывает запись: карточка «результат запроса
+        // неизвестен» не рождается — отмену видно в QUEUE, ошибку видно в
+        // QUEUE и пуле, технический след остаётся в dispatch-error журнале.
+        // Неизвестный исход (таймаут/обрыв сети — POST мог уйти) остаётся
+        // страховочной записью на разбор.
+        if (dispatchErrorKnown(error, signal)) {
+            await discardPendingBrowserRequest(request.requestId).catch(() => {});
+        } else {
+            await updatePendingBrowserRequest(request.requestId, { status: 'dispatchingUnknown', error: error?.message || String(error) });
+        }
         throw error;
     } finally {
         // The provider stamps what actually went on the wire onto its invocation

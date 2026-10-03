@@ -82,6 +82,7 @@ export function renderTemplateCard(template) {
                 <small class="uris-hint">Макросы ST: {{char}}, {{user}}.</small></div>
             <div class="uris-row">
                 <button class="uris-btn uris-btn-confirm uris-activate" data-id="${safeId}" ${active ? 'disabled title="Уже активен"' : 'title="Сделать активным"'}><i class="fa-solid fa-check"></i> ${active ? 'Активен' : 'Сделать активным'}</button>
+                <button class="uris-btn uris-btn-ghost uris-template-clone" data-id="${safeId}" title="Создать копию: та же инструкция, новое имя"><i class="fa-solid fa-copy"></i> Клонировать</button>
                 <button class="uris-btn uris-btn-ghost uris-del" data-id="${safeId}"><i class="fa-solid fa-trash"></i> Удалить</button>
             </div>
         </div>
@@ -139,6 +140,18 @@ function bindCards(host) {
             if (id) await activate();
         });
         card.querySelector('.uris-activate')?.addEventListener('click', activate);
+        // Clone mirrors the API tab's connection card: the visible name and
+        // instruction copy into a fresh record (collect(), not the stored one —
+        // a pending debounced edit must still land in the copy); the copy starts
+        // expanded and inactive.
+        card.querySelector('.uris-template-clone')?.addEventListener('click', async () => {
+            const current = collect();
+            const name = String(current.name || '').trim() || 'Шаблон';
+            const created = await createInstructionTemplate({ name: `${name} (копия)`, instruction: current.instruction });
+            if (!created) return;
+            toastr?.success(`Скопировано: ${created.name}`);
+            refreshActive();
+        });
         card.querySelector('.uris-del')?.addEventListener('click', async () => {
             if (!await showConfirmModal('Удалить шаблон?')) return;
             await deleteTemplate(id);

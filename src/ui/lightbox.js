@@ -130,6 +130,21 @@ export async function showLightbox(items, index = 0, { chatId = null, root = nul
     pswp.on('close', () => {
         pswp.element.style.pointerEvents = 'none';
         pswp.element.classList.add('uris-pswp-closing');
+        // Watchdog закрытия: вендорная развязка держит корень в DOM до
+        // transitionend, а тот стартует через каскад setTimeout(0 → 30) с
+        // фолбэком duration+500 — легально до ~1.2с после close(), на
+        // нагруженной странице дольше. Хит-тест корень уже прозрачен (выше),
+        // но каждое лишнее мгновение «невидимого» корня — окно для квирков
+        // движка и чужих стилей (симптом: «анимация доигрывается на фоне,
+        // клики не работают»). Здоровая развязка укладывается в ~250мс:
+        // не дождались — доуничтожаем принудительно. destroy()
+        // идемпотентен по isDestroying, DOM-слушатели вендор снял первой же
+        // строкой close(), так что гонки с его таймерами нет.
+        setTimeout(() => {
+            if (pswp.element?.isConnected) {
+                try { pswp.destroy(); } catch { /* корень уже снят вендором */ }
+            }
+        }, 400);
     });
 
     registerActionButtons(pswp, { items, chatId: chatIdResolved, root });

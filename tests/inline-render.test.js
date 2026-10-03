@@ -58,7 +58,7 @@ function baseInput(existingKeys = []) {
 }
 
 /** .mes с .mes_text (текстовый узел с маркером) и .mes_buttons внутри #chat. */
-function buildChatDOM() {
+function buildChatDOM({ extra = true } = {}) {
     const chatEl = doc.createElement('div');
     chatEl.id = 'chat';
     const mesEl = doc.createElement('div');
@@ -70,10 +70,17 @@ function buildChatDOM() {
     mesEl.appendChild(textEl);
     const buttonsEl = doc.createElement('div');
     buttonsEl.classList.add('mes_buttons');
+    let extraEl = null;
+    if (extra) {
+        // Структура ST: меню дополнительных действий внутри .mes_buttons.
+        extraEl = doc.createElement('div');
+        extraEl.classList.add('extraMesButtons');
+        buttonsEl.appendChild(extraEl);
+    }
     mesEl.appendChild(buttonsEl);
     chatEl.appendChild(mesEl);
     root.appendChild(chatEl);
-    return { chatEl, mesEl, textEl, buttonsEl };
+    return { chatEl, mesEl, textEl, buttonsEl, extraEl };
 }
 
 // ── computeShellPlan (чистая реконсиляция) ──
@@ -292,6 +299,35 @@ test('ensureManualButtons: сообщение пользователя — бе�
     const { buttonsEl } = buildChatDOM();
     ensureManualButtons();
     assert.equal(buttonsEl.querySelectorAll('[data-uris-manual]').length, 0);
+});
+
+test('ensureManualButtons: 📷 живёт в .extraMesButtons, а не напрямую в .mes_buttons', () => {
+    const { extraEl } = buildChatDOM();
+    ensureManualButtons();
+    const btn = extraEl.querySelector('[data-uris-manual]');
+    assert.ok(btn, 'кнопка внутри меню дополнительных действий');
+    assert.equal(btn.parentNode, extraEl, 'ровно в .extraMesButtons');
+});
+
+test('ensureManualButtons: без .extraMesButtons — фолбэк в .mes_buttons', () => {
+    const { buttonsEl } = buildChatDOM({ extra: false });
+    ensureManualButtons();
+    const btn = buttonsEl.querySelector('[data-uris-manual]');
+    assert.ok(btn, 'кнопка добавлена даже без меню дополнительных действий');
+    assert.equal(btn.parentNode, buttonsEl);
+});
+
+test('shutdownRender: выключение инлайна снимает 📷-кнопки, включение возвращает', () => {
+    buildChatDOM();
+    ensureManualButtons();
+    assert.ok(document.querySelector('[data-uris-manual]'), 'кнопка стоит до выключения');
+    shutdownRender();
+    assert.equal(document.querySelectorAll('[data-uris-manual]').length, 0, 'после выключения кнопок нет');
+    // Цикл on→off→on: повторное включение возвращает кнопку.
+    initRender({ reroll: () => Promise.resolve() });
+    ensureManualButtons();
+    assert.ok(document.querySelector('[data-uris-manual]'), 'после включения кнопка вернулась');
+    shutdownRender();
 });
 
 test('reconcileVisible: ручная оболочка становится ready после генерации (idx -1)', () => {

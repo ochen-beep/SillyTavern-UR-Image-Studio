@@ -22,9 +22,9 @@ import {
 import { bindEvents, unbindEvents } from './src/events.js';
 import { runStage1ForDraft, runFullPipelineForDraft, stopQueue } from './src/pipeline.js';
 import {
-    mountPanel, syncPanelVisibility, initViewportSync, removeViewportSync, removePanel, setStatus, isPanelVisible,
+    mountPanel, syncPanelVisibility, initViewportSync, removeViewportSync, removePanel, isPanelVisible,
 } from './src/ui/window.js';
-import { ensureFloatingLauncher, removeFloatingLauncher } from './src/ui/floating-launcher.js';
+import { ensureFloatingLauncher, removeFloatingLauncher, bindStage2Pulse } from './src/ui/floating-launcher.js';
 import { registerTab, setActiveTab, renderTabs, getActiveTab, refreshActive, resolveInitialTab } from './src/ui/tabs.js';
 import { render as renderApi } from './src/ui/tab-api.js';
 import { render as renderReferences } from './src/ui/tab-references.js';
@@ -175,30 +175,27 @@ async function init() {
 
     // Run Stage 1 for build-prompt, or both stages for full-pipeline.
     bindEvents({
+        // Фоновая автоматизация: уведомления — только в ленту INFO и звуком;
+        // тосты здесь — мусорный дубль (политика 2026-10-02: фон не тостит).
         onAutomation: async ({ chatId, msgId, messageText, templateId, requestedAction }) => {
             if (!state.settings.enabled) return;
             const input = { chatId, msgId, messageText, templateId };
             try {
                 if (requestedAction === 'build-prompt') {
-                    const run = await runStage1ForDraft(input, s => setStatus(s));
+                    const run = await runStage1ForDraft(input);
                     if (run.applied) {
-                        setStatus('Промпт готов — открой «Генерация»');
-                        toastr?.info('Промпт построен');
                         if (isPanelVisible() && getActiveTab() === 'generate') refreshActive();
                     }
                 } else if (requestedAction === 'full-pipeline') {
-                    await runFullPipelineForDraft(input, s => setStatus(s));
-                    setStatus('');
-                    toastr?.success('Картинка сгенерирована');
+                    await runFullPipelineForDraft(input);
                     if (isPanelVisible() && getActiveTab() === 'gallery') refreshActive();
                 }
             } catch (e) {
-                setStatus('');
                 if (e?.name === 'AbortError') {
-                    toastr?.info('Генерация отменена');
+                    // отмена — не ошибка
                 } else {
                     error('Auto generation:', e.message);
-                    reportFailure({ scope: URIS_SCOPES.auto, message: e.message, context: e?.urisContext || { post: input.msgId }, toast: true, toastText: 'Generation: ' + e.message });
+                    reportFailure({ scope: URIS_SCOPES.auto, message: e.message, context: e?.urisContext || { post: input.msgId } });
                 }
             }
         },
@@ -312,6 +309,11 @@ function getLauncherHost() {
 function ensureLauncher() {
     const existing = document.getElementById('uris_launcher');
     if (!state.settings.enabled) { existing?.remove(); removeFloatingLauncher(); return null; }
+    // Пульс генерации в любом режиме лаунчера: пульсирует и бар-кнопка
+    // (#uris_launcher.uris_generating), не только FAB. Биндинг безусловный —
+    // раньше слушатели вешались только в FAB-ветке, и в дефолтном
+    // launcherMode 'bar' пульс не работал вовсе (idempotent по guard'у).
+    bindStage2Pulse();
     // FAB mounts independently of the QR bar, so the panel stays reachable
     // even with the Quick Replies extension disabled (как у DS Comments).
     const mode = state.settings.launcherMode || 'bar';

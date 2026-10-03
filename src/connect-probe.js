@@ -21,6 +21,7 @@ import { validatePollinationsToken } from './providers/image-pollinations.js';
 import { validateNaisteraToken } from './providers/image-naistera.js';
 import { normalizeModelCatalog } from './model-catalog.js';
 import { recordDiagnosticEvent } from './diagnostic-events.js';
+import { CONTRACTS } from './image-connection-schema.js';
 
 function nativeModelsUrl(endpoint) {
     const base = String(endpoint || '').trim().replace(/\/+$/, '');
@@ -102,6 +103,58 @@ function extractModels(payload, allowPollinations = false) {
     return { shape: allowPollinations ? result.shape : result.shape, ids: result.modelIds, modelMetadata: result.entries };
 }
 
+// Список из combo-входа ComfyUI: на 0.38+ это плоский ["a.safetensors", {...opts}],
+// на старых (0.20.x) — вложенный [["a.safetensors"], {...opts}]. Берём только строки.
+function comfyComboNames(value) {
+    if (!Array.isArray(value)) return [];
+    const list = Array.isArray(value[0]) ? value[0] : value;
+    return list.filter(item => typeof item === 'string' && item.trim());
+}
+
+/** Probe a ComfyUI connection: /system_stats (ping) + список чекпойнтов. */
+async function probeComfyConnection({ endpoint, timeoutMs, signal, fetcher, proxiedFetch, corsMode }) {
+    const base = String(endpoint || '').trim().replace(/\/+$/, '');
+    const fetchPart = async (path, errorPrefix) => fetchCatalogPayload({
+        url: `${base}${path}`, timeoutMs, signal, corsMode, fetcher, proxiedFetch, errorPrefix, keepReauth: false,
+    });
+    let delivery = 'direct';
+    let catalogUrl = '';
+    let catalogSource = 'comfy-models';
+    await fetchPart('/system_stats', 'Не удалось получить /system_stats ComfyUI').then(result => { delivery = result.delivery; });
+    let modelIds = [];
+    const modelsUrl = `${base}/models/checkpoints`;
+    try {
+        const models = await fetchPart('/models/checkpoints', 'Не удалось получить список чекпойнтов ComfyUI');
+        delivery = models.delivery;
+        modelIds = comfyComboNames(models.payload);
+        catalogUrl = modelsUrl;
+    } catch {
+        // На старых серверах /models/{folder} нет — фолбэк на /object_info.
+    }
+    if (!modelIds.length) {
+        const infoUrl = `${base}/object_info/CheckpointLoaderSimple`;
+        const info = await fetchPart('/object_info/CheckpointLoaderSimple', 'Не удалось получить /object_info ComfyUI');
+        delivery = info.delivery;
+        modelIds = comfyComboNames(info.payload?.CheckpointLoaderSimple?.input?.required?.ckpt_name);
+        catalogSource = 'comfy-object-info';
+        catalogUrl = infoUrl;
+    }
+    if (!modelIds.length) {
+        throw new Error('Сервер ComfyUI отвечает, но чекпойнтов не найдено — проверьте папку models/checkpoints на сервере.');
+    }
+    return {
+        apiShape: 'comfyui',
+        auth: 'none',
+        delivery,
+        modelIds,
+        modelMetadata: modelIds.map(id => ({ modelId: id, imageGeneration: true })),
+        catalogSource,
+        catalogUrl: diagnosticCatalogUrl(catalogUrl),
+        metadataCount: modelIds.length,
+        checkedAt: new Date().toISOString(),
+    };
+}
+
 /**
  * @typedef {object} ProbeOutcome
  * @property {'openai'|'gemini'} apiShape
@@ -116,7 +169,8 @@ function extractModels(payload, allowPollinations = false) {
  * the model list.
  *
  * @param {{endpoint:string, apiKey?:string, timeoutMs?:number, signal?:AbortSignal,
- *          fetch?:Function, proxiedFetch?:Function, corsMode?:'auto'|'direct'|'proxy'}} input
+ *          fetch?:Function, proxiedFetch?:Function, corsMode?:'auto'|'direct'|'proxy',
+ *          dialect?:string}} input
  * @returns {Promise<ProbeOutcome>}
  */
 async function runProbeConnection(input = {}) {
@@ -125,9 +179,13 @@ async function runProbeConnection(input = {}) {
         fetch: fetcher = globalThis.fetch,
         proxiedFetch = defaultProxiedFetch,
         corsMode = 'auto',
+        dialect = '',
     } = input;
     if (!String(endpoint || '').trim()) throw new Error('Endpoint is required');
     const endpointText = String(endpoint);
+    if (dialect === CONTRACTS.COMFYUI) {
+        return probeComfyConnection({ endpoint: endpointText, timeoutMs, signal, fetcher, proxiedFetch, corsMode });
+    }
     const isPollinationsHost = /(?:^|\.)pollinations\.ai(?:\/|$)/i.test(endpointText);
     const isNaisteraHost = /(?:^|[/.\-])naistera\.org(?:\/|$)/i.test(endpointText);
     if (isNaisteraHost) {

@@ -34,6 +34,7 @@ import { recordDiagnosticEvent } from '../diagnostic-events.js';
 import { enqueueAutoLane } from '../autolane.js';
 import { itemKey, getSlot, upsertItem } from './store.js';
 import { sanitizeTriggerList, buildAliasIndex, resolveProfile, buildInlinePrompt } from './triggers.js';
+import { noteQueued, noteRunning, noteFinished, postLabel } from '../ui/queue-log.js';
 
 /** Окно «генерация ещё возможно стартует» для pending без живого requestId, мс.
  * Общее с render.js: computeShellPlan переводит осиротевший pending в error. */
@@ -156,6 +157,11 @@ export async function processJob({ msgId, idx, type, desc }, operation = null) {
     state.activeGenerations.set(requestId, controller);
     const startedAt = Date.now();
     recordDiagnosticEvent({ event: 'inline-start', requestId, details: { msgId, idx, type } });
+    // Журнал очереди пишет продюсер (один писатель; окно — только читатель).
+    // noteQueued идемпотентен по id: прямой processJob без queued-события
+    // всё равно попадёт в ленту, а задвоения не будет.
+    noteQueued({ id: requestId, label: postLabel(msgId, 'Инлайн'), lane: 'auto' });
+    noteRunning(requestId);
     emitInline('uris:inline-start', { requestId, msgId });
     const descHash = stableHash(`${type}|${desc}`);
     // Живой pending сразу: сохранённый requestId — единственный способ для
@@ -266,6 +272,8 @@ export async function processJob({ msgId, idx, type, desc }, operation = null) {
         recordDiagnosticEvent({ event: 'inline-end', requestId, outcome,
             durationMs: Date.now() - startedAt,
             details: { msgId, type, code: outcome === 'ready' ? null : errorCode, cardId } });
+        // Закрыть строку журнала исходом (один писатель — продюсер).
+        noteFinished(requestId, outcome === 'ready' ? 'success' : outcome, outcome === 'ready' ? '' : errorText);
         emitInline('uris:inline-end', { requestId, msgId, idx, type, outcome, imagePath, error: outcome === 'ready' ? null : errorText });
     }
 }
@@ -278,6 +286,8 @@ export function queueInlineJob(job) {
         requestId: operation.requestId, createdAt: Date.now() });
     // Журнал очереди (бейдж QUEUE): строка рождается «ждёт» ещё в автолейне и
     // переходит в «выполняется» только когда processJob реально стартует.
+    // Пишет продюсер (один писатель; окно — только читатель).
+    noteQueued({ id: operation.requestId, label: postLabel(job.msgId, 'Инлайн'), lane: 'auto' });
     emitInline('uris:inline-queued', { requestId: operation.requestId, msgId: job.msgId });
     return enqueueAutoLane(() => processJob(job, operation));
 }

@@ -49,6 +49,7 @@ import { listCards, removeCard as removeGalleryCard } from './gallery-index.js';
 import { listPendingBrowserRequests } from './browser-image-recovery.js';
 import { classifyOutcome } from './capability-observer.js';
 import { supportedImageSizesFor } from './image-model-capabilities.js';
+import { noteQueued, noteRunning, noteFinished, laneFromSource } from './ui/queue-log.js';
 
 /** Public contract version. Increment on breaking changes to the surface below. */
 export const BRIDGE_API_VERSION = 1;
@@ -387,12 +388,21 @@ function emitBridge(type, detail) {
     }
 }
 
-function emitStage2(requestId, caller, kind) {
+function emitStage2(requestId, caller, kind, outcome = 'success', errorText = '') {
     // Same channel the pipeline uses, so the URIS window (Stop button, queue
     // status) reacts to external generations for free. msgId stays null:
     // headless requests are not bound to a chat post.
+    // Журнал очереди пишет продюсер (один писатель; окно — только читатель).
+    // Раньше end-эмит не нёс исхода вовсе, и провалы моста в ленте QUEUE
+    // помечались «готово».
+    if (kind === 'start') {
+        noteQueued({ id: requestId, label: 'Генерация', lane: laneFromSource(`external:${caller}`) });
+        noteRunning(requestId);
+    } else {
+        noteFinished(requestId, outcome, errorText);
+    }
     if (typeof window !== 'undefined' && typeof window.dispatchEvent === 'function') {
-        try { window.dispatchEvent(new CustomEvent(`uris:stage2-${kind}`, { detail: { requestId, msgId: null, source: `external:${caller}` } })); } catch { /* ignore */ }
+        try { window.dispatchEvent(new CustomEvent(`uris:stage2-${kind}`, { detail: { requestId, msgId: null, source: `external:${caller}`, outcome, error: errorText } })); } catch { /* ignore */ }
     }
 }
 
@@ -406,6 +416,9 @@ function emitStage2(requestId, caller, kind) {
  */
 async function generateOnce(caller, requestId, norm, controller, onStatus) {
     const startedAt = Date.now();
+    // Исход для end-эмита: catch знает его раньше finally.
+    let endOutcome = 'success';
+    let endError = '';
     _externalRuns.set(requestId, { caller, startedAt, controller, queued: false });
     state.activeGenerations.set(requestId, controller);
     emitStage2(requestId, caller, 'start');
@@ -553,6 +566,8 @@ async function generateOnce(caller, requestId, norm, controller, onStatus) {
         return payload;
     } catch (e) {
         const cancelled = controller.signal.aborted || e?.name === 'AbortError';
+        endOutcome = cancelled ? 'cancelled' : 'error';
+        endError = cancelled ? '' : String(e?.message || e);
         recordDiagnosticEvent({
             event: 'bridge-generate-end', requestId, outcome: cancelled ? 'cancelled' : 'error',
             durationMs: Date.now() - startedAt,
@@ -568,7 +583,7 @@ async function generateOnce(caller, requestId, norm, controller, onStatus) {
     } finally {
         state.activeGenerations.delete(requestId);
         _externalRuns.delete(requestId);
-        emitStage2(requestId, caller, 'end');
+        emitStage2(requestId, caller, 'end', endOutcome, endError);
     }
 }
 
@@ -768,6 +783,9 @@ async function buildPrompt(request, opts = {}) {
 
     _externalRuns.set(requestId, { caller, startedAt: Date.now(), controller, queued: false });
     state.activeGenerations.set(requestId, controller);
+    // Исход для end-эмита (как в generateOnce): catch знает его раньше finally.
+    let endOutcome = 'success';
+    let endError = '';
     emitStage2(requestId, caller, 'start');
     emitBridge('prompt:started', { requestId, caller });
     recordDiagnosticEvent({
@@ -826,6 +844,8 @@ async function buildPrompt(request, opts = {}) {
         return payload;
     } catch (e) {
         const cancelled = controller.signal.aborted || e?.name === 'AbortError';
+        endOutcome = cancelled ? 'cancelled' : 'error';
+        endError = cancelled ? '' : String(e?.message || e);
         recordDiagnosticEvent({
             event: 'bridge-build-prompt-end', requestId, outcome: cancelled ? 'cancelled' : 'error',
             durationMs: Date.now() - startedAt,
@@ -839,7 +859,7 @@ async function buildPrompt(request, opts = {}) {
     } finally {
         state.activeGenerations.delete(requestId);
         _externalRuns.delete(requestId);
-        emitStage2(requestId, caller, 'end');
+        emitStage2(requestId, caller, 'end', endOutcome, endError);
     }
 }
 

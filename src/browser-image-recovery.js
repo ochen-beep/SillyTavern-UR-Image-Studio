@@ -125,6 +125,29 @@ export async function listPendingBrowserRequests() {
     return (await list()).filter(isRetainedPending).slice(-MAX_PENDING_BROWSER_REQUESTS);
 }
 
+/**
+ * Классификация исхода dispatch-ошибки (решение 2026-10-02: в бейдж INFO
+ * попадает только фактический результат, никаких промежуточных статусов).
+ *
+ * true — исход ИЗВЕСТЕН, страховочная запись закрывается и карточка в INFO
+ * не рождается: отмену инициировал сам пользователь (signal aborted /
+ * AbortError), а ответ провайдера (httpStatus) уже виден красной строкой в
+ * QUEUE и в пуле событий; технический след остаётся в dispatch-error журнале.
+ *
+ * false — честное «неизвестно» (таймаут, обрыв сети): POST мог уйти к
+ * провайдеру, запись остаётся на разбор. Записи живой генерации из бейджа
+ * вырезает reviewableRecovery в window.js.
+ * @param {Error} error
+ * @param {{aborted?: boolean}|null} [signal]
+ * @returns {boolean}
+ */
+export function dispatchErrorKnown(error, signal = null) {
+    if (signal?.aborted) return true;
+    if (error?.name === 'AbortError') return true;
+    if (Number.isSafeInteger(error?.httpStatus)) return true;
+    return false;
+}
+
 /** Read one browser-owned pending intent for manual review. */
 export async function getPendingBrowserRequest(requestId) {
     return (await list()).find(item => isRetainedPending(item) && item.id === requestId) || null;

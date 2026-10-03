@@ -3,10 +3,10 @@
  * Floating window: mount, drag (by header), resize (corner handle), mobile overlay.
  */
 import { state, saveSettings, escapeHtml, error } from '../core.js';
-import { listUrisErrors, clearUrisErrors, formatUrisError, markUrisErrorsSeen, countUnreadUrisErrors, hasUnreadHardUrisErrors, reportFailure, URIS_SCOPES } from '../error-pool.js';
+import { listUrisErrors, clearUrisErrors, formatUrisError, markUrisErrorsSeen, countUnreadUrisErrors, hasUnreadHardUrisErrors, getUrisErrorsSeenAt, reportFailure, URIS_SCOPES } from '../error-pool.js';
 import { listPendingBrowserRequests, discardPendingBrowserRequest, clearPendingBrowserRequests } from '../browser-image-recovery.js';
 import { bindTabBarScroll } from './tab-bar-scroll.js';
-import { listQueueLog, queueBadgeCount, clearQueueLog, noteQueued, noteRunning, noteFinished, hasLiveQueueLane, laneFromSource } from './queue-log.js';
+import { listQueueLog, queueBadgeCount, clearQueueLog, hasLiveQueueLane } from './queue-log.js';
 import { stopQueue, cancelQueuedItem, resubmitQueueRow } from '../pipeline-queue.js';
 
 const WIN_ID = 'urisWindow';
@@ -38,19 +38,16 @@ export function unlockBodyScroll() {
     }
 }
 
-export function mountPanel() {
-    let el = document.getElementById(WIN_ID);
-    if (el) return el;
-    el = document.createElement('div');
-    el.id = WIN_ID;
-    el.className = 'uris-window';
-    el.innerHTML = `
+// Шаблон окна — константа уровня модуля ради тестового шва _testWindowMarkup:
+// контракт шапки (tests/window-header.test.js) проверяет разметку без DOM.
+// Заголовка и статусной строки в шапке больше нет: заголовок никто не читал,
+// а статус был мусорным каналом уведомлений — у всех его пользователей есть
+// собственная обратная связь. Место слева от действий свободно.
+const WINDOW_TEMPLATE = `
         <div class="uris-header" id="urisHeader">
-            <span class="uris-title">🎨 UR Image Studio</span>
             <div class="uris-header-actions">
-                <span class="uris-status" id="urisStatus"></span>
-                <button class="uris-icon-btn uris-error-badge" id="urisQueueBadge" hidden title="Очередь генераций" aria-label="Очередь генераций" aria-expanded="false" aria-controls="urisQueuePanel">QUEUE <span class="uris-error-count" id="urisQueueCount">0</span></button>
-                <button class="uris-icon-btn uris-error-badge" id="urisErrorBadge" hidden title="События" aria-label="События" aria-expanded="false" aria-controls="urisErrorPanel">INFO <span class="uris-error-count" id="urisErrorCount">0</span><span class="uris-badge-dot" id="urisErrorDot" hidden></span></button>
+                ${badgeButtonHtml({ id: 'urisQueueBadge', label: 'QUEUE', title: 'Очередь генераций', controls: 'urisQueuePanel' })}
+                ${badgeButtonHtml({ id: 'urisErrorBadge', label: 'INFO', title: 'События', controls: 'urisErrorPanel', withDot: true })}
                 <button class="uris-icon-btn" id="urisClose" title="Свернуть" aria-label="Свернуть">✕</button>
             </div>
         </div>
@@ -59,6 +56,24 @@ export function mountPanel() {
         <div class="uris-tabs" id="urisTabs"></div>
         <div class="uris-body" id="urisBody"></div>
         <div class="uris-resizer" id="urisResizer"></div>`;
+
+/** Шов для node-тестов: разметка окна без монтирования. */
+export const _testWindowMarkup = { WINDOW_TEMPLATE };
+/**
+ * Шов для node-тестов жизненного цикла бейдж-панелей: привязка слушателей
+ * QUEUE-бейджа и Escape-иерархии окна без полного монтирования (mountPanel
+ * тянет getComputedStyle/matchMedia/restoreGeometry, которых в fake-dom нет).
+ * removePanel общий — он же снимает эти слушатели.
+ */
+export const _testWindowLifecycle = { bindQueueBadge, bindErrorPool, bindWindowEscape, removePanel, collapseWindow };
+
+export function mountPanel() {
+    let el = document.getElementById(WIN_ID);
+    if (el) return el;
+    el = document.createElement('div');
+    el.id = WIN_ID;
+    el.className = 'uris-window';
+    el.innerHTML = WINDOW_TEMPLATE;
     document.body.appendChild(el);
     bindWindowEvents(el);
     bindErrorPool(el);
@@ -77,6 +92,8 @@ export function removePanel() {
     _tabBarScrollCleanup = null;
     if (_errorPoolHandler && typeof window !== 'undefined' && typeof window.removeEventListener === 'function') {
         window.removeEventListener('uris:errors', _errorPoolHandler);
+        window.removeEventListener('uris:stage2-end', _errorPoolHandler);
+        window.removeEventListener('uris:inline-end', _errorPoolHandler);
         _errorPoolHandler = null;
     }
     if (_pendingHandler && typeof window !== 'undefined' && typeof window.removeEventListener === 'function') {
@@ -90,6 +107,18 @@ export function removePanel() {
     if (_errorKeyHandler && typeof document !== 'undefined') {
         document.removeEventListener('keydown', _errorKeyHandler);
         _errorKeyHandler = null;
+    }
+    if (_queueSyncHandler && typeof window !== 'undefined' && typeof window.removeEventListener === 'function') {
+        window.removeEventListener('uris:queue', _queueSyncHandler);
+        _queueSyncHandler = null;
+    }
+    if (_queueOutsideHandler && typeof document !== 'undefined') {
+        document.removeEventListener('click', _queueOutsideHandler);
+        _queueOutsideHandler = null;
+    }
+    if (_queueKeyHandler && typeof document !== 'undefined') {
+        document.removeEventListener('keydown', _queueKeyHandler);
+        _queueKeyHandler = null;
     }
     if (_windowKeyHandler && typeof document !== 'undefined') {
         document.removeEventListener('keydown', _windowKeyHandler, true);
@@ -189,6 +218,9 @@ let _errorPoolHandler = null;
 let _pendingHandler = null;
 let _errorOutsideHandler = null;
 let _errorKeyHandler = null;
+let _queueSyncHandler = null;
+let _queueOutsideHandler = null;
+let _queueKeyHandler = null;
 let _dragCleanup = null;
 let _resizeCleanup = null;
 let _tabBarScrollCleanup = null;
@@ -332,13 +364,15 @@ function bindWindowEvents(el) {
 
 // ── Escape сворачивает окно ──
 //
-// Единственный выход из окна был «Свернуть» в шапке. Escape уже закрывает
-// собственные оверлеи расширения (панель ошибок, кроп, выбор папки, лайтбокс) —
-// они слушают keydown в capture-фазе и зовут stopPropagation, поэтому сюда
-// событие от них не доходит. SillyTavern на том же Escape закрывает свои панели
-// (RossAscends-mods.js, document keydown, bubble-фаза) и сама отступает, когда
-// открыт редактор сообщения или идёт стрим. Поэтому окно сворачивается только
-// если фокус внутри него: Escape из поля ввода чата остаётся таверне.
+// Единственный выход из окна был «Свернуть» в шапке. Escape закрывает
+// собственные оверлеи расширения по слоям: диалоги (кроп, выбор папки,
+// менеджер папок) слушают keydown в capture-фазе и зовут stopPropagation;
+// бейдж-панели (QUEUE/INFO) — bubble-фаза, а окно с открытой панелью
+// уступает (см. _windowKeyHandler). SillyTavern на том же Escape закрывает
+// свои панели (RossAscends-mods.js, document keydown, bubble-фаза) и сама
+// отступает, когда открыт редактор сообщения или идёт стрим. Поэтому окно
+// сворачивается только если фокус внутри него: Escape из поля ввода чата
+// остаётся таверне.
 
 function collapseWindow() {
     if (state.settings.collapsed) return;
@@ -356,6 +390,14 @@ function bindWindowEscape(winEl) {
         if (!isPanelVisible()) return;
         const target = event.target;
         if (!target || typeof winEl.contains !== 'function' || !winEl.contains(target)) return;
+        // Открытая бейдж-панель (QUEUE/INFO) поглощает Esc: её собственный
+        // keydown-обработчик закрывает панель, окно не сворачивается. Раньше
+        // одно нажатие закрывало панель И окно разом (capture-фаза окна и
+        // bubble-фаза панели срабатывали оба), а QUEUE-панель вовсе не имела
+        // своего Esc и оставалась висеть над свёрнутым окном.
+        const queuePanel = winEl.querySelector('#urisQueuePanel');
+        const errorPanel = winEl.querySelector('#urisErrorPanel');
+        if ((queuePanel && !queuePanel.hidden) || (errorPanel && !errorPanel.hidden)) return;
         event.preventDefault();
         collapseWindow();
     };
@@ -418,9 +460,35 @@ function mergeEvents(errors, pending) {
     return [...poolCards, ...recoveryCards].sort((a, b) => b.ts - a.ts);
 }
 
-/** Непросмотренные recovery-события: id, который панель ещё не показывала. */
-function unseenRecoveryCount(pending, seenIds) {
-    return (pending || []).filter(item => !seenIds.has(item.id)).length;
+/** Непросмотренное recovery-событие: запись новее единого бейзлайна
+ * «просмотрено» (error-pool персистит его). Записи с нечитаемой датой
+ * считаются новыми всегда: дефектные данные всплывают, а не молча пропадают. */
+function isUnseenRecovery(item, seenAt) {
+    const t = Date.parse(item?.createdAt);
+    if (!Number.isFinite(t)) return true;
+    return t > seenAt;
+}
+
+/** Сколько recovery-событий ещё не просмотрено. */
+function unseenRecoveryCount(pending, seenAt) {
+    return (pending || []).filter(item => isUnseenRecovery(item, seenAt)).length;
+}
+
+/**
+ * В INFO — только фактические результаты, никаких промежуточных статусов
+ * (решение 2026-10-02). Страховочная запись живой генерации — не событие: её
+ * показывает QUEUE. Вырезаем записи, чей запрос ещё в activeGenerations, —
+ * из цифры, точки и панели разом. После перезагрузки реестр пуст, и
+ * осиротевшие записи становятся честным событием «результат запроса
+ * неизвестен» — главной страховой функцией.
+ * @param {Array<{id:string, requestId?:string}>|null} pending
+ * @param {Map<string, unknown>|null|undefined} activeGenerations
+ */
+function reviewableRecovery(pending, activeGenerations) {
+    if (!Array.isArray(pending)) return [];
+    const live = activeGenerations instanceof Map ? activeGenerations : null;
+    if (!live || live.size === 0) return pending;
+    return pending.filter(item => !live.has(item.requestId ?? item.id));
 }
 
 // Подпись содержимого панели: события (текст/время/счётчик/тон) + recovery.
@@ -456,8 +524,27 @@ function composeBadgeTitle(unread) {
         : 'События';
 }
 
+/**
+ * Единое состояние обоих бейджей шапки: актуального ничего (всё просмотрено у
+ * INFO, ничего не выполняется у QUEUE) — бейдж приглушён, но из DOM не
+ * исчезает: шапка не прыгает, обе панели достижимы всегда.
+ */
+const BADGE_IDLE_CLASS = 'uris-error-badge--idle';
+function badgeIsIdle(count) { return !(count > 0); }
+
+/**
+ * Единая разметка бейджа: QUEUE и INFO собраны одной функцией, поэтому второй
+ * набор классов/атрибутов расползтись не может. hidden не пишется никогда —
+ * пустое состояние это idle, а не удаление из DOM.
+ */
+function badgeButtonHtml({ id, label, title, controls, withDot = false }) {
+    const stem = id.replace(/Badge$/, '');
+    const dot = withDot ? `<span class="uris-badge-dot" id="${stem}Dot" hidden></span>` : '';
+    return `<button type="button" class="uris-icon-btn uris-error-badge" id="${id}" title="${title}" aria-label="${title}" aria-expanded="false" aria-controls="${controls}">${label} <span class="uris-error-count" id="${stem}Count">0</span>${dot}</button>`;
+}
+
 /** Шов для node-тестов: чистые функции бейджа без DOM. */
-export const _testErrorBadge = { pluralRu, composeBadgeTitle, pendingRowContext, pendingStatusLabel, mergeEvents, unseenRecoveryCount };
+export const _testErrorBadge = { pluralRu, composeBadgeTitle, pendingRowContext, pendingStatusLabel, mergeEvents, unseenRecoveryCount, badgeIsIdle, BADGE_IDLE_CLASS, badgeButtonHtml, reviewableRecovery };
 
 function renderErrorPanel(winEl, errors, pending = []) {
     const panel = winEl?.querySelector?.('#urisErrorPanel');
@@ -542,14 +629,15 @@ function renderQueuePanel(winEl) {
 
 /**
  * Бейдж QUEUE рядом с INFO. Цифра — живые генерации (ждут или выполняются);
- * сам бейдж виден, пока в ленте есть строки (завершённые с «Повторить» должны
- * оставаться достижимыми). Лента помнит и завершённые: успех зелёным,
+ * сам бейдж всегда в шапке (badgeButtonHtml), при живых=0 приглушается
+ * idle-классом — завершённые с «Повторить» остаются достижимыми ровно тогда,
+ * когда нужны. Лента помнит и завершённые: успех зелёным,
  * неудача красным, отмена без заливки.
  *
- * Пакетная очередь пишет в журнал сама (строки с лейном 'queue', включая
- * переход waiting → running через onStart элемента). Остальные пути
- * синтезируются здесь по событиям старта и финиша: ручные/авто stage2,
- * инлайн-задачи (uris:inline-*), мостовые вызовы (source external:*).
+ * Окно — чистый читатель журнала: строки ставят продюсеры (pipeline-queue —
+ * lane 'queue', pipeline-stage2 — ручные/авто, bridge — внешние, inline/runner
+ * — инлайн). Раньше окно реконструировало строки из событий — параллельное
+ * состояние, вравшее при пропущенном слушателе.
  */
 function bindQueueBadge(el) {
     const badge = el.querySelector('#urisQueueBadge');
@@ -557,10 +645,11 @@ function bindQueueBadge(el) {
     if (!badge || !panel) return;
     const sync = () => {
         const count = queueBadgeCount();
-        // Бейдж виден, пока в ленте есть хоть что-то: при живых=0 упавшие
-        // строки с «Повторить» остались бы недостижимы ровно тогда, когда
-        // нужны. Цифра при этом считает только живое (ждут + выполняются).
-        badge.hidden = listQueueLog().length === 0;
+        // Всегда в DOM (см. badgeButtonHtml): при живых=0 упавшие строки с
+        // «Повторить» остаются достижимы ровно тогда, когда нужны. Цифру
+        // бейдж показывает только при живом (ждут + выполняются), в покое
+        // приглушается idle-классом — как INFO при непросмотренном.
+        badge.classList.toggle(BADGE_IDLE_CLASS, badgeIsIdle(count));
         badge.setAttribute('aria-expanded', String(!panel.hidden));
         el.querySelector('#urisQueueCount').textContent = String(count);
         if (!panel.hidden) {
@@ -574,42 +663,6 @@ function bindQueueBadge(el) {
             renderQueuePanel(el);
         }
     };
-    const postLabel = (msgId, fallback = 'Генерация') => {
-        const post = Number(msgId);
-        return Number.isFinite(post) && post >= 0 ? `Пост #${post + 1}` : fallback;
-    };
-    const onStart = (ev) => {
-        const detail = ev.detail || {};
-        // Очередь уже завела свою строку (lane 'queue') в enqueueGeneration.
-        if (!detail.requestId || detail.source === 'queue') return;
-        noteQueued({ id: detail.requestId, label: postLabel(detail.msgId), lane: laneFromSource(detail.source) });
-        noteRunning(detail.requestId);
-    };
-    const onEnd = (ev) => {
-        const detail = ev.detail || {};
-        if (!detail.requestId) return;
-        const outcome = detail.outcome === 'error' ? 'error' : detail.outcome === 'cancelled' ? 'cancelled' : 'success';
-        noteFinished(detail.requestId, outcome, detail.error || '');
-    };
-    const onInlineQueued = (ev) => {
-        const detail = ev.detail || {};
-        if (!detail.requestId) return;
-        noteQueued({ id: detail.requestId, label: postLabel(detail.msgId, 'Инлайн'), lane: 'auto' });
-    };
-    const onInlineStart = (ev) => {
-        const detail = ev.detail || {};
-        if (!detail.requestId) return;
-        // noteQueued идемпотентен по id: прямой processJob без queued-события
-        // всё равно попадёт в ленту, а задвоения не будет.
-        noteQueued({ id: detail.requestId, label: postLabel(detail.msgId, 'Инлайн'), lane: 'auto' });
-        noteRunning(detail.requestId);
-    };
-    const onInlineEnd = (ev) => {
-        const detail = ev.detail || {};
-        if (!detail.requestId) return;
-        const outcome = detail.outcome === 'error' ? 'error' : detail.outcome === 'cancelled' ? 'cancelled' : 'success';
-        noteFinished(detail.requestId, outcome, detail.error || '');
-    };
     badge.addEventListener('click', event => {
         event.stopPropagation();
         panel.hidden = !panel.hidden;
@@ -618,18 +671,31 @@ function bindQueueBadge(el) {
         sync();
     });
     if (typeof window !== 'undefined' && typeof window.addEventListener === 'function') {
-        window.addEventListener('uris:queue', sync);
-        window.addEventListener('uris:stage2-start', onStart);
-        window.addEventListener('uris:stage2-end', onEnd);
-        window.addEventListener('uris:inline-queued', onInlineQueued);
-        window.addEventListener('uris:inline-start', onInlineStart);
-        window.addEventListener('uris:inline-end', onInlineEnd);
-        document.addEventListener('click', event => {
+        // Обработчики хранятся в модульных переменных и снимаются в removePanel():
+        // анонимные версии переживали цикл disable→enable и навсегда держали
+        // слушатели на отсоединённом окне (симметрично bindErrorPool).
+        if (_queueSyncHandler) window.removeEventListener('uris:queue', _queueSyncHandler);
+        _queueSyncHandler = sync;
+        window.addEventListener('uris:queue', _queueSyncHandler);
+        if (_queueOutsideHandler) document.removeEventListener('click', _queueOutsideHandler);
+        _queueOutsideHandler = event => {
             if (!panel.hidden && !panel.contains(event.target) && event.target !== badge) {
                 panel.hidden = true;
                 badge.setAttribute('aria-expanded', 'false');
             }
-        });
+        };
+        document.addEventListener('click', _queueOutsideHandler);
+        if (_queueKeyHandler) document.removeEventListener('keydown', _queueKeyHandler);
+        // Esc закрывает открытую QUEUE-панель (паритет с INFO): без этого Esc
+        // сворачивал всё окно, оставляя панель висеть осиротевшей.
+        _queueKeyHandler = event => {
+            if (event.key === 'Escape' && !panel.hidden) {
+                panel.hidden = true;
+                badge.setAttribute('aria-expanded', 'false');
+                badge.focus?.();
+            }
+        };
+        document.addEventListener('keydown', _queueKeyHandler);
     }
     sync();
 }
@@ -639,12 +705,6 @@ function bindErrorPool(el) {
     const panel = el.querySelector('#urisErrorPanel');
     if (!badge || !panel) return;
     _lastPanelSnapshot = null;
-    // Recovery-события, уже показанные в этой сессии. Пул помнит «просмотрено»
-    // таймстампом, но он сессионный; чеки живут между сессиями, поэтому для
-    // них «новое» = id, которого панель ещё не показывала. После перезагрузки
-    // страницы старые чеки снова «новые» — и честно зажигают бейдж: их ещё
-    // не разобрали.
-    const seenRecoveryIds = new Set();
     let refreshSeq = 0;
     const positionPanel = () => {
         if (panel.hidden || isMobileViewport()) return;
@@ -663,22 +723,21 @@ function bindErrorPool(el) {
         const pending = await listPendingBrowserRequests();
         const errors = listUrisErrors();
         if (seq !== refreshSeq || (el.isConnected === false)) return;
-        if (wasOpen) for (const item of pending) seenRecoveryIds.add(item.id);
-        // Цифра — новое: непрочитанные события единой ленты. Видимость —
-        // инвентарь (как у QUEUE-бейджа: виден, пока есть что показать),
-        // просмотренное гаснет классом --seen.
-        const unseenRecovery = pending.filter(item => !seenRecoveryIds.has(item.id));
-        const unread = countUnreadUrisErrors() + unseenRecovery.length;
+        // Только фактические результаты: записи живых генераций — не события
+        // (см. reviewableRecovery). Непрочитанность — единый персистентный
+        // бейзлайн времени, общий с пулом сессии: никаких отдельных id-наборов.
+        const reviewable = reviewableRecovery(pending, state.activeGenerations);
+        const seenAt = getUrisErrorsSeenAt();
+        const unread = countUnreadUrisErrors() + unseenRecoveryCount(reviewable, seenAt);
         const dot = el.querySelector('#urisErrorDot');
-        badge.hidden = errors.length === 0 && pending.length === 0;
-        badge.classList.toggle('uris-error-badge--seen', unread === 0 && (errors.length > 0 || pending.length > 0));
+        badge.classList.toggle(BADGE_IDLE_CLASS, badgeIsIdle(unread));
         badge.title = composeBadgeTitle(unread);
         // Точка = среди нового есть серьёзное: жёсткая ошибка сессии или чек
         // платного запроса с неизвестным исходом.
-        if (dot) dot.hidden = !(hasUnreadHardUrisErrors() || unseenRecovery.some(item => item.status !== 'notStarted'));
+        if (dot) dot.hidden = !(hasUnreadHardUrisErrors() || reviewable.some(item => item.status !== 'notStarted' && isUnseenRecovery(item, seenAt)));
         badge.setAttribute('aria-expanded', String(!panel.hidden));
         el.querySelector('#urisErrorCount').textContent = String(unread);
-        if (!panel.hidden) renderErrorPanel(el, errors, pending);
+        if (!panel.hidden) renderErrorPanel(el, errors, reviewable);
     };
     badge.addEventListener('click', async event => {
         event.stopPropagation();
@@ -707,6 +766,13 @@ function bindErrorPool(el) {
         _pendingHandler = sync;
         window.addEventListener('uris:errors', _errorPoolHandler);
         window.addEventListener('uris:pending-changed', _pendingHandler);
+        // Конец генерации может перевести страховочную запись в разборные
+        // (запрос вышел из activeGenerations), а сам по себе в store ничего
+        // не пишет: INFO обязан пересинхронизироваться и по нему, иначе
+        // финальное «результат запроса неизвестен» зажжётся только со
+        // следующим событием.
+        window.addEventListener('uris:stage2-end', _errorPoolHandler);
+        window.addEventListener('uris:inline-end', _errorPoolHandler);
         document.addEventListener('click', _errorOutsideHandler);
         document.addEventListener('keydown', _errorKeyHandler);
     }
@@ -720,19 +786,28 @@ function startDrag(e, el) {
     if (e.button !== undefined && e.button !== 0) return;
     if (e.target.closest('.uris-icon-btn')) return;
     const pointerId = e.pointerId;
-    const dx = e.clientX - el.getBoundingClientRect().left;
-    const dy = e.clientY - el.getBoundingClientRect().top;
+    // Геометрия жеста читается ОДИН раз на pointerdown: размеры окна и inset
+    // топ-бара не меняются в течение драга, а прежние чтения rect на каждый
+    // pointermove давали forced layout на каждый тик (до тысяч в секунду
+    // у высокочастотных мышей).
+    const r0 = el.getBoundingClientRect();
+    const dx = e.clientX - r0.left;
+    const dy = e.clientY - r0.top;
+    const dragWidth = r0.width;
+    const dragHeight = r0.height;
+    const dragTopInset = getStTopInsetPx();
+    const dragViewport = { width: window.innerWidth, height: window.innerHeight };
     const move = (ev) => {
         if (pointerId !== undefined && ev.pointerId !== pointerId) return;
         const next = clampWindowGeometry(
             {
                 left: ev.clientX - dx,
                 top: ev.clientY - dy,
-                width: el.getBoundingClientRect().width,
-                height: el.getBoundingClientRect().height,
+                width: dragWidth,
+                height: dragHeight,
             },
-            { width: window.innerWidth, height: window.innerHeight },
-            { topInset: getStTopInsetPx() },
+            dragViewport,
+            { topInset: dragTopInset },
         );
         el.style.left = next.left + 'px';
         el.style.top = next.top + 'px';
@@ -788,8 +863,3 @@ function startResize(e, el) {
 
 // Test seam: pure geometry math (same pattern as _testFloatingLauncher).
 export const _testWindowGeometry = { clampWindowGeometry, MIN_VISIBLE_PX, MIN_WIDTH, MIN_HEIGHT };
-
-export function setStatus(text) {
-    const el = document.getElementById('urisStatus');
-    if (el) el.textContent = text || '';
-}

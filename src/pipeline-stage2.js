@@ -10,6 +10,7 @@ import { state, getCtx, trace, warn } from './core.js';
 import { recordDiagnosticEvent, hashDiagnosticId } from './diagnostic-events.js';
 import { generateImageRequest } from './image-api.js';
 import { observeCapabilityAttempt } from './capability-observer.js';
+import { noteQueued, noteRunning, noteFinished, laneFromSource, postLabel } from './ui/queue-log.js';
 import {
     createStage2Snapshot,
     updateGenerationDraft,
@@ -159,9 +160,16 @@ export async function runStage2ForDraft(input, onStatus = () => {}, signal, opts
             details: { source: opts.isAuto ? 'auto' : (signal ? 'queue' : 'manual') },
         });
         try { opts.onStart?.(activeRequestId); } catch { /* listener error must not break generation */ }
+        // Журнал очереди пишет продюсер (один писатель; окно — только читатель).
+        // Lane 'queue' ведёт сам pipeline-queue (waiting-строки с retry-снапшотом).
+        const journalSource = opts.isAuto ? 'auto' : (signal ? 'queue' : 'manual');
+        if (journalSource !== 'queue') {
+            noteQueued({ id: activeRequestId, label: postLabel(msgId), lane: laneFromSource(journalSource) });
+            noteRunning(activeRequestId);
+        }
         emitStage2Event('uris:stage2-start', {
             requestId: activeRequestId, chatId, msgId,
-            source: opts.isAuto ? 'auto' : (signal ? 'queue' : 'manual'),
+            source: journalSource,
         });
 
         // Fail-closed: a present-but-malformed submission must never silently
@@ -426,6 +434,12 @@ export async function runStage2ForDraft(input, onStatus = () => {}, signal, opts
                     outcome: cancelled ? 'cancelled' : (failure ? 'error' : 'success'),
                     error: failure && !cancelled ? (failure.message || '') : '',
                 });
+                // Закрыть строку журнала исходом (один писатель — продюсер);
+                // lane 'queue' закрывает сам pipeline-queue.
+                if ((opts.isAuto ? 'auto' : (signal ? 'queue' : 'manual')) !== 'queue') {
+                    noteFinished(activeRequestId, cancelled ? 'cancelled' : failure ? 'error' : 'success',
+                        failure && !cancelled ? (failure.message || '') : '');
+                }
             }
         }
         if (releaseNext) {

@@ -10,10 +10,29 @@
  */
 const MAX_ERRORS = 50;
 let _errors = [];
-// Badge "seen" baseline: entries recorded after this moment are unread.
-// Panel open marks the pool seen; a dedupe bump refreshes `ts`, so a repeat
-// of an old error lights the badge again on purpose (it *is* news).
-let _lastSeenAt = 0;
+// Единый бейзлайн непрочитанности всей ленты уведомлений (пул сессии + чеки
+// recovery; решение 2026-10-02 — одна модель вместо двух: ts-у пула и
+// id-набора у чеков). Персистентный в localStorage: без этого после каждой
+// перезагрузки страницы уже просмотренные чеки снова зажигали бы бейдж.
+// Dedupe-бамп обновляет ts записи — повтор старой ошибки снова «новое»,
+// это по-прежнему сознательно (повтор — это новость).
+const SEEN_KEY = 'uris_feed_seen_at';
+let _lastSeenAt = readSeenBaseline();
+
+function readSeenBaseline() {
+    try {
+        const raw = typeof localStorage !== 'undefined' ? localStorage.getItem(SEEN_KEY) : null;
+        const n = Number(raw);
+        return Number.isFinite(n) ? n : 0;
+    } catch { /* приватный режим / отключённый storage — бейзлайн сессионный */ return 0; }
+}
+
+function writeSeenBaseline(ts) {
+    _lastSeenAt = ts;
+    try {
+        if (typeof localStorage !== 'undefined') localStorage.setItem(SEEN_KEY, String(ts));
+    } catch { /* приватный режим — бейзлайн остаётся сессионным */ }
+}
 
 // Строго монотонные таймстампы: запись и markUrisErrorsSeen случаются в одну
 // миллисекунду (тест-машины, быстрые бампы), и голый Date.now() не различил бы
@@ -81,9 +100,14 @@ export function listUrisErrors() {
     return _errors.slice();
 }
 
-/** Mark everything currently in the pool as seen (panel opened). */
+/** Mark everything currently in the feed as seen (panel opened). */
 export function markUrisErrorsSeen() {
-    _lastSeenAt = nowTs();
+    writeSeenBaseline(nowTs());
+}
+
+/** Единый бейзлайн «просмотрено» для всей ленты: окно.js сверяет с ним и чеки recovery. */
+export function getUrisErrorsSeenAt() {
+    return _lastSeenAt;
 }
 
 /** Non-quiet entries recorded after the last markUrisErrorsSeen(). */
@@ -96,10 +120,11 @@ export function hasUnreadHardUrisErrors() {
     return _errors.some(entry => entry.quiet !== true && entry.level !== 'warn' && entry.ts > _lastSeenAt);
 }
 
-/** Drop everything (also resets the seen baseline — nothing left to be unread). */
+/** Drop everything (baseline moves to «сейчас»: старые чеки recovery не
+ * вспыхивают снова — их стёр сам пользователь). */
 export function clearUrisErrors() {
     _errors = [];
-    _lastSeenAt = 0;
+    writeSeenBaseline(nowTs());
     emitChanged();
 }
 

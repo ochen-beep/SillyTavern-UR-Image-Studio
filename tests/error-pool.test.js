@@ -8,6 +8,7 @@ import {
     markUrisErrorsSeen,
     countUnreadUrisErrors,
     hasUnreadHardUrisErrors,
+    getUrisErrorsSeenAt,
     reportFailure,
     URIS_SCOPES,
 } from '../src/error-pool.js';
@@ -154,6 +155,45 @@ test('clearUrisErrors resets the seen baseline', () => {
 
     recordUrisError({ message: 'fresh' });
     assert.equal(countUnreadUrisErrors(), 1);
+});
+
+test('seen baseline is a single timestamp for the whole feed (pool + recovery)', () => {
+    // Единая модель непрочитанности (2026-10-02): recovery-чеки сверяются с
+    // тем же бейзлайном, что и пул сессии — окно.js берёт его через геттер.
+    recordUrisError({ message: 'one' });
+    markUrisErrorsSeen();
+    const seenAt = getUrisErrorsSeenAt();
+    assert.equal(Number.isFinite(seenAt), true);
+    assert.ok(seenAt > 0, 'бейзлайн — реальный таймстамп, не ноль');
+});
+
+test('seen baseline persists to localStorage when available', () => {
+    // Персистентность переживает перезагрузку страницы: без неё старые чеки
+    // снова зажигали бы бейдж после каждого reload.
+    const store = new Map();
+    globalThis.localStorage = {
+        getItem: (k) => store.get(k) ?? null,
+        setItem: (k, v) => store.set(k, String(v)),
+    };
+    try {
+        markUrisErrorsSeen();
+        assert.match(store.get('uris_feed_seen_at'), /^\d+$/);
+        const afterMark = Number(store.get('uris_feed_seen_at'));
+        clearUrisErrors();
+        const afterClear = Number(store.get('uris_feed_seen_at'));
+        assert.ok(afterClear >= afterMark, 'clear фиксирует бейзлайн «сейчас», а не сбрасывает в ноль');
+    } finally {
+        delete globalThis.localStorage;
+    }
+});
+
+test('seen baseline survives module reload with persisted value (guard no-op without localStorage)', () => {
+    // Без localStorage (node-тесты, приватный режим) бейзлайн живёт в памяти:
+    // все операции безопасны, ничего не падает.
+    recordUrisError({ message: 'one' });
+    markUrisErrorsSeen();
+    assert.equal(countUnreadUrisErrors(), 0);
+    assert.equal(Number.isFinite(getUrisErrorsSeenAt()), true);
 });
 
 test('reportFailure records and toasts the pool text once', () => {

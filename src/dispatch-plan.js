@@ -98,6 +98,7 @@ export const API_SHAPES = Object.freeze({
     OPENROUTER: 'openrouter',
     POLLINATIONS: 'pollinations',
     NAISTERA: 'naistera',
+    COMFYUI: 'comfyui',
     UNKNOWN: 'unknown',
 });
 
@@ -113,6 +114,7 @@ export function inferApiShape(endpoint) {
     const value = String(endpoint || '').toLowerCase();
     if (/gen\.pollinations\.ai|pollinations\.ai/.test(value)) return API_SHAPES.POLLINATIONS;
     if (/naistera\.org/.test(value)) return API_SHAPES.NAISTERA;
+    if (/:8188(?:\/|$)/.test(value)) return API_SHAPES.COMFYUI; // дефолтный порт ComfyUI
     if (/openrouter\.ai/.test(value)) return API_SHAPES.OPENROUTER;
     if (/generativelanguage\.googleapis\.com/.test(value)) return API_SHAPES.GEMINI;
     return API_SHAPES.OPENAI;
@@ -128,6 +130,7 @@ const D = CONTRACTS;
 const DIALECT_ORDER = {
     pollinations: { default: [CONTRACTS.POLLINATIONS_IMAGES] },
     [API_SHAPES.NAISTERA]: { default: [CONTRACTS.NAISTERA] },
+    [API_SHAPES.COMFYUI]: { default: [D.COMFYUI] },
     [API_SHAPES.GEMINI]: {
         default: [D.GEMINI_NATIVE],
     },
@@ -295,6 +298,7 @@ const REFERENCE_ENCODINGS = Object.freeze({
     [CONTRACTS.OPENROUTER_IMAGES]: 'input_references (openrouter)',
     [CONTRACTS.POLLINATIONS_IMAGES]: 'references unsupported (pollinations)',
     [CONTRACTS.NAISTERA]: 'reference_objects (naistera)',
+    [CONTRACTS.COMFYUI]: 'LoadImage (upload/image)',
 });
 
 /** How references travel on the wire for a dialect, e.g. for the panel label. */

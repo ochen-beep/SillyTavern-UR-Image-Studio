@@ -320,3 +320,75 @@ test('probe: ошибка «Проверить» пишется в журнал 
     assert.equal(event.outcome, 'error');
     assert.equal(event.level, 'error');
 });
+
+// ── comfyui: probe по диалекту (У1) ──
+
+test('probe comfyui: /models/checkpoints плоским списком, ключ не нужен', async () => {
+    const outcome = await probeConnection({
+        endpoint: 'http://127.0.0.1:8188',
+        dialect: 'comfyui',
+        apiKey: '',
+        fetch: async (url) => {
+            if (String(url).endsWith('/system_stats')) return jsonResponse({ system: { comfyui_version: '0.20.1' } });
+            if (String(url).endsWith('/models/checkpoints')) return jsonResponse(['DreamShaper_8_pruned.safetensors', 'other.safetensors']);
+            throw new Error(`unexpected url ${url}`);
+        },
+        proxiedFetch: async () => { throw new Error('proxy must not be called'); },
+    });
+    assert.equal(outcome.apiShape, 'comfyui');
+    assert.equal(outcome.auth, 'none');
+    assert.deepEqual(outcome.modelIds, ['DreamShaper_8_pruned.safetensors', 'other.safetensors']);
+    assert.equal(outcome.modelMetadata[0].modelId, 'DreamShaper_8_pruned.safetensors');
+    assert.equal(outcome.modelMetadata[0].imageGeneration, true);
+    assert.equal(outcome.catalogSource, 'comfy-models');
+    assert.equal(outcome.delivery, 'direct');
+});
+
+test('probe comfyui: без /models/checkpoints — фолбэк на object_info (вложенный список старых версий)', async () => {
+    const outcome = await probeConnection({
+        endpoint: 'http://127.0.0.1:8188',
+        dialect: 'comfyui',
+        apiKey: '',
+        fetch: async (url) => {
+            if (String(url).endsWith('/system_stats')) return jsonResponse({ system: {} });
+            if (String(url).endsWith('/models/checkpoints')) return jsonResponse({ error: 'not found' }, { ok: false, status: 404 });
+            if (String(url).endsWith('/object_info/CheckpointLoaderSimple')) {
+                return jsonResponse({ CheckpointLoaderSimple: { input: { required: { ckpt_name: [['DreamShaper_8_pruned.safetensors'], { tooltip: 'x' }] } } } });
+            }
+            throw new Error(`unexpected url ${url}`);
+        },
+        proxiedFetch: async () => { throw new Error('proxy must not be called'); },
+    });
+    assert.deepEqual(outcome.modelIds, ['DreamShaper_8_pruned.safetensors']);
+    assert.equal(outcome.catalogSource, 'comfy-object-info');
+});
+
+test('probe comfyui: прямой fetch падает по CORS — уходит через прокси', async () => {
+    const outcome = await probeConnection({
+        endpoint: 'http://127.0.0.1:8188',
+        dialect: 'comfyui',
+        apiKey: '',
+        fetch: async () => { throw corsTypeError(); },
+        proxiedFetch: async () => jsonResponse(['m.safetensors']),
+    });
+    assert.equal(outcome.delivery, 'proxy');
+    assert.deepEqual(outcome.modelIds, ['m.safetensors']);
+});
+
+test('probe comfyui: сервер жив, но чекпойнтов нет — понятная ошибка', async () => {
+    await assert.rejects(
+        probeConnection({
+            endpoint: 'http://127.0.0.1:8188',
+            dialect: 'comfyui',
+            apiKey: '',
+            fetch: async (url) => {
+                if (String(url).endsWith('/system_stats')) return jsonResponse({ system: {} });
+                if (String(url).endsWith('/models/checkpoints')) return jsonResponse([]);
+                if (String(url).endsWith('/object_info/CheckpointLoaderSimple')) return jsonResponse({ CheckpointLoaderSimple: { input: { required: { ckpt_name: [[], {}] } } } });
+                throw new Error(`unexpected url ${url}`);
+            },
+            proxiedFetch: async () => { throw new Error('no proxy'); },
+        }),
+        error => /чекпойнтов не найдено/.test(error.message),
+    );
+});

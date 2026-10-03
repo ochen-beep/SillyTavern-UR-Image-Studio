@@ -507,3 +507,69 @@ test('rendered cards load the browser-local API key masked into the password fie
     assert.equal(keyField.getAttribute('type'), 'password');
     assert.equal(keyField.value, 'stored-secret');
 });
+
+// ── comfy: сводка workflow + кнопки встроенных графов (У2/У4) ──
+
+test('comfy: сводка workflow живая, кнопки вставляют встроенные графы', () => {
+    const draft = baseDraft({ overrides: { dialect: 'comfyui' } });
+    const form = mount(draft);
+    bindServerConnectionForm(form, draft, {
+        saveConnection: async input => input,
+        setConnectionApiKey: async () => {},
+        rerender: () => {},
+        saveDebounceMs: 20,
+    });
+    const area = form.querySelector('.uris-server-comfy-workflow');
+    const summary = form.querySelector('.uris-server-comfy-summary');
+    assert.ok(area && summary, 'comfy-карточка показывает textarea и сводку');
+    assert.match(summary.textContent, /Пусто/);
+
+    area.value = '{"9":{"class_type":"SaveImage","inputs":{"images":[]}}}';
+    area.dispatchEvent({ type: 'input' });
+    assert.match(summary.textContent, /Промпт ✗/);
+    assert.match(summary.textContent, /Выход ✓/);
+
+    const defaultButtons = form.querySelectorAll('.uris-server-comfy-default');
+    assert.equal(defaultButtons.length, 2);
+    defaultButtons[0].dispatchEvent({ type: 'click' });
+    assert.match(area.value, /CheckpointLoaderSimple/);
+    assert.match(area.value, /%prompt%/);
+    assert.match(summary.textContent, /Промпт ✓/);
+
+    defaultButtons[1].dispatchEvent({ type: 'click' });
+    assert.match(area.value, /LoadImage/);
+    assert.match(summary.textContent, /LoadImage: 1/);
+});
+
+test('comfy: чекпойнт-лоадер без %model% подсвечивается в сводке', () => {
+    const draft = baseDraft({ overrides: { dialect: 'comfyui' } });
+    const form = mount(draft);
+    bindServerConnectionForm(form, draft, {
+        saveConnection: async input => input,
+        setConnectionApiKey: async () => {},
+        rerender: () => {},
+        saveDebounceMs: 20,
+    });
+    const area = form.querySelector('.uris-server-comfy-workflow');
+    const summary = form.querySelector('.uris-server-comfy-summary');
+    area.value = '{"4":{"class_type":"CheckpointLoaderSimple","inputs":{"ckpt_name":"x.safetensors"}},"9":{"class_type":"SaveImage","inputs":{"images":[]}}}';
+    area.dispatchEvent({ type: 'input' });
+    assert.match(summary.textContent, /чекпойнт-лоадер без %model%/);
+});
+
+test('comfy: «Проверить» передаёт диалект подключения в пробник', async () => {
+    const draft = baseDraft({ overrides: { dialect: 'comfyui' }, model: { id: 'm.safetensors', source: 'manual' } });
+    const form = mount(draft);
+    const probes = [];
+    bindServerConnectionForm(form, draft, {
+        saveConnection: async input => input,
+        setConnectionApiKey: async () => {},
+        rerender: () => {},
+        probeConnection: async input => { probes.push(input); return { apiShape: 'comfyui', auth: 'none', delivery: 'direct', modelIds: ['m.safetensors'], modelMetadata: [] }; },
+        saveDebounceMs: 20,
+    });
+    form.querySelector('.uris-server-probe').dispatchEvent({ type: 'click' });
+    await flush(30);
+    assert.equal(probes.length, 1);
+    assert.equal(probes[0].dialect, 'comfyui');
+});

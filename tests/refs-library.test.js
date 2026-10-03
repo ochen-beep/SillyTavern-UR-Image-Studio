@@ -60,7 +60,7 @@ afterEach(() => resetRefStoreForTests());
 
 import {
     listRefs, getRef, createRef, updateRef, deleteRef, filterRefsByFolder,
-    normalizePoolReference,
+    normalizePoolReference, cloneRef, releaseRefImage,
     setRefStoreForTests, resetRefStoreForTests,
 } from '../src/refs-library.js';
 
@@ -685,4 +685,54 @@ test('refs CRUD пишет события в журнал диагностики
     const crud = journal.listDiagnosticEvents().filter(e => e.event === 'refs-crud');
     assert.deepEqual(crud.map(e => e.operation), ['create', 'delete']);
     assert.equal(crud[0].details.id, created.id);
+});
+
+test('cloneRef дублирует запись пула поверх того же файла с новым id и «(копия)»', async () => {
+    const src = await createRef({
+        name: 'Алиса',
+        aliases: ['alisa'],
+        description: 'героиня сцены',
+        imagePath: 'user/images/Refs/alisa.png',
+        folders: ['f1', 'f2'],
+        bindingMode: 'description',
+        mime: 'image/png',
+        width: 512,
+        height: 768,
+    });
+    const clone = await cloneRef(src);
+    assert.notEqual(clone.id, src.id, 'клон получает собственный id');
+    assert.equal(clone.name, 'Алиса (копия)');
+    assert.equal(clone.imagePath, src.imagePath, 'клон делит файл картинки с оригиналом');
+    assert.deepEqual(clone.aliases, ['alisa']);
+    assert.equal(clone.description, 'героиня сцены');
+    assert.deepEqual(clone.folders, ['f1', 'f2']);
+    assert.equal(clone.bindingMode, 'description');
+    assert.equal(clone.mime, 'image/png');
+    assert.equal(clone.width, 512);
+    assert.equal(clone.height, 768);
+    assert.equal((await listRefs()).length, 2, 'оригинал остаётся рядом с клоном');
+});
+
+test('releaseRefImage щадит общий файл, пока жив клон, и отпускает после удаления последней записи', async () => {
+    const path = 'user/images/Refs/shared.png';
+    const src = await createRef({ name: 'A', imagePath: path });
+    const clone = await cloneRef(src);
+    await deleteRef(src.id);
+
+    const calls = [];
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = async (url, options = {}) => {
+        calls.push({ url: String(url), body: options.body });
+        return { ok: true, json: async () => ({}), text: async () => '' };
+    };
+    try {
+        await releaseRefImage(path);
+        assert.equal(calls.length, 0, 'файл не уходит в unlink, пока на него смотрит клон');
+        await deleteRef(clone.id);
+        await releaseRefImage(path);
+    } finally {
+        globalThis.fetch = originalFetch;
+    }
+    assert.equal(calls.length, 1, 'unlink происходит, когда записей с этим путём не осталось');
+    assert.ok(String(calls[0]?.url).includes('/api/images/delete'), 'unlink идёт родным ST-маршрутом');
 });

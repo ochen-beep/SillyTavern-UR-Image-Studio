@@ -93,6 +93,18 @@ test('колесо: когда бар не переполнен, событие 
     assert.equal(ev.defaultPrevented, false);
 });
 
+test('колесо: deltaMode 2 (страницы) скроллит на ширину бара, а не на 1-3px', () => {
+    // Регресс: unit учитывал только строки (deltaMode 1 → 33px); страницы
+    // (deltaMode 2) умножались на 1 — «страница» двигала бар на пару пикселей.
+    const fake = makeFakeDocument();
+    const bar = makeBar(fake); // 800/400 → max 400
+    bindTabBarScroll(bar, fake.document);
+    const ev = wheelEv({ deltaMode: 2, deltaY: 1 });
+    bar.dispatchEvent(ev);
+    assert.equal(bar.scrollLeft, 400, 'одна страница = ширина бара');
+    assert.equal(ev.defaultPrevented, true);
+});
+
 test('drag: перетаскивание за порогом скроллит бар и подавляет следующий click', () => {
     const fake = makeFakeDocument();
     const bar = makeBar(fake);
@@ -138,6 +150,39 @@ test('подавление одноразовое: следующий честн
     const click2 = mouseEv('click');
     bar.dispatchEvent(click2);
     assert.equal(click2.propagationStopped, false);
+});
+
+test('mouseup вне бара сбрасывает подавление — клавиатурный click не глотается', () => {
+    // Регресс: драг, брошенный вне бара, оставлял moved=true — Enter/Space на
+    // вкладке диспатчат click БЕЗ mousedown, и «переживший» флаг глотал её до
+    // ближайшего mousedown. Сброс должен жить на mouseup вне бара.
+    const fake = makeFakeDocument();
+    const bar = makeBar(fake);
+    bar.contains = (el) => el === bar; // fake-dom не умеет contains — грубая симуляция
+    bindTabBarScroll(bar, fake.document);
+    bar.dispatchEvent(mouseEv('mousedown', { clientX: 300 }));
+    fireDoc(fake.document, mouseEv('mousemove', { clientX: 150 }));
+    const up = mouseEv('mouseup', { clientX: 900 });
+    up.target = fake.document; // вне бара
+    fireDoc(fake.document, up);
+    const click = mouseEv('click'); // клавиатурная активация: без mousedown
+    bar.dispatchEvent(click);
+    assert.equal(click.propagationStopped, false, 'click после брошенного вне бара драга проходит');
+});
+
+test('mouseup внутри бара сохраняет подавление — его click ещё придёт', () => {
+    const fake = makeFakeDocument();
+    const bar = makeBar(fake);
+    bar.contains = (el) => el === bar;
+    bindTabBarScroll(bar, fake.document);
+    bar.dispatchEvent(mouseEv('mousedown', { clientX: 300 }));
+    fireDoc(fake.document, mouseEv('mousemove', { clientX: 150 }));
+    const up = mouseEv('mouseup', { clientX: 150 });
+    up.target = bar; // внутри бара
+    fireDoc(fake.document, up);
+    const click = mouseEv('click'); // click этого жеста — должен быть съеден
+    bar.dispatchEvent(click);
+    assert.equal(click.propagationStopped, true, 'click жеста, завершённого на баре, подавляется');
 });
 
 test('mousedown не трогает бар без переполнения и игнорирует не-левую кнопку', () => {

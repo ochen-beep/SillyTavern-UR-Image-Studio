@@ -5,6 +5,7 @@ import { generateOpenAIImage } from './providers/image-openai.js';
 import { generateOpenRouterImage } from './providers/image-openrouter.js';
 import { generatePollinationsImage } from './providers/image-pollinations.js';
 import { generateNaisteraImage } from './providers/image-naistera.js';
+import { generateComfyUIImage } from './providers/image-comfyui.js';
 import { providerError, assertReferencePolicy, referencesFor } from './providers/image-base.js';
 import * as defaultTransport from './image-transport.js';
 
@@ -15,6 +16,7 @@ const adapters = Object.freeze({
   'openrouter-images': generateOpenRouterImage,
   'pollinations-images': generatePollinationsImage,
   'naistera': generateNaisteraImage,
+  'comfyui': generateComfyUIImage,
 });
 
 export function getImageProviderAdapter(generationContract) {

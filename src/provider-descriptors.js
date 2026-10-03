@@ -2,6 +2,7 @@
 /** Technical provider metadata shared by route, catalog, and adapter wiring. */
 const POLLINATIONS_CONTRACT = 'pollinations-images';
 const NAISTERA_CONTRACT = 'naistera';
+const COMFYUI_CONTRACT = 'comfyui';
 
 export const PROVIDER_DESCRIPTORS = Object.freeze({
     [POLLINATIONS_CONTRACT]: Object.freeze({
@@ -41,6 +42,22 @@ export const PROVIDER_DESCRIPTORS = Object.freeze({
             presets: Object.freeze(['digital', 'realism']),
         }),
         polling: Object.freeze({ intervalMs: 2500, maxMs: 0 }),  // maxMs 0 = connection timeoutMs is the deadline
+    }),
+    // Локальный ComfyUI: аутентификации нет, ключ опционален (Bearer уходит
+    // только если задан — для reverse-proxy перед сервером). Каталога моделей
+    // через «Проверить» нет: модель (чекпойнт) вводится вручную, список
+    // workflow живёт на записи подключения.
+    [COMFYUI_CONTRACT]: Object.freeze({
+        id: COMFYUI_CONTRACT,
+        label: 'ComfyUI',
+        defaultEndpoint: 'http://127.0.0.1:8188',
+        auth: Object.freeze({ required: false, scheme: null, tokenPrefix: null }),
+        operations: Object.freeze({
+            generate: Object.freeze({ request: 'json', response: 'json', async: true }),
+            edit: Object.freeze({ supported: false }),
+        }),
+        parameters: Object.freeze({}),
+        polling: Object.freeze({ intervalMs: 900, maxMs: 0 }),
     }),
 });
 

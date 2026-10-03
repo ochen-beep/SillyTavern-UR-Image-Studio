@@ -18,7 +18,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
-import { _testFloatingLauncher } from '../src/ui/floating-launcher.js';
+import { _testFloatingLauncher, makePulseStateMachine } from '../src/ui/floating-launcher.js';
 
 const { defaultPosition, clampPosition, clampFabPosition, computeRestoredPosition, FAB_SIZE, DRAG_THRESHOLD_PX } = _testFloatingLauncher;
 
@@ -59,10 +59,65 @@ test('clampFabPosition with zero inset is a plain viewport clamp', () => {
 });
 
 test('clampFabPosition still honours the viewport on absurdly tiny windows', () => {
-    // Вьюпорт wins: если inset больше высоты экрана, низ экрана важнее.
+    // Вырожденный случай (бар выше vh - size): inset приоритетен над «низом на
+    // экране» — паритет с clampWindowGeometry в window.js. Кнопка уходит за
+    // нижний край, но НЕ парковется целиком под баром (3005 рисует поверх):
+    // раньше min(…, vh - size) закатывал её под бар намертво.
     const tiny = { width: 200, height: 30 };
     const pos = clampFabPosition({ left: 0, top: 0 }, tiny, FAB_SIZE, 50);
-    assert.ok(pos.top <= tiny.height - FAB_SIZE + 0.0001 || pos.top === 0, 'top не улетает за низ вьюпорта');
+    // inset клэмпится к vh-1: максимум 1px гарантированно остаётся видимым.
+    assert.equal(pos.top, Math.min(50, tiny.height - 1));
+    assert.ok(pos.top >= Math.min(50, tiny.height - 1), 'top ниже бара-инsetа');
+});
+
+// ── Пульс генерации (счётчик активных запускów) ──
+
+test('пульс: гаснет только после ПОСЛЕДНЕЙ параллельной генерации', () => {
+    // Stage 2 сериализован per-post, auto-поток цепочку обходит — ручная
+    // генерация может идти параллельно очереди. Булево от первого end
+    // гасило пульс под живую генерацию (доказано вживую, см. ревью).
+    const states = [];
+    const pulse = makePulseStateMachine(on => states.push(on));
+    pulse.start();
+    pulse.start();               // вторая генерация стартовала параллельно
+    pulse.end();                 // первая закончилась — пульс ещё ЖИВ
+    assert.deepEqual(states, [true], 'пульс не должен гаснуть, пока идёт другая генерация');
+    pulse.end();                 // закончилась последняя — гаснет
+    assert.deepEqual(states, [true, false]);
+});
+
+test('пульс: лишний end без start не гасит и не уводит счётчик в минус', () => {
+    const states = [];
+    const pulse = makePulseStateMachine(on => states.push(on));
+    pulse.end();
+    pulse.end();
+    assert.deepEqual(states, [], 'end без start — ничего не делает');
+    pulse.start();
+    pulse.end();
+    assert.deepEqual(states, [true, false], 'после мусорных end честная пара работает');
+});
+
+// ── Биндинг пульса: безусловно, для любого launcherMode ──
+
+const indexSrc = readFileSync(join(dirname(fileURLToPath(import.meta.url)), '..', 'index.js'), 'utf8');
+const flSrc = readFileSync(join(dirname(fileURLToPath(import.meta.url)), '..', 'src', 'ui', 'floating-launcher.js'), 'utf8');
+
+test('пульс биндится из ensureLauncher безусловно — работает и в bar-режиме', () => {
+    // Регресс: bindStage2Pulse вызывался только при создании FAB
+    // (ensureFloatingLauncher, ветка if (!icon)), а FAB в дефолтном
+    // launcherMode 'bar' не монтируется вовсе → пульс мёртв (доказано
+    // вживую синтетическими uris:stage2-start на 127.0.0.1:8001).
+    assert.match(flSrc, /export function bindStage2Pulse/, 'bindStage2Pulse должен быть экспортирован');
+    const ensureIdx = indexSrc.indexOf('function ensureLauncher()');
+    assert.notEqual(ensureIdx, -1, 'не найден ensureLauncher в index.js');
+    const nextFn = indexSrc.indexOf('\nfunction ', ensureIdx + 1);
+    const ensureBody = indexSrc.slice(ensureIdx, nextFn === -1 ? indexSrc.length : nextFn);
+    assert.match(ensureBody, /bindStage2Pulse\(\)/, 'ensureLauncher должен звать bindStage2Pulse() безусловно');
+    // Старая точка биндинга удалена: ensureFloatingLauncher больше не вешает
+    // слушатели только при первом монтировании FAB.
+    const ensureFlIdx = flSrc.indexOf('export function ensureFloatingLauncher');
+    const flTail = flSrc.slice(ensureFlIdx);
+    assert.doesNotMatch(flTail, /bindStage2Pulse\(\)/, 'биндинг не должен жить в FAB-ветке');
 });
 
 // ── computeRestoredPosition (untrusted localStorage payload) ──

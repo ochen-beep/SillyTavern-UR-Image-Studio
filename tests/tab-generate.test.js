@@ -47,7 +47,7 @@ const { POST_FILTER } = await import('../src/post-navigator.js');
 const { hashMessage } = await import('../src/generation-drafts.js');
 const { MAX_REFS } = await import('../src/refs-library.js');
 const tabGenerate = await import('../src/ui/tab-generate.js');
-const { decidePromptActions, buildGenerateViewModel, renderGenerateMarkup, readGenerationParams, submitCurrentGeneration, updateReferenceCorrections, refreshReferencePanel, buildReferencePanelState, resolveConnectionReferencePolicy, getSnapshotReferencePolicy } = tabGenerate;
+const { decidePromptActions, buildGenerateViewModel, renderGenerateMarkup, readGenerationParams, submitCurrentGeneration, composeInsertedPrompt, updateReferenceCorrections, refreshReferencePanel, buildReferencePanelState, resolveConnectionReferencePolicy, getSnapshotReferencePolicy } = tabGenerate;
 
 beforeEach(() => {
     state.settings = {
@@ -172,6 +172,18 @@ test('renderGenerateMarkup renders rebuild and enabled Stage 2 for nonempty prom
     assert.match(markup, /id="urisGenerateImage"(?![^>]*disabled)[^>]*>\s*<i[^>]*><\/i> Сгенерировать/);
     assert.doesNotMatch(markup, /id="urisPrimaryGenerate"/);
     assert.match(markup, /a cat/);
+});
+
+test('renderGenerateMarkup renders the insert-template action inside the prompt card', () => {
+    const messageText = 'message text';
+    const draft = { prompt: 'a cat', aspectRatio: '9:16', imageSize: '2K', quality: 'high', templateId: null, messageHash: hashMessage(messageText) };
+    const markup = renderGenerateMarkup(baseVm({ draft, messageText }));
+    const card = markup.match(/<div class="uris-prompt-card">[\s\S]*?<\/div>\s*<div class="uris-gen-params"/)?.[0];
+    assert.ok(card, 'prompt card block found');
+    assert.match(card, /id="urisInsertTemplate"/);
+    assert.match(card, /Вставить шаблон/);
+    // The insert action opens the actions row: build → insert → generate.
+    assert.ok(card.indexOf('id="urisBuildPrompt"') < card.indexOf('id="urisInsertTemplate"'), 'Stage 1 sits before insert');
 });
 
 test('renderGenerateMarkup splits params into two rows (format + behavior)', () => {
@@ -497,6 +509,22 @@ test('persistVisibleGenerationDraft preserves prompt origin when visible prompt 
         persist: async updater => { savedUpdater = updater; },
     });
     assert.equal(savedUpdater(stored).promptOrigin, 'stage1');
+});
+
+test('composeInsertedPrompt appends on a new line at the end without caret info', () => {
+    assert.equal(composeInsertedPrompt('a cat', 'wide shot'), 'a cat\nwide shot');
+    assert.equal(composeInsertedPrompt('', 'wide shot'), 'wide shot');
+    // Already newline-terminated text is not double-spaced.
+    assert.equal(composeInsertedPrompt('a cat\n', 'wide shot'), 'a cat\nwide shot');
+});
+
+test('composeInsertedPrompt splices at the caret and separates both sides', () => {
+    assert.equal(composeInsertedPrompt('a cat sits', 'wide shot', { start: 5, end: 5 }), 'a cat\nwide shot\n sits');
+    // A selection is replaced by the insert; the template block still lands on
+    // its own lines, the remainder of the prompt is preserved verbatim.
+    assert.equal(composeInsertedPrompt('a cat sits', 'wide shot', { start: 0, end: 5 }), 'wide shot\n sits');
+    // Out-of-range carets clamp to the string bounds.
+    assert.equal(composeInsertedPrompt('a cat', 'wide shot', { start: 99, end: 99 }), 'a cat\nwide shot');
 });
 
 test('cancelling prompt autosave prevents a delayed old write', async () => {
@@ -1301,6 +1329,59 @@ test('syncCancelState restores the Stop button with the last remaining requestId
     } finally {
         unbindAbortUI();
         restoreWindow();
+        tab?.restore();
+    }
+});
+
+// ── Insert-template action (prompt card) ──
+
+test('insert-template button splices the selected template instruction into the prompt', async () => {
+    const { setTemplateStoreForTests, resetTemplateStoreForTests } = await import('../src/prompt-templates.js');
+    setTemplateStoreForTests({
+        list: async () => [{ id: 'tpl-1', name: 'Cinematic', type: 'instruction', instruction: 'wide shot of {{char}}' }],
+    });
+    let tab;
+    try {
+        tab = await setupGenerateTab('c1');
+        // setupGenerateTab installs its own minimal ctx (no substituteParams);
+        // replace it AFTER the call so macro expansion is observable. The tab's
+        // restore() still returns the file-level stub.
+        const tabCtx = globalThis.SillyTavern.getContext;
+        globalThis.SillyTavern.getContext = () => ({
+            ...tabCtx(),
+            substituteParams: text => text.replaceAll('{{char}}', 'Aria'),
+        });
+        const prompt = tab.root.querySelector('#urisPrompt');
+        prompt.value = 'a cat';
+        tab.root.querySelector('#urisTemplate').value = 'tpl-1';
+        await tab.root.querySelector('#urisInsertTemplate').dispatchEvent({ type: 'click' });
+        // Macros are expanded on insert: raw {{char}} must not reach the image model.
+        assert.equal(prompt.value, 'a cat\nwide shot of Aria');
+    } finally {
+        resetTemplateStoreForTests();
+        tab?.restore();
+    }
+});
+
+test('insert-template button warns and keeps the prompt when no template is selected', async () => {
+    const { setTemplateStoreForTests, resetTemplateStoreForTests } = await import('../src/prompt-templates.js');
+    setTemplateStoreForTests({ list: async () => [] });
+    let tab;
+    try {
+        tab = await setupGenerateTab('c1');
+        // setupGenerateTab clears globalThis.toastr; install the stub after it.
+        const warnings = [];
+        globalThis.toastr = { warning: m => warnings.push(m), info: () => {}, success: () => {}, error: () => {} };
+        const prompt = tab.root.querySelector('#urisPrompt');
+        prompt.value = 'a cat';
+        tab.root.querySelector('#urisTemplate').value = '';
+        await tab.root.querySelector('#urisInsertTemplate').dispatchEvent({ type: 'click' });
+        assert.equal(prompt.value, 'a cat', 'prompt stays untouched in base mode');
+        assert.equal(warnings.length, 1);
+        assert.match(warnings[0], /Шаблон не выбран/);
+    } finally {
+        globalThis.toastr = undefined;
+        resetTemplateStoreForTests();
         tab?.restore();
     }
 });

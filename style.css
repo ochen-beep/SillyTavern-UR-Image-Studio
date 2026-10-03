@@ -146,7 +146,9 @@
     border-color: var(--uris-accent-line);
     color: var(--uris-accent);
 }
-.uris_fab.uris_fab_dragging { transition: none !important; cursor: grabbing !important; will-change: left, top; }
+.uris_fab.uris_fab_dragging { transition: none !important; cursor: grabbing !important; }
+/* will-change для драга не нужен: left/top — layout-свойства, композитором
+   не двигаются (пустой хинт), а transform занят пульсом uris-pulse. */
 
 /* Пульс генерации — на обоих лаунчерах (класс вешает floating-launcher.js по
    событиям uris:stage2-start/end). */
@@ -157,6 +159,9 @@
 @media (prefers-reduced-motion: reduce) {
     .uris_fab.uris_generating, #uris_launcher.uris_generating { animation: none; opacity: 0.8; will-change: auto; }
 }
+/* Спиннеры гасятся одним консолидированным блоком в КОНЦЕ файла (см. конец
+   style.css): правила-источники стоят позже этого места, и при равной
+   специфичности каскад отдал бы им animation обратно. */
 
 /* ── Плавающее окно ── */
 .uris-window {
@@ -181,7 +186,7 @@
 }
 .uris-window.uris-hidden { display: none; }
 .uris-header {
-    display: flex; align-items: center; justify-content: space-between;
+    display: flex; align-items: center;
     padding: 8px 12px; cursor: move; user-select: none;
     background: var(--uris-surface-header); flex-shrink: 0;
     border-bottom: 1px solid var(--uris-border-soft);
@@ -191,9 +196,9 @@
        `#urisWindow.uris-mobile .uris-header { touch-action: pan-y }`. */
     touch-action: none;
 }
-.uris-title { font-weight: 600; font-size: calc(14px * var(--uris-font-scale, 1)); }
-.uris-header-actions { display: flex; align-items: center; gap: 8px; }
-.uris-status { font-size: var(--uris-font-sm); opacity: .8; min-height: 14px; }
+/* Шапка без заголовка: слева пусто — место под будущие элементы; действия
+   держатся у правого края независимо от того, что появится слева. */
+.uris-header-actions { display: flex; align-items: center; gap: 8px; margin-left: auto; }
 .uris-icon-btn { background: none; border: none; color: inherit; cursor: pointer; font-size: calc(16px * var(--uris-font-scale, 1)); padding: 2px 6px; }
 
 /* ── Вкладки ── */
@@ -380,9 +385,10 @@
 }
 /* Header radio: ring color = connection readiness (red/amber/green, classes
    uris-status-* preserved for tests), filled accent = active. Doubles as the
-   "make active" click target. See headerStatus() in server-connection-form.js. */
+   "make active" click target. See headerStatus() in server-connection-form.js.
+   20px — стандарт кликабельной зоны активации для карточек (как у шаблонов). */
 .uris-server-status {
-    flex: 0 0 auto; width: 14px; height: 14px; padding: 0; border: none; border-radius: 50%;
+    flex: 0 0 auto; width: 20px; height: 20px; padding: 0; border: none; border-radius: 50%;
     cursor: pointer; background: transparent; box-shadow: inset 0 0 0 2px var(--uris-text-mut);
     transition: filter .12s, box-shadow .12s;
 }
@@ -629,13 +635,7 @@
     box-sizing: border-box; border: 2px solid currentColor; border-right-color: transparent;
     border-radius: 50%; animation: uris-spin .8s linear infinite;
 }
-@media (prefers-reduced-motion: reduce) {
-    .uris-pending-server-host .uris-pending-server::before,
-    .uris-pending-server-host [data-pending-server-action]:disabled::before,
-    .uris-pending-server-host [data-pending-server-action][aria-busy="true"]::before {
-        animation: none;
-    }
-}
+/* reduce-глушение этих спиннеров — в консолидированном блоке в конце файла. */
 .uris-advanced-toggle { align-self: flex-start; font-size: var(--uris-font); color: var(--uris-text-mut); cursor: pointer; }
 .uris-advanced { display: flex; flex-direction: column; gap: 6px; padding: var(--uris-pad); border: 1px solid var(--uris-border-soft); border-radius: var(--uris-radius-card); background: var(--uris-surface-card); }
 .uris-advanced > summary { cursor: pointer; font-size: var(--uris-font-sm); color: var(--uris-text-mut); }
@@ -711,9 +711,10 @@
 .uris-templates-create { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 8px; }
 .uris-templates-create .uris-btn { flex: 1; min-width: 120px; }
 /* Header radio in the template card: doubles as the "make active" click target
-   (visible when collapsed). Filled accent = active, hollow ring = inactive. */
+   (visible when collapsed). Filled accent = active, hollow ring = inactive.
+   20px — это в первую очередь кликабельная зона активации, не только индикатор. */
 .uris-template-status {
-    flex: 0 0 auto; width: 14px; height: 14px; padding: 0; border: none; border-radius: 50%;
+    flex: 0 0 auto; width: 20px; height: 20px; padding: 0; border: none; border-radius: 50%;
     cursor: pointer; transition: filter .12s, box-shadow .12s;
 }
 .uris-template-status:hover { filter: brightness(1.15); }
@@ -721,7 +722,9 @@
 .uris-template-status:not(.uris-status-active) {
     background: transparent; box-shadow: inset 0 0 0 2px var(--uris-text-mut);
 }
-/* Active template: same accent-bar language as .uris-server-active (API tab). */
+/* Active template: тот же язык, что у активного коннекта во вкладке API —
+   заливка, акцентная линия рамки и левый акцент-бар на всей карточке.
+   Inset box-shadow рисует бар внутри карточки, layout не сдвигается. */
 .uris-template-instruction.uris-template-active {
     background: var(--uris-accent-soft);
     border-color: var(--uris-accent-line);
@@ -1463,6 +1466,17 @@
     transition: color .2s;
 }
 .uris-ed-autosave.uris-ed-autosave-on { color: var(--uris-accent); }
+/* Record footer: клонирование — тихая соседка слева, удаление остаётся
+   прижатым вправо (margin-left:auto из .uris-ed-del работает и в этом ряду). */
+.uris-ed-footer { display: flex; align-items: center; gap: 8px; margin-top: 4px; }
+/* Clone: quiet like delete, but neutral - accent on hover instead of red. */
+.uris-ed-clone {
+    background: transparent; border-color: transparent; color: var(--uris-text-mut);
+}
+.uris-ed-clone:not(:disabled):hover {
+    color: var(--uris-accent); background: var(--uris-surface-btn-hover); border-color: var(--uris-border);
+}
+
 /* Delete: quiet, right-aligned, red on hover - mirrors .uris-template-instruction .uris-del
    and .uris-server-connection .uris-server-delete so the destructive action stays subdued. */
 .uris-ed-del {
@@ -1837,22 +1851,29 @@
 .uris-reference-note { display: block; color: var(--uris-accent); margin: 0.25rem 0 0.5rem; }
 .uris-reference-protocol-row[hidden] { display: none; }
 
-/* ── Error pool (header ERR badge + panel) ── */
+/* ── Header badges (QUEUE + INFO) ── */
+/* Оба бейджа собраны одной функцией (badgeButtonHtml в window.js) и живут по
+   одному правилу состояний: есть актуальное (непрочитанное / выполняется) —
+   яркий бейдж с цифрой; иначе — приглушённый idle. Из DOM бейджи не удаляются
+   никогда: шапка не прыгает, панели очереди и событий достижимы всегда. */
 .uris-error-badge {
-    font-size: calc(11px * var(--uris-font-scale, 1));
+    font-size: calc(12px * var(--uris-font-scale, 1));
     font-weight: 600;
     letter-spacing: 0.04em;
     opacity: 0.75;
     border: 1px solid currentColor;
     border-radius: 8px;
-    padding: 1px 7px;
+    padding: 2px 8px;
     position: relative;
+    transition: opacity .12s;
 }
 .uris-error-badge:hover { opacity: 1; }
-/* Всё просмотрено: бейдж остаётся виден (инвентарь достижим — тот же
-   паттерн, что у QUEUE), но явно гаснет: цифра считает только новое. */
-.uris-error-badge--seen { opacity: 0.45; }
-.uris-error-badge--seen:hover { opacity: 0.8; }
+/* Ничего актуального: бейдж остаётся на месте, но явно приглушён.
+   Класс вешает sync в window.js (badgeIsIdle) обоим бейджам одинаково. */
+.uris-error-badge--idle { opacity: 0.45; }
+.uris-error-badge--idle:hover { opacity: 0.8; }
+/* В покое цифра не нужна: ноль не несёт информации, idle читается словом. */
+.uris-error-badge--idle .uris-error-count { display: none; }
 /* Красная точка = среди непрочитанного есть жёсткая ошибка (не warn).
    Внимание кодируется точкой, а не покраской цифры — бейдж остаётся
    нейтральным элементом шапки (см. 8abb722, «шумопонижение заголовка»). */
@@ -2665,4 +2686,23 @@ div.pswp__img--placeholder,
     font-size: var(--uris-font-xs); color: var(--uris-text-mut);
     background: var(--uris-surface-card); border: 1px solid var(--uris-border-soft);
     padding: 2px 8px; border-radius: var(--uris-radius-pill); white-space: nowrap;
+}
+
+/* ── prefers-reduced-motion: спиннеры (консолидированный блок) ──
+   Единая политика «минимум движения»: при reduce гасятся ВСЕ спиннеры
+   расширения — fetch-models, server-probe, pending-server (три вида) и
+   прелоадер лайтбокса. Блок стоит в КОНЦЕ файла: правила-источники
+   (uris-spin на ::before/i) разбросаны выше, и при равной специфичности
+   каскад без этой позиции отдал бы им animation обратно. Пульс лаунчеров
+   гасится отдельным блоком у своего правила (строка ~157).
+   Спиннер при этом остаётся видимым статичным глифом — статус «занят»
+   читается и без вращения. */
+@media (prefers-reduced-motion: reduce) {
+    .uris-fetch-models.loading i,
+    .uris-server-probe.uris-server-loading::before,
+    .uris-server-probe.loading::before,
+    .uris-pending-server-host .uris-pending-server::before,
+    .uris-pending-server-host [data-pending-server-action]:disabled::before,
+    .uris-pending-server-host [data-pending-server-action][aria-busy="true"]::before,
+    .uris-pswp .pswp__preloader .pswp__icn { animation: none; }
 }

@@ -522,3 +522,68 @@ test('render: mobile screen survives re-render (refresh no longer kicks back to 
 
     root.removeChild(el);
 });
+
+test('editor: «Клонировать» создаёт копию поверх того же файла и открывает её в редакторе', async () => {
+    const { document, root } = makeFakeDocument();
+    globalThis.document = document;
+    globalThis.document.body = root;
+
+    const { createRef, listRefs } = await import('../src/refs-library.js');
+    const char = await createRef({ name: 'Char', imagePath: 'user/images/Refs/char.png' });
+    const { render } = await import('../src/ui/tab-references.js');
+    const el = makeTabEl(document, 600);
+    root.appendChild(el);
+
+    await render(el);
+    const tile = [...el.querySelectorAll('.uris-pool-tile')].find(t => t.dataset.refId === char.id);
+    await tile.click();
+    await new Promise(resolve => setTimeout(resolve, 0));
+    assert.ok(el.querySelector('.uris-ed-clone'), 'кнопка «Клонировать» есть в теле редактора');
+
+    await el.querySelector('.uris-ed-clone').click();
+    await new Promise(resolve => setTimeout(resolve, 0));
+
+    const refs = await listRefs();
+    assert.equal(refs.length, 2, 'клон добавляет одну запись пула');
+    const clone = refs.find(r => r.id !== char.id);
+    assert.equal(clone.imagePath, char.imagePath, 'клон делит файл картинки с оригиналом');
+    assert.equal(clone.name, 'Char (копия)');
+
+    assert.equal(el.querySelector('.uris-ed-name').value, 'Char (копия)',
+        'редактор переключается на клона — можно сразу переименовать');
+
+    root.removeChild(el);
+});
+
+test('editor: «Клонировать» на мобильной карточке открывает клона, не выкидывая на сетку', async () => {
+    const { document, root } = makeFakeDocument();
+    globalThis.document = document;
+    globalThis.document.body = root;
+
+    const { createRef, listRefs } = await import('../src/refs-library.js');
+    const char = await createRef({ name: 'Моб', imagePath: 'user/images/Refs/mob.png' });
+    const { render, __resetMobileNavForTests } = await import('../src/ui/tab-references.js');
+    __resetMobileNavForTests();
+    const el = makeTabEl(document, 380);
+    root.appendChild(el);
+
+    await render(el);
+    await [...el.querySelectorAll('.uris-mobile-folder-item')].find(i => i.dataset.folder === 'all').click();
+    await new Promise(resolve => setTimeout(resolve, 0));
+    await el.querySelector('.uris-pool-tile').click();
+    await new Promise(resolve => setTimeout(resolve, 0));
+    assert.ok(el.querySelector('.uris-ed-clone'), 'кнопка «Клонировать» есть на мобильной карточке');
+
+    await el.querySelector('.uris-ed-clone').click();
+    await new Promise(resolve => setTimeout(resolve, 0));
+
+    const refs = await listRefs();
+    assert.equal(refs.length, 2, 'клон добавлен в пул');
+    const clone = refs.find(r => r.id !== char.id);
+    assert.equal(clone.name, 'Моб (копия)');
+    assert.ok(el.querySelector('.uris-mobile-card-scroll'), 'остались на экране карточки');
+    assert.equal(el.querySelector('.uris-ed-name').value, 'Моб (копия)',
+        'мобильный редактор показывает клона');
+
+    root.removeChild(el);
+});

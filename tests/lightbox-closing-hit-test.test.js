@@ -51,3 +51,22 @@ test('CSS глушит ВЕСЬ hit-тест поддерева закрываю
     assert.notEqual(vendorHole, -1, 'вендорное правило-дыра не найдено — сравнение позиции невозможно');
     assert.ok(idx > vendorHole, 'правило должно идти ПОСЛЕ вендорных pointer-events-правил');
 });
+
+test('watchdog принудительно доуничтожает зависший закрывающийся корень', () => {
+    // Вендорная развязка висит на transitionend с каскадом setTimeout(0 → 30)
+    // и фолбэком duration+500: корень .pswp может легально жить до ~1.2с после
+    // close(), под нагрузкой дольше. Хит-тест он прозрачен, но квирк движка или
+    // чужой !important возвращают «мёртвое окно». Контракт: в обработчике
+    // 'close' стоит принудительный destroy по таймауту, короче вендорного
+    // худшего случая и длиннее здоровой развязки (~250мс).
+    const closeIdx = src.indexOf("pswp.on('close'");
+    assert.notEqual(closeIdx, -1, "нет обработчика pswp.on('close')");
+    const handler = src.slice(closeIdx, src.indexOf('});', closeIdx));
+    assert.match(handler, /setTimeout/, 'в close-обработчике должен быть watchdog-таймер');
+    assert.match(handler, /isConnected/, 'destroy только если корень ещё в DOM (гонка со здоровой развязкой)');
+    assert.match(handler, /pswp\.destroy\(\)/, 'watchdog вызывает destroy()');
+    const timeoutMatch = handler.match(/},\s*(\d+)\)/);
+    assert.notEqual(timeoutMatch, null, 'не найдено значение таймаута watchdog');
+    const ms = Number(timeoutMatch[1]);
+    assert.ok(ms >= 350 && ms <= 600, `watchdog ${ms}мс вне окна 350–600: короче — режет здоровую анимацию, дольше — вендорный фолбэк (600+мс) успевает сам`);
+});

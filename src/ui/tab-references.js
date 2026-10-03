@@ -9,7 +9,7 @@ import {
     listRefs, getRef, updateRef, deleteRef,
     listFolders, createFolder, updateFolder, deleteFolder, FOLDER_COLOR_PALETTE,
     filterRefsByFolder, refreshPoolCache, getRefSync,
-    getFolderPrefs, saveFolderPrefs, persistPoolOrThrow, releaseRefImage,
+    getFolderPrefs, saveFolderPrefs, persistPoolOrThrow, releaseRefImage, cloneRef,
 } from '../refs-library.js';
 
 import { ingestReferenceImage } from '../references.js';
@@ -383,7 +383,10 @@ function refEditorBodyHtml(ref, { deleteLabel = 'Удалить карточку
         <label class="uris-ed-label">Папки</label>
         <div class="uris-fp-host"></div>
         <div class="uris-ed-autosave" aria-live="polite">Автосохранение</div>
-        <button class="uris-btn uris-btn-ghost uris-ed-del"><i class="fa-solid fa-trash"></i> ${escapeHtml(deleteLabel)}</button>`;
+        <div class="uris-ed-footer">
+            <button class="uris-btn uris-btn-ghost uris-ed-clone"><i class="fa-solid fa-clone"></i> Клонировать</button>
+            <button class="uris-btn uris-btn-ghost uris-ed-del"><i class="fa-solid fa-trash"></i> ${escapeHtml(deleteLabel)}</button>
+        </div>`;
 }
 
 async function _renderGrid(root, folders, refsOverride, searchQuery = '') {
@@ -440,14 +443,18 @@ async function _renderOverlay(root, folders) {
 }
 
 function _bindOverlay(root, host, ref, folders) {
+    // Одна перерисовка окружения для смены папок и клона: свежий список папок
+    // (шит поля мог создать новую), оверлей под новым _editingRefId, сайдбар с
+    // свежими счётчиками и сетка с новой карточкой.
+    const refreshAround = async () => {
+        const freshFolders = await listFolders();
+        await _renderOverlay(root, freshFolders);
+        _renderSidebar(root, freshFolders, await listRefs());
+        _renderGrid(root, freshFolders);
+    };
     _bindEditorBody(root, host.querySelector('.uris-refs-overlay-body'), ref, folders, {
-        onFolderChange: async () => {
-            // Свежий список папок: шит поля мог создать новую папку.
-            const freshFolders = await listFolders();
-            await _renderOverlay(root, freshFolders);
-            _renderSidebar(root, freshFolders, await listRefs());
-            _renderGrid(root, freshFolders);
-        },
+        onFolderChange: refreshAround,
+        onCloned: refreshAround,
     });
     host.querySelector('.uris-refs-overlay-close')?.addEventListener('click', async () => {
         _editingRefId = null;
@@ -634,7 +641,10 @@ async function _renderMobileCard(root) {
         <div class="uris-mobile-card-scroll" id="urisMobileCardBody"></div>`;
     const body = host.querySelector('#urisMobileCardBody');
     body.innerHTML = refEditorBodyHtml(ref, { deleteLabel: 'Удалить' });
-    _bindEditorBody(root, body, ref, folders, { onFolderChange: () => _renderMobileCard(root) });
+    _bindEditorBody(root, body, ref, folders, {
+        onFolderChange: () => _renderMobileCard(root),
+        onCloned: () => _renderMobileCard(root),
+    });
     host.querySelector('.uris-mobile-back')?.addEventListener('click', () => {
         _mobileScreen = 'grid';
         _renderMobileAll(root);
@@ -759,6 +769,21 @@ function _bindEditorBody(root, host, ref, folders, opts = {}) {
             reportFailure({ scope: URIS_SCOPES.refs, message: 'Не удалось заменить: ' + (err?.message || err), toast: true, toastText: 'Не удалось заменить: ' + err.message });
         }
         e.target.value = '';
+    });
+
+    // Клон: новая запись пула поверх ТЕКУЩЕГО файла картинки — releaseRefImage
+    // удержит файл, пока клон на него смотрит, так что правки расходятся
+    // независимо. Редактор сразу переключается на клона: в сетке с 50+ карточками
+    // он мог бы уехать за экран, а переименовать его нужно сейчас.
+    host.querySelector('.uris-ed-clone')?.addEventListener('click', async () => {
+        try {
+            const clone = await cloneRef(ref);
+            toastr?.success('Клонирован: ' + clone.name);
+            _editingRefId = clone.id;
+            await opts.onCloned?.();
+        } catch (err) {
+            reportFailure({ scope: URIS_SCOPES.refs, message: 'Клонирование: ' + (err?.message || err), toast: true, toastText: 'Не удалось клонировать: ' + err.message });
+        }
     });
 
     host.querySelector('.uris-ed-del')?.addEventListener('click', async () => {

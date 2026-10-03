@@ -8,6 +8,7 @@ export const CONTRACTS = Object.freeze({
   OPENROUTER_IMAGES: 'openrouter-images',
   POLLINATIONS_IMAGES: 'pollinations-images',
   NAISTERA: 'naistera',
+  COMFYUI: 'comfyui',
 });
 export const ALLOWED_CONTRACTS = new Set(Object.values(CONTRACTS));
 export const CAPABILITY_STATES = new Set(['supported', 'unsupported', 'unknown']);
@@ -239,8 +240,8 @@ export function normalizeRouteContract(value = {}) {
 // the new fields; it imports CONTRACTS from this module, so these helpers
 // must NOT import from dispatch-plan (module cycle).
 
-const API_SHAPE_VALUES = new Set(['openai', 'gemini', 'openrouter', 'pollinations', 'naistera', 'unknown']);
-const AUTH_STRATEGIES = new Set(['bearer', 'x-goog-api-key', 'query', 'pollinations-sk', 'pollinations-public', 'naistera-bearer', 'unknown']);
+const API_SHAPE_VALUES = new Set(['openai', 'gemini', 'openrouter', 'pollinations', 'naistera', 'comfyui', 'unknown']);
+const AUTH_STRATEGIES = new Set(['bearer', 'x-goog-api-key', 'query', 'pollinations-sk', 'pollinations-public', 'naistera-bearer', 'none', 'unknown']);
 const DELIVERY_VALUES = new Set(['auto', 'proxy', 'direct', 'unknown']);
 const REF_MODES = new Set(['auto', 'always', 'never']);
 const EVIDENCE_REF_STATES = new Set(['confirmed', 'rejected']);

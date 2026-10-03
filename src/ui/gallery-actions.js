@@ -5,7 +5,6 @@
  * to avoid duplication and keep a single source of truth.
  */
 import { getCtx, showConfirmModal, showInputModal, log, saveSettings, abortGeneration, escapeHtml, uid } from '../core.js';
-import { setStatus } from './window.js';
 import { lockBodyScroll, unlockBodyScroll } from './window.js';
 import { addToGallery, deleteGalleryCard } from '../storage.js';
 import { updateCard } from '../gallery-index.js';
@@ -183,7 +182,6 @@ export async function regenerate(item, root, regenBtn) {
             );
         }
         if (regenBtn) regenBtn.disabled = true;
-        setStatus('Перегенерация...');
         const instr = { prompt: item.prompt, aspectRatio: item.aspectRatio, imageSize: item.imageSize, quality: item.quality };
         let opts = {};
         if (useSameRefs && snapshot) {
@@ -202,7 +200,7 @@ export async function regenerate(item, root, regenBtn) {
             regenBtn.title = 'Остановить генерацию';
             regenBtn.innerHTML = '<i class="fa-solid fa-stop"></i> Остановить';
         };
-        await runStage2(item.sourceMsgId, instr, s => setStatus(s), undefined, opts);
+        await runStage2(item.sourceMsgId, instr, undefined, undefined, opts);
         toastr?.success('Перегенерировано');
         if (root) refreshRoot(root);
         ok = true;
@@ -213,7 +211,6 @@ export async function regenerate(item, root, regenBtn) {
         }
     } finally {
         _regenInFlight.delete(flightKey);
-        setStatus('');
         if (regenBtn) {
             delete regenBtn.dataset.urisStopMode;
             delete regenBtn.dataset.urisCurrentReq;

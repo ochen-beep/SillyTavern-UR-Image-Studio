@@ -303,6 +303,34 @@ export async function createReferenceFromGalleryCard(card = {}, options = {}) {
     });
 }
 
+/**
+ * Дубликат записи пула: клон делит с оригиналом файл картинки (releaseRefImage
+ * не отдаёт файл, пока на него смотрит хоть одна запись), но получает новый id,
+ * имя «(копия)» и собственные правки — кроп/замена у одного никогда не трогают
+ * другой. Поля прогоняются через createRef/normalizePoolReference, метаданные
+ * картинки (mime/размеры/байты) переносятся как есть.
+ * @param {object} source — запись из listRefs()/getRef()
+ * @param {object} [overrides] — точечные поля поверх скопированных
+ */
+export async function cloneRef(source, overrides = {}) {
+    if (!source?.id) throw new Error('cloneRef: нужна запись референса');
+    return createRef({
+        name: `${source.name || 'Без названия'} (копия)`,
+        aliases: source.aliases,
+        description: source.description,
+        bindingMode: source.bindingMode,
+        imagePath: source.imagePath,
+        folders: source.folders,
+        mime: source.mime,
+        width: source.width,
+        height: source.height,
+        sourceBytes: source.sourceBytes,
+        optimizedBytes: source.optimizedBytes,
+        optimizationVersion: source.optimizationVersion,
+        ...overrides,
+    });
+}
+
 export async function updateRef(id, patch) {
     const current = await getRef(id);
     if (!current) return null;

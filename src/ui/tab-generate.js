@@ -9,9 +9,9 @@ import { notifyStage1Ready } from '../events.js';
 import { POST_FILTER, navigatePosts, getPostInfo, setFilter, setCurrentMsgId, getLastPostIndex } from '../post-navigator.js';
 import { runStage1ForDraft, enqueueGeneration, createQueueItem, buildCandidates } from '../pipeline.js';
 import { getGenerationDraft, updateGenerationDraft, hashMessage, normalizeTemplateSelection, resolveDraftTemplateId } from '../generation-drafts.js';
-import { listTemplates } from '../prompt-templates.js';
+import { listTemplates, getTemplate } from '../prompt-templates.js';
+import { resolveSTMacros } from '../template-runtime.js';
 import { patchChatConfig, loadChatConfig } from '../chat-binding.js';
-import { setStatus } from './window.js';
 import { getActiveTab, refreshActive } from './tabs.js';
 import { getRefSync } from '../refs-library.js';
 import { showSingleImage } from './lightbox.js';
@@ -207,6 +207,7 @@ export function renderGenerateMarkup(vm) {
                     <button class="uris-btn uris-btn-ghost" id="urisBuildPrompt" type="button">
                         <i class="fa-solid fa-wand-magic-sparkles"></i> ${stage1Label}
                     </button>
+                    <button class="uris-btn uris-btn-ghost" id="urisInsertTemplate" type="button" title="Вставить инструкцию шаблона, выбранного в списке «Шаблон», в промпт"><i class="fa-solid fa-file-import"></i> Вставить шаблон</button>
                     <button class="uris-btn uris-btn-primary" id="urisGenerateImage"${generateDisabledAttr} type="button">
                         <i class="fa-solid fa-image"></i> Сгенерировать
                     </button>
@@ -513,6 +514,27 @@ export function readGenerationParams(root, draft) {
     return { aspectRatio, imageSize, quality };
 }
 
+/**
+ * Splice inserted text into a prompt string at the editor caret, adding newline
+ * separation so the insert never glues onto existing lines. A missing caret
+ * (elements without selectionStart, e.g. fake-dom) appends at the end.
+ * @param {string} value
+ * @param {string} text
+ * @param {{start?:number,end?:number}} [caret]
+ * @returns {string}
+ */
+export function composeInsertedPrompt(value, text, caret = {}) {
+    const source = String(value ?? '');
+    const clamp = n => Math.max(0, Math.min(n, source.length));
+    const start = Number.isInteger(caret.start) ? clamp(caret.start) : source.length;
+    const end = Number.isInteger(caret.end) ? clamp(Math.max(caret.end, start)) : start;
+    const before = source.slice(0, start);
+    const after = source.slice(end);
+    const lead = before && !before.endsWith('\n') ? '\n' : '';
+    const trail = after && !after.startsWith('\n') ? '\n' : '';
+    return before + lead + text + trail + after;
+}
+
 /** Persist the visible editor state, marking only actual prompt changes as manual. */
 export async function persistVisibleGenerationDraft({ draft, visiblePrompt, params, persist }) {
     const promptChanged = visiblePrompt !== draft.prompt;
@@ -637,6 +659,34 @@ export function bindGenerate(root) {
         promptEl.dispatchEvent(new Event('input', { bubbles: true }));
     });
 
+    // Insert the selected template's instruction into the prompt editor as plain
+    // editable text (macros expanded — raw {{char}} placeholders must not reach
+    // the image model). The synthetic input event reuses the autosave +
+    // live-preview + enable pipeline, same as the expanded editor above.
+    root.querySelector('#urisInsertTemplate')?.addEventListener('click', async () => {
+        if (!promptEl) return;
+        const templateId = root.querySelector('#urisTemplate')?.value || '';
+        if (!templateId) {
+            toastr?.warning('Шаблон не выбран — выберите шаблон в списке «Шаблон»');
+            return;
+        }
+        const template = await getTemplate(templateId);
+        if (!template) {
+            toastr?.warning('Шаблон не найден — обновите список на вкладке «Шаблоны»');
+            return;
+        }
+        const instruction = String(template.instruction || '').trim();
+        if (!instruction) {
+            toastr?.warning('Инструкция шаблона пуста — нечего вставлять');
+            return;
+        }
+        promptEl.value = composeInsertedPrompt(promptEl.value, resolveSTMacros(instruction), {
+            start: promptEl.selectionStart,
+            end: promptEl.selectionEnd,
+        });
+        promptEl.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+
     // Effective reference controls: remove from preview (add moved to + tile inside renderLivePreview).
     root.querySelector('#urisRefsPreview')?.addEventListener('click', async (e) => {
         const btn = e.target.closest('.uris-effective-ref-remove');
@@ -677,17 +727,14 @@ export function bindGenerate(root) {
         try {
             const input = await prepareSubmissionInput(root);
             if (!input) return;
-            setStatus('Построение промпта...');
-            const run = await runStage1ForDraft(input, s => setStatus(s));
+            const run = await runStage1ForDraft(input);
             if (run.applied) {
                 notifyStage1Ready(run.draft.prompt);
-                setStatus('Промпт готов');
                 toastr?.success('Промпт построен');
             }
         } catch (e) {
             error('Generate action:', e.message);
             reportFailure({ scope: URIS_SCOPES.stage1, message: e.message, context: input ? { post: input.msgId } : null, toast: true });
-            setStatus('');
         }
         await render(root);
     }));

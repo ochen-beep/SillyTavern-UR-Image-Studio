@@ -16,11 +16,11 @@ import { deliveryHintFor, editDialectHintFor, clearDeliveryEvidenceFor } from '.
 import { getProviderDescriptor } from '../provider-descriptors.js';
 import { validatePollinationsToken } from '../providers/image-pollinations.js';
 import { validateNaisteraToken } from '../providers/image-naistera.js';
+import { COMFYUI_DEFAULT_WORKFLOW_TXT2IMG, COMFYUI_DEFAULT_WORKFLOW_IMG2IMG, summarizeWorkflow } from '../providers/image-comfyui.js';
 import { getVisibleModelChoices, partitionLikelyImageModels } from '../dispatch-plan.js';
 import { reportFailure, URIS_SCOPES } from '../error-pool.js';
 import { showConfirmModal, log, escapeHtml } from '../core.js';
 import { forgetAccordion, getAccordionOpen, setAccordionOpen } from './accordion-state.js';
-import { setStatus } from './window.js';
 
 const MANUAL_MODEL = '__manual__';
 const accordionId = id => `api:image-conn:${id}`;
@@ -34,6 +34,7 @@ const DIALECT_OPTIONS = [
     [CONTRACTS.OPENROUTER_IMAGES, 'openrouter-images'],
     [CONTRACTS.POLLINATIONS_IMAGES, 'Pollinations (sk_ token)'],
     [CONTRACTS.NAISTERA, 'Naistera (токен из Telegram-бота)'],
+    [CONTRACTS.COMFYUI, 'ComfyUI (локальный workflow)'],
 ];
 
 function modelPartition(draft) {
@@ -77,7 +78,8 @@ function factsLine(draft) {
             : detected.auth === 'pollinations-sk' ? 'Pollinations sk_'
                 : detected.auth === 'pollinations-public' ? 'публичный каталог'
                     : detected.auth === 'naistera-bearer' ? 'Naistera токен'
-                        : 'Bearer';
+                        : detected.auth === 'none' ? 'без ключа'
+                            : 'Bearer';
         const delivery = detected.delivery === 'proxy' ? 'через прокси ST' : 'без прокси';
         const count = Array.isArray(detected.modelIds) ? detected.modelIds.length : 0;
         const imageCount = modelPartition(draft).imageModels.length;
@@ -116,6 +118,7 @@ function headerStatus(draft) {
     const needsKey = !draft?.id; // existing connections keep their key in separate storage
     const hasKey = !!draft?.apiKey?.trim();
     const hasModel = !!draft?.model?.id;
+    const comfyContract = draft?.overrides?.dialect === CONTRACTS.COMFYUI; // ключ не требуется
     const explicitPollinations = draft?.overrides?.dialect === CONTRACTS.POLLINATIONS_IMAGES;
     const inferredPollinations = /(?:^|\.)pollinations\.ai(?:\/|$)/i.test(String(draft?.endpoint || ''));
     const pollinations = explicitPollinations || inferredPollinations;
@@ -132,7 +135,7 @@ function headerStatus(draft) {
         catch (error) { return { state: 'red', label: error?.message || 'Требуется токен Naistera' }; }
     }
     const naisteraNeedsKey = naistera && !hasKey;
-    if (!hasEndpoint || (needsKey && !hasKey) || pollinationsNeedsKey || naisteraNeedsKey || !hasModel) {
+    if (!hasEndpoint || (!comfyContract && needsKey && !hasKey) || pollinationsNeedsKey || naisteraNeedsKey || !hasModel) {
         return { state: 'red', label: pollinationsNeedsKey ? 'Требуется sk_ токен Pollinations' : naisteraNeedsKey ? 'Требуется токен Naistera' : 'Не настроено' };
     }
     if (!draft?.detected?.checkedAt) return { state: 'amber', label: 'Не проверено' };
@@ -200,7 +203,7 @@ export function renderServerConnectionForm(draft = {}, options = {}) {
         </div>
         <div class="uris-preset-card-body">
             <div class="uris-row"><label>Адрес</label><input class="text_pole uris-server-endpoint" type="url" value="${escapeHtml(endpoint)}" placeholder="https://api.example.com/v1"></div>
-            <div class="uris-row"><label>Ключ</label><input class="text_pole uris-server-api-key" type="password" value="${escapeHtml(draft.apiKey || '')}" placeholder="${escapeHtml(overrides.dialect === CONTRACTS.POLLINATIONS_IMAGES ? 'sk_...' : overrides.dialect === CONTRACTS.NAISTERA ? 'Токен из Telegram-бота' : 'Ключ API')}"></div>
+            <div class="uris-row"><label>Ключ</label><input class="text_pole uris-server-api-key" type="password" value="${escapeHtml(draft.apiKey || '')}" placeholder="${escapeHtml(overrides.dialect === CONTRACTS.POLLINATIONS_IMAGES ? 'sk_...' : overrides.dialect === CONTRACTS.NAISTERA ? 'Токен из Telegram-бота' : overrides.dialect === CONTRACTS.COMFYUI ? 'не требуется' : 'Ключ API')}"></div>
             <div class="uris-server-probe-row">
                 <button class="uris-btn uris-btn-confirm uris-server-probe" type="button">Проверить</button>
                 <span class="uris-server-facts">${escapeHtml(factsLine(draft))}</span>
@@ -208,6 +211,10 @@ export function renderServerConnectionForm(draft = {}, options = {}) {
             ${draft.errorMessage ? `<div class="uris-server-warning">${escapeHtml(draft.errorMessage)}</div>` : ''}
             <div class="uris-row"><label>Модель</label>${modelSelectMarkup(draft)}</div>
             <div class="uris-row uris-server-manual-row" ${manualMode ? '' : 'hidden'}><label>ID модели</label><input class="text_pole uris-server-manual-model" value="${escapeHtml(manualMode ? current : '')}" placeholder="${escapeHtml(manualModelPlaceholder(draft))}"></div>
+            ${overrides.dialect === CONTRACTS.COMFYUI ? `
+            <div class="uris-row"><label>Workflow (API-формат)</label><textarea class="text_pole uris-server-comfy-workflow" rows="8" spellcheck="false" placeholder="Пусто — встроенный txt2img (с референсами — img2img). Свой граф: Export (API) из ComfyUI. Плейсхолдеры: %model%, %prompt%, %seed%, %width%, %height%">${escapeHtml(draft.workflowJson || '')}</textarea><div class="uris-server-comfy-summary uris-server-facts"></div></div>
+            <div class="uris-row uris-server-comfy-defaults"><button class="uris-btn uris-btn-ghost uris-server-comfy-default" data-kind="txt2img" type="button">Вставить встроенный txt2img</button><button class="uris-btn uris-btn-ghost uris-server-comfy-default" data-kind="img2img" type="button">img2img (референс)</button></div>
+            <div class="uris-server-warning">Запустите ComfyUI с --enable-cors-header "*" или включите «Через CORS-прокси ST» в «Расширенных» (прокси не переносит multipart — с прокси референсы работать не будут). Референсы ложатся в ноды LoadImage по возрастанию ID.</div>` : ''}
             <details class="uris-advanced uris-server-advanced" ${advancedOpen ? 'open' : ''}>
                 <summary>Расширенные</summary>
                 <div class="uris-row"><label>Протокол</label><select class="text_pole uris-server-dialect" title="Как говорить с этим шлюзом. Авто определяет протокол по адресу и модели — меняйте только если Авто отправляет не тем протоколом.">${DIALECT_OPTIONS.map(([value, label]) => `<option value="${escapeHtml(value)}"${selected(value, overrides.dialect || '')}>${escapeHtml(label)}</option>`).join('')}</select></div>
@@ -271,6 +278,10 @@ export function collectServerConnectionForm(form, previous = {}) {
     delete overrides.__extraBodyError;
     const extra = parseExtraBody(value('.uris-server-extra-body'));
     if (extra.error) overrides.__extraBodyError = value('.uris-server-extra-body');
+    // Workflow ComfyUI живёт на записи подключения (не в extraBody — там его
+    // пришлось бы редактировать двумя поверхностями). Вне comfy-контракта
+    // поле вычищается (undefined выпадает при JSON-сериализации).
+    const comfyWorkflow = value('.uris-server-comfy-workflow').trim();
     return {
         ...previous,
         name: value('.uris-server-name').trim(),
@@ -281,6 +292,7 @@ export function collectServerConnectionForm(form, previous = {}) {
         model,
         overrides,
         extraBody: extra.value,
+        workflowJson: dialect === CONTRACTS.COMFYUI ? comfyWorkflow : undefined,
     };
 }
 
@@ -293,6 +305,7 @@ function collectSavePayload(draft) {
         model: draft.model || null,
         overrides: draft.overrides || {},
         extraBody: draft.extraBody || {},
+        ...(draft.workflowJson === undefined ? {} : { workflowJson: draft.workflowJson }),
         // Probe facts and per-model evidence survive card edits.
         detected: draft.detected || null,
         evidence: draft.evidence || {},
@@ -325,7 +338,8 @@ export function validateServerConnectionDraft(draft, options = {}) {
     }
     if (!draft?.name?.trim()) throw new TypeError('Connection name is required');
     if (!draft?.endpoint?.trim()) throw new TypeError('Endpoint is required');
-    if (!draft.id && !draft?.apiKey?.trim()) throw new TypeError('API key is required');
+    const comfyContract = draft.overrides?.dialect === CONTRACTS.COMFYUI;
+    if (!draft.id && !comfyContract && !draft?.apiKey?.trim()) throw new TypeError('API key is required');
     if (!draft?.model?.id) throw new TypeError('Select a model (from the list or by ID) before saving');
     if (draft.overrides?.dialect === CONTRACTS.POLLINATIONS_IMAGES && draft.apiKey?.trim()) validatePollinationsToken(draft.apiKey);
     if (draft.overrides?.dialect === CONTRACTS.NAISTERA && draft.apiKey?.trim()) validateNaisteraToken(draft.apiKey);
@@ -462,9 +476,44 @@ export function bindServerConnectionForm(form, draft, dependencies = {}) {
         } catch (error) { notifyError(error); }
     });
 
+    // Живая сводка workflow (У2) и кнопки встроенных графов (У4): чипы
+    // пересчитываются на каждый ввод, кнопки кладут стартовый граф в textarea.
+    const workflowArea = form.querySelector('.uris-server-comfy-workflow');
+    const summaryBox = form.querySelector('.uris-server-comfy-summary');
+    const renderWorkflowSummary = () => {
+        if (!summaryBox || !workflowArea) return;
+        const text = workflowArea.value;
+        if (!text.trim()) {
+            summaryBox.textContent = 'Пусто — будет использован встроенный txt2img (с референсами — img2img).';
+            return;
+        }
+        const state = summarizeWorkflow(text);
+        if (!state.ok) {
+            summaryBox.textContent = `⚠ Workflow: ${state.error}`;
+            return;
+        }
+        const chips = [
+            `Промпт ${state.placeholders.prompt ? '✓' : '✗'}`,
+            `Seed ${state.placeholders.seed ? '✓' : '✗ (фиксированный)'}`,
+            `Выход ${state.hasOutput ? '✓' : '✗'}`,
+            `LoadImage: ${state.loadImageCount}`,
+        ];
+        if (state.checkpointLoaderNoModel) chips.push('⚠ чекпойнт-лоадер без %model% — поле «Модель» не применится');
+        summaryBox.textContent = chips.join(' · ');
+    };
+    workflowArea?.addEventListener('input', renderWorkflowSummary);
+    renderWorkflowSummary();
+    for (const button of form.querySelectorAll('.uris-server-comfy-default')) {
+        button.addEventListener('click', () => {
+            if (!workflowArea) return;
+            workflowArea.value = button.getAttribute('data-kind') === 'img2img' ? COMFYUI_DEFAULT_WORKFLOW_IMG2IMG : COMFYUI_DEFAULT_WORKFLOW_TXT2IMG;
+            renderWorkflowSummary();
+            onChange();
+        });
+    }
+
     form.querySelector('.uris-server-probe')?.addEventListener('click', async () => {
         log('probe: click', draft?.id || draft?.draftId, 'endpoint=', draft?.endpoint, 'runtime=', 'catalog-v3');
-        setStatus('Проверка подключения...');
         sync();
         form.querySelector('.uris-server-probe').disabled = true;
         try {
@@ -474,6 +523,7 @@ export function bindServerConnectionForm(form, draft, dependencies = {}) {
                 : draft.overrides?.delivery === 'direct' ? 'direct' : 'auto';
             const outcome = await probe({
                 endpoint: draft.endpoint, apiKey, timeoutMs: draft.timeoutMs, corsMode,
+                dialect: draft.overrides?.dialect || '',
             });
             draft.detected = outcome;
             draft.errorMessage = '';
@@ -481,14 +531,12 @@ export function bindServerConnectionForm(form, draft, dependencies = {}) {
             log('probe: ok', draft.id, outcome.modelIds.length, 'models', outcome.apiShape, outcome.auth, outcome.delivery, 'source=', outcome.catalogSource || 'unknown', 'url=', outcome.catalogUrl || 'unknown', 'metadata=', outcome.metadataCount ?? (outcome.modelMetadata?.length || 0), 'partial=', outcome.partial === true);
             notifySuccess(`Подключено: ${outcome.modelIds.length} моделей (${outcome.apiShape})`);
             rerenderCard();
-            setStatus('');
         } catch (error) {
             log('probe: fail', draft?.id || draft?.draftId, error?.code || '', error?.message || error);
             draft.errorMessage = error?.message || 'Проверка не удалась';
             reportFailure({ scope: URIS_SCOPES.probe, message: `${draft?.name || draft?.endpoint || 'коннект'}: ${draft.errorMessage}` });
             notifyError(error);
             rerenderCard();
-            setStatus('');
         } finally {
             const btn = form.querySelector('.uris-server-probe');
             if (btn) btn.disabled = false;

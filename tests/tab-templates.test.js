@@ -52,6 +52,12 @@ test('renderTemplateCard renders instruction editor', () => {
     assert.doesNotMatch(html, /Fields|Legacy v3|copy-legacy/);
 });
 
+test('renderTemplateCard renders a clone action like the connect-card clone', () => {
+    const html = renderTemplateCard({ id: 't1', name: 'Director', type: 'instruction', instruction: '' });
+    assert.match(html, /class="uris-btn uris-btn-ghost uris-template-clone[^"]*"/);
+    assert.match(html, /Клонировать/);
+});
+
 test('active template card shows the active dot and accent class, not the legacy glow', () => {
     state.activeTemplateId = 't1';
     const html = renderTemplateCard({ id: 't1', name: 'Director', type: 'instruction', instruction: '' });

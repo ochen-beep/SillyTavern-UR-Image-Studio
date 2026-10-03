@@ -1,0 +1,87 @@
+<!doctype html>
+<!--
+    Визуальный стенд бейджей INFO и QUEUE шапки окна.
+    Запуск: python -m http.server 8931 из корня проекта, открыть
+    http://127.0.0.1:8931/tests/manual/badge-visual.html
+    Разметка бейджей и панелей скопирована из src/ui/window.js (mountPanel /
+    renderErrorPanel / renderQueuePanel); панели переведены в поток, чтобы все
+    состояния были видны на одном скриншоте.
+-->
+<html lang="ru">
+<head>
+    <meta charset="utf-8">
+    <title>UR Image Studio — бейджи INFO/QUEUE</title>
+    <link rel="stylesheet" href="st-assets/st-style.css?v=1">
+    <link rel="stylesheet" href="../../style.css?v=1">
+    <style>
+        html { --uris-st-top: 0px; }
+        body { padding: 24px; display: flex; flex-direction: column; gap: 28px; align-items: flex-start; }
+        .demo-label { font: 12px/1.4 monospace; opacity: .7; margin-bottom: 6px; }
+        .demo-row { display: flex; gap: 14px; align-items: center; flex-wrap: wrap; }
+        .uris-window.demo { position: static; width: 460px; height: auto; }
+        .uris-error-panel.demo { position: static; width: min(380px, 100%); max-height: none; }
+    </style>
+</head>
+<body>
+    <!-- Шапка окна: бейджи в контексте -->
+    <div>
+        <div class="demo-label">Шапка окна (как в uris-header)</div>
+        <div class="uris-window demo">
+            <div class="uris-header" id="urisHeader">
+                <div class="uris-header-actions">
+                    <button type="button" class="uris-icon-btn uris-error-badge" title="Очередь генераций">QUEUE <span class="uris-error-count">2</span></button>
+                    <button type="button" class="uris-icon-btn uris-error-badge" title="События">INFO <span class="uris-error-count">3</span><span class="uris-badge-dot"></span></button>
+                    <button type="button" class="uris-icon-btn" title="Свернуть">✕</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Состояния бейджей крупно -->
+    <div>
+        <div class="demo-label">Состояния слева направо: QUEUE live=2 (активен) · QUEUE live=0 (idle) · INFO unread=3 + точка (активен) · INFO всё просмотрено (idle). Оба бейджа всегда в DOM, цифра в покое скрыта.</div>
+        <div class="uris-header" style="border-radius:10px; padding: 8px 12px;">
+            <div class="uris-header-actions">
+                <button type="button" class="uris-icon-btn uris-error-badge">QUEUE <span class="uris-error-count">2</span></button>
+                <button type="button" class="uris-icon-btn uris-error-badge uris-error-badge--idle">QUEUE <span class="uris-error-count">0</span></button>
+                <button type="button" class="uris-icon-btn uris-error-badge">INFO <span class="uris-error-count">3</span><span class="uris-badge-dot"></span></button>
+                <button type="button" class="uris-icon-btn uris-error-badge uris-error-badge--idle">INFO <span class="uris-error-count">0</span></button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Панель INFO -->
+    <div>
+        <div class="demo-label">Панель INFO (открыта)</div>
+        <div class="uris-error-panel demo" role="dialog" aria-label="События">
+            <div class="uris-error-panel-actions"><button type="button" class="uris-btn uris-btn-ghost">Очистить</button></div>
+            <div class="uris-error-rows">
+                <div class="uris-error-row uris-pending-row"><span><strong>результат запроса неизвестен</strong> · 02.10, 14:02 · пост #8 · flux-dev</span><small>timeout of 120000ms exceeded</small><button type="button" class="uris-btn uris-btn-ghost uris-pending-discard" title="Удалить событие">×</button></div>
+                <div class="uris-error-row uris-pool-fail"><span>14:32:05 · Генерация ×2: соединение сброшено — пост #12 · «Novita» · flux-dev</span></div>
+                <div class="uris-error-row uris-pool-warn"><span>14:30:11 · Провайдер: медленный ответ, повтор</span></div>
+                <div class="uris-error-row uris-pool-fail"><span>14:28:40 · Генерация: 429 Too Many Requests — пост #9</span></div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Панель QUEUE -->
+    <div>
+        <div class="demo-label">Панель QUEUE (открыта)</div>
+        <div class="uris-error-panel demo" role="dialog" aria-label="Очередь генераций">
+            <div class="uris-error-panel-actions">
+                <button type="button" class="uris-btn uris-btn-ghost">Остановить очередь</button>
+                <button type="button" class="uris-btn uris-btn-ghost">Очистить завершённые</button>
+            </div>
+            <section class="uris-error-section"><h3>Генерации</h3>
+                <div class="uris-error-rows">
+                    <div class="uris-error-row uris-queue-row"><span>Пост #14 — ждёт</span><button type="button" class="uris-queue-row-cancel" title="Отменить эту задачу">×</button></div>
+                    <div class="uris-error-row uris-queue-row"><span>Пост #13 — выполняется</span></div>
+                    <div class="uris-error-row uris-queue-row uris-queue-ok"><span>Пост #12 — готово</span></div>
+                    <div class="uris-error-row uris-queue-row uris-queue-fail"><span>Пост #11 — готово</span><small>429 Too Many Requests</small><button type="button" class="uris-queue-row-retry" title="Отправить задачу ещё раз">Повторить</button></div>
+                    <div class="uris-error-row uris-queue-row"><span>Пост #10 — готово</span></div>
+                </div>
+            </section>
+        </div>
+    </div>
+</body>
+</html>

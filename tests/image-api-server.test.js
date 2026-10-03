@@ -296,11 +296,20 @@ test('explicit-direct delivery never probes OPTIONS and keeps the typed ambiguit
     assert.deepEqual(generationCalls.map(call => call.options?.method), ['POST'], 'явный приказ «Только напрямую» — никаких OPTIONS и прокси');
 });
 
-test('provider HTTP errors do not retry a paid generation and remain reviewable', async () => {
+test('provider HTTP errors close the record (known outcome), network-unknown stays reviewable', async () => {
+    // Решение 2026-10-02: в INFO — только фактический результат. Ответ
+    // провайдера (429) — исход известен: запись закрывается, карточка
+    // «результат запроса неизвестен» не рождается (ошибку видно в QUEUE и
+    // пуле, технический след — в dispatch-error журнале).
     providerResponse = jsonResponse({ error: { message: 'Quota exhausted' } }, 429);
     await assert.rejects(() => generateImageRequest('browser-image', request()), error => error.code === 'UPSTREAM_HTTP_ERROR');
     assert.equal(fetchCalls.filter(call => call.url === 'https://images.example/v1/images/generations').length, 1);
-    const pending = await getPendingImages();
+    assert.deepEqual(await getPendingImages(), [], 'HTTP-ответ — исход известен, страховка не нужна');
+    // Обрыв сети — честное «неизвестно» (POST мог уйти): запись остаётся.
+    providerResponse = new TypeError('Failed to fetch');
+    await assert.rejects(() => generateImageRequest('browser-image', request({ requestId: 'req_net_unknown_0001' })));
+    const pending = await listPendingBrowserRequests();
+    assert.equal(pending.length, 1);
     assert.equal(pending[0].status, 'dispatchingUnknown');
 });
 

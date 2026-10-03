@@ -312,3 +312,9 @@ test('referenceEncoding labels the wire format per dialect', () => {
     assert.match(referenceEncoding('openai-images'), /images\[\]/);
     assert.equal(referenceEncoding('unknown-dialect'), 'unknown-dialect');
 });
+
+test('comfyui shape: диалект-цепочка и эвристика порта 8188', () => {
+    assert.deepEqual(dialectOrder('comfyui', 'unknown'), ['comfyui']);
+    assert.equal(inferApiShape('http://127.0.0.1:8188'), 'comfyui');
+    assert.equal(inferApiShape('https://api.example.com/v1'), 'openai');
+});

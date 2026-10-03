@@ -188,7 +188,7 @@ export function providerError(code, message) {
 export function requireInvocation(input) {
   if (!input || typeof input !== 'object') throw providerError('INVALID_IMAGE_REQUEST', 'Image provider invocation is invalid.');
   if (typeof input.endpoint !== 'string' || !input.endpoint.trim()) throw providerError('INVALID_IMAGE_REQUEST', 'Image provider endpoint is required.');
-  if (typeof input.apiKey !== 'string' || !input.apiKey.trim()) {
+  if (input.route?.generationContract !== 'comfyui' && (typeof input.apiKey !== 'string' || !input.apiKey.trim())) {
     if (input.route?.generationContract === 'pollinations-images') {
       const error = providerError('POLLINATIONS_TOKEN_REQUIRED', 'Pollinations requires an sk_ access token in the connection Key field.');
       error.authCode = 'AUTH_REQUIRED';

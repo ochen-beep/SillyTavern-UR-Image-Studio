@@ -34,7 +34,8 @@ export function bindTabBarScroll(bar, doc) {
     const onWheel = (e) => {
         if (!canScroll()) return; // нечего скроллить — событие идёт скроллу body
         // Тачпады шлют deltaX; обычное колесо — deltaY. Берём доминирующую ось.
-        const unit = e.deltaMode === 1 ? 33 : 1; // строки → px (страницы не трогаем)
+        // deltaMode: 1 — строки (≈33px), 2 — страницы (≈ ширина бара).
+        const unit = e.deltaMode === 1 ? 33 : e.deltaMode === 2 ? Math.max(1, bar.clientWidth) : 1;
         const delta = (Math.abs(e.deltaX) > Math.abs(e.deltaY) ? e.deltaX : e.deltaY) * unit;
         if (!delta) return;
         const max = bar.scrollWidth - bar.clientWidth;
@@ -67,7 +68,16 @@ export function bindTabBarScroll(bar, doc) {
         moved = true;
         bar.scrollLeft = startScroll - dx;
     };
-    const onMouseUp = () => { active = false; };
+    const onMouseUp = (ev) => {
+        active = false;
+        // Жест, брошенный мышью ВНЕ бара: click на баре за ним не последует
+        // (цель click — общий предок mousedown/mouseup), а флаг подавления
+        // должен умереть вместе с жестом. Иначе он «переживёт» до ближайшего
+        // mousedown на баре и проглотит клавиатурную активацию вкладки
+        // (Enter/Space диспатчат click без mousedown). mouseup внутри бара
+        // флаг сохраняет — его click ещё придёт и должен быть съеден.
+        if (moved && ev?.target != null && bar.contains?.(ev.target) === false) moved = false;
+    };
     // Click идёт после mouseup и всплывает от кнопки вкладки; capture-фаза на
     // баре срабатывает раньше bubble-обработчиков кнопок и гасит клик,
     // если перед ним был реальный драг. Флаг сбрасывается на mousedown,

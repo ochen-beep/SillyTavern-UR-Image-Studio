@@ -58,7 +58,10 @@ export function initRender({ reroll, onManual } = {}) {
     try { reconcileVisible(); } catch { /* первая проводка не критична */ }
 }
 
-/** Отписка (выгрузка расширения). */
+/** Отписка (выгрузка расширения) и выключение инлайна (applyInlineRuntime).
+ * Обязана снимать и ручные 📷-кнопки: reconcile, который их ставит, при
+ * выключенной функции не работает — без явной уборки кнопка оставалась бы
+ * в чате мёртвым следом. */
 export function shutdownRender() {
     if (_observer) { try { _observer.disconnect(); } catch { /* уже снят */ } _observer = null; }
     if (_debounceId) { clearTimeout(_debounceId); _debounceId = null; }
@@ -69,6 +72,17 @@ export function shutdownRender() {
     _onInlineEvent = null;
     _reroll = null;
     _onManual = null;
+    removeManualButtons();
+}
+
+/** Снять все 📷-кнопки из чата. */
+function removeManualButtons() {
+    if (typeof document === 'undefined') return;
+    let scope = document;
+    try { scope = (typeof document.getElementById === 'function' && document.getElementById('chat')) || document; } catch { /* fake без getElementById */ }
+    let btns = [];
+    try { btns = Array.from(scope.querySelectorAll('[data-uris-manual]')); } catch { return; }
+    for (const btn of btns) removeNode(btn);
 }
 
 function ensureObserver() {
@@ -516,7 +530,7 @@ function cancelPending(entry) {
     reconcileVisible();
 }
 
-// ── Ручная 📷-кнопка в .mes_buttons ──
+// ── Ручная 📷-кнопка (меню дополнительных действий сообщения) ──
 
 /** Для каждого .mes[mesid] AI-сообщения с .mes_buttons, где ещё нет кнопки.
  * chat можно передать (реконсиляция уже зовёт getContext один раз на проход). */
@@ -552,7 +566,10 @@ function ensureManualButton(mesEl, msgId, chat) {
             try { ev?.stopPropagation?.(); } catch { /* fake-dom */ }
             onManualClick(msgId, mesEl);
         });
-        buttons.appendChild(btn);
+        // Место кнопки — меню дополнительных действий ST (.extraMesButtons, как
+        // translate/REGULATE); на старых шаблонах без него — фолбэк в .mes_buttons.
+        const extra = buttons.querySelector('.extraMesButtons');
+        (extra || buttons).appendChild(btn);
     } catch { /* кнопка не критична */ }
 }
 

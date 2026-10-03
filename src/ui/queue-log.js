@@ -85,6 +85,12 @@ export function queueBadgeCount() {
     return _rows.filter(row => row.status !== 'done').length;
 }
 
+/** Подпись строки: 1-based пост (как в пуле INFO), без поста — фолбэк. */
+export function postLabel(msgId, fallback = 'Генерация') {
+    const post = Number(msgId);
+    return Number.isFinite(post) && post >= 0 ? `Пост #${post + 1}` : fallback;
+}
+
 /** Живёт ли хоть одна задача пачечной очереди (панель бейджа показывает по этому «Остановить очередь»). */
 export function hasLiveQueueLane() {
     return _rows.some(row => row.lane === 'queue' && row.status !== 'done');

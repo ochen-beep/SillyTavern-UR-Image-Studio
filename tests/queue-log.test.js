@@ -121,3 +121,35 @@ test('retry-снапшот проходит в строку ленты, у ос�
     const mrow = listQueueLog().find(r => r.id === 'm1');
     assert.equal(mrow.retry, null, 'ручные строки не предлагают повтор');
 });
+
+// ── Один писатель журнала — продюсер (слияние с реестром активности) ──
+// Окно — чистый читатель: оно не реконструирует строки из событий. Это
+// устраняет параллельное состояние «журнал ↔ события» и класс багов
+// «пропущенный слушатель» (UI пишет состояние из-за подписок).
+
+test('контракт писателей: журнал пишут продюсеры, окно только читает', async () => {
+    const fs = await import('node:fs/promises');
+    const read = (p) => fs.readFile(new URL(p, import.meta.url), 'utf8');
+    // Контракт про КОД: комментарии вырезаем (упоминания note* в пояснениях
+    // допустимы, вызовы — нет).
+    const stripComments = (src) => src
+        .replace(/\/\*[\s\S]*?\*\//g, '')
+        .split('\n')
+        .map(line => line.replace(/(^|[^:])\/\/.*$/, '$1'))
+        .join('\n');
+    const windowSrc = stripComments(await read('../src/ui/window.js'));
+    assert.doesNotMatch(windowSrc, /\bnoteQueued\b|\bnoteRunning\b|\bnoteFinished\b/, 'window.js не пишет в журнал');
+    const stage2 = stripComments(await read('../src/pipeline-stage2.js'));
+    assert.match(stage2, /\bnoteQueued\b/, 'stage2 ставит строки ручных/авто задач');
+    assert.match(stage2, /\bnoteFinished\b/, 'stage2 закрывает строки исходом');
+    const bridge = stripComments(await read('../src/bridge.js'));
+    assert.match(bridge, /\bnoteFinished\b/, 'мост закрывает строки исходом');
+    const runner = stripComments(await read('../src/inline/runner.js'));
+    assert.match(runner, /\bnoteQueued\b/, 'инлайн ставит строки в автолейне');
+});
+
+test('bridge: end-эмит несёт исход (давний баг: ошибки внешних шли как успех)', async () => {
+    const fs = await import('node:fs/promises');
+    const bridge = await fs.readFile(new URL('../src/bridge.js', import.meta.url), 'utf8');
+    assert.match(bridge, /emitStage2\(requestId, caller, 'end', /, 'end-эмит с исходом');
+});
