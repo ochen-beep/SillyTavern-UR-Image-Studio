@@ -84,8 +84,12 @@ function storedRefs() {
     return records;
 }
 
-beforeEach(() => {
+beforeEach(async () => {
     installStubs();
+    // Flush BEFORE clearing: a fire-and-forget write loop parked mid-upload
+    // from the previous test must land in the PREVIOUS map, or it leaks its
+    // document into this test's serverFiles (proven flake class).
+    await presets.flushParamPresetWrites().catch(() => {});
     for (const key of Object.keys(extensionSettings)) delete extensionSettings[key];
     serverFiles.clear();
     uploads.length = 0;

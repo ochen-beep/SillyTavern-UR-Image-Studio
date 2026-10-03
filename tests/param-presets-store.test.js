@@ -19,7 +19,10 @@ globalThis.SillyTavern = {
 
 const presets = await import('../src/param-presets.js');
 
-beforeEach(() => {
+beforeEach(async () => {
+  // Flush BEFORE clearing: a fire-and-forget write loop parked mid-upload
+  // from the previous test must land in the PREVIOUS map (proven flake class).
+  await presets.flushParamPresetWrites().catch(() => {});
   for (const key of Object.keys(extensionSettings)) delete extensionSettings[key];
   presets.resetParamPresetStoreForTests();
 });

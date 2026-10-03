@@ -71,8 +71,11 @@ async function seedServerFile(recordSet) {
     );
 }
 
-beforeEach(() => {
+beforeEach(async () => {
     for (const key of Object.keys(extensionSettings)) delete extensionSettings[key];
+    // Flush BEFORE clearing: a fire-and-forget write loop parked mid-upload
+    // from the previous test must land in the PREVIOUS map (proven flake class).
+    await store.flushTemplateWrites().catch(() => {});
     serverFiles.clear();
     uploads.length = 0;
     toastErrors.length = 0;

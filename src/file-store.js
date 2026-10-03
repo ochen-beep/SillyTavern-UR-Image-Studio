@@ -785,7 +785,12 @@ export function createFileStore(config) {
 
         diagnostics: () => ({ ...diagnostics }),
 
-        /** Test-only: drop all session state so a fresh probe can run. */
+        /**
+         * Test-only: drop all session state so a fresh probe can run.
+         * Tests: `flush()` BEFORE `reset()` — reset does not cancel a write
+         * loop parked mid-upload, and its continuation lands its document in
+         * whatever fetch/map the next test installed (proven flake class).
+         */
         reset() {
             mode = 'unknown';
             readyPromise = null;
