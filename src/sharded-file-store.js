@@ -16,15 +16,17 @@
  * A record never moves between shards after placement — new records go to the
  * newest shard, opening the next one at target size. Records arriving out of
  * range (via merge from another device) are placed by `placeStamp` into the
- * shard holding their stamp, overflowing it rather than splitting.
+ * shard holding their stamp, overflowing it rather than splitting
+ * (Tasks 5–6 wire this).
  *
  * The mirror handed to mutators is byte-compatible with `createFileStore`:
  * the full logical value. Writes diff the mirror against per-shard state by
  * record id and mark dirty shards; the serialized write loop re-reads each
  * dirty shard, three-way merges it (the shared `mergeServerValue`), and
  * uploads it — the same concurrent-writer safety as `mergeWithServer`, at
- * shard size. Manifest rows are derived data, merged with the server copy the
- * same way; a foreign shard unknown to this session is adopted, never clobbered.
+ * shard size (Tasks 5–6 wire this). Manifest rows are derived data, merged with
+ * the server copy the same way; a foreign shard unknown to this session is
+ * adopted, never clobbered.
  *
  * Modes follow file-store: 'unknown' → 'file' | 'readonly'. Extra refusal
  * reason: 'shard-unreadable' — the manifest names a shard the server cannot
@@ -120,7 +122,10 @@ function parseMonolith(text, version, key) {
     // A tombstone — even a newer-versioned one — means "nothing to migrate": the shards/manifest of that newer build refuse at their own parse.
     if (parsed.value?.kind === 'migrated') return { reason: 'migrated' };
     const records = parsed.value?.[key];
-    if (!Array.isArray(records)) return { reason: 'corrupt' };
+    // The value differs by store: the gallery rides `key` as a bare array, refs
+    // as a `{ refs, folders }` object — the sharded collection then rides
+    // `shardedKey` inside it. Anything else is not this store's monolith.
+    if (!Array.isArray(records) && (records === null || typeof records !== 'object')) return { reason: 'corrupt' };
     return { reason: parsed.reason, value: records };
 }
 
@@ -163,6 +168,10 @@ export function createShardedFileStore(config) {
     let lastFailureToastAt = 0;
     let totalBytes = null;
     let lastError = null;
+    // Session-level persist refusal — WHY the mode is readonly
+    // ('no-user-files' | 'newer-version' | 'shard-unreadable' | 'corrupt-manifest').
+    // schedulePersist reports this cause instead of guessing.
+    let writeBlockedReason = null;
     const refusedNotified = new Set();
 
     function emit(event, fields = {}) {
@@ -201,6 +210,7 @@ export function createShardedFileStore(config) {
                 'newer-version': `«${label}»: данные записаны более новой версией расширения — обновите UR Image Studio; запись отключена.`,
                 'no-user-files': `«${label}»: SillyTavern не поддерживает файловое хранилище (обновите SillyTavern); запись отключена.`,
                 'shard-unreadable': `«${label}»: не удалось прочитать часть данных при запуске — запись заблокирована, чтобы не потерять остальное. Перезагрузите страницу.`,
+                'corrupt-manifest': `«${label}»: не удалось прочитать оглавление данных при запуске — запись заблокирована, чтобы не потерять остальное. Перезагрузите страницу.`,
             };
             const message = messages[reason] || `«${label}»: запись отключена (${reason}).`;
             if (onWriteFailure) onWriteFailure(new Error(reason));
@@ -284,6 +294,7 @@ export function createShardedFileStore(config) {
         const bad = results.find(result => result.reason !== 'ok');
         if (bad) {
             mode = 'readonly';
+            writeBlockedReason = 'shard-unreadable';
             emit('store-mode', { store: label, result: 'readonly', reason: 'shard-unreadable', shard: bad.id });
             log(`sharded-store[${label}]: mode=readonly (shard ${bad.id} ${bad.reason})`);
             refusePersist('shard-unreadable');
@@ -303,6 +314,7 @@ export function createShardedFileStore(config) {
         }
         if (!probe.ok) {
             mode = 'readonly';
+            writeBlockedReason = 'no-user-files';
             mirror = empty();
             emit('store-mode', { store: label, result: 'readonly', reason: 'no-user-files' });
             refusePersist('no-user-files');
@@ -321,6 +333,11 @@ export function createShardedFileStore(config) {
                 emit('store-load', { store: label, result: 'missing', entries: countEntries(mirror), bytes: 0, ms: Date.now() - started });
                 return mode;
             }
+            // Initialize the mirror BEFORE migrating: rebuildMirrorFromShards()
+            // writes through `mirror[shardedKey]`, which would throw on a null
+            // mirror (and memoize a rejected readyPromise). empty() keeps the
+            // store's shape — a refs store keeps its folders.
+            mirror = empty();
             const verdict = await attemptMigration();
             if (verdict === 'unresolved') return null;   // monolith unreadable right now — retry
             if (verdict === 'refused') return mode;
@@ -335,14 +352,20 @@ export function createShardedFileStore(config) {
         const parsed = parseManifest(text, version);
         if (parsed.reason === 'newer') {
             mode = 'readonly';
+            writeBlockedReason = 'newer-version';
             emit('store-mode', { store: label, result: 'readonly', reason: 'newer-version' });
             refusePersist('newer-version');
             return mode;
         }
         if (parsed.reason === 'corrupt') {
-            // Task 8 wires rebuildFromScan() here. Until then: empty mirror.
+            // Task 8 wires rebuildFromScan() here. Until then: readonly — the
+            // mirror is an empty base, and one mutation would overwrite the
+            // real shards the unreadable manifest still names.
+            mode = 'readonly';
+            writeBlockedReason = 'corrupt-manifest';
             mirror = empty();
-            emit('store-mode', { store: label, result: 'file', reason: 'corrupt-manifest' });
+            emit('store-mode', { store: label, result: 'readonly', reason: 'corrupt-manifest' });
+            refusePersist('corrupt-manifest');
             return mode;
         }
 
@@ -450,7 +473,7 @@ export function createShardedFileStore(config) {
 
     function schedulePersist() {
         if (mirror === null) return Promise.resolve(false);
-        if (mode === 'readonly') { refusePersist('newer-version'); return Promise.resolve(false); }
+        if (mode === 'readonly') { refusePersist(writeBlockedReason || 'newer-version'); return Promise.resolve(false); }
         if (mode !== 'file') return Promise.resolve(false);
         if (!writeJob) writeJob = runWriteLoop();
         return writeJob;
@@ -461,6 +484,7 @@ export function createShardedFileStore(config) {
         let ok = true;
         try {
             while (dirtyShards.size || manifestDirty) {
+                const started = Date.now();
                 const id = dirtyShards.values().next().value;
                 if (id !== undefined) {
                     dirtyShards.delete(id);
@@ -477,6 +501,10 @@ export function createShardedFileStore(config) {
                         ok = false;
                         break;
                     }
+                    emit('store-write', {
+                        store: label, result: 'success', shard: id, entries: state.records.length,
+                        bytes: totalBytes, ms: Date.now() - started,
+                    });
                     continue;
                 }
                 manifestDirty = false;
@@ -491,6 +519,10 @@ export function createShardedFileStore(config) {
                     ok = false;
                     break;
                 }
+                emit('store-write', {
+                    store: label, result: 'success', shard: 'manifest', entries: shards.length,
+                    bytes: totalBytes, ms: Date.now() - started,
+                });
             }
         } finally {
             writeJob = null;
@@ -517,6 +549,7 @@ export function createShardedFileStore(config) {
         const parsed = parseMonolith(text, version, monolithKey);
         if (parsed.reason === 'newer') {
             mode = 'readonly';
+            writeBlockedReason = 'newer-version';
             emit('store-mode', { store: label, result: 'readonly', reason: 'newer-version' });
             refusePersist('newer-version');
             return 'refused';
@@ -534,7 +567,7 @@ export function createShardedFileStore(config) {
             : (shardedKey ? (Array.isArray(body[shardedKey]) ? body[shardedKey] : []) : body);
         const ordered = oldestFirst(records);
         for (let i = 0; i < ordered.length; i += shardTarget) {
-            const chunk = ordered.slice(i, i + shardTarget).map(record => record);
+            const chunk = ordered.slice(i, i + shardTarget);
             if (append === 'front') chunk.reverse();   // shard-internal newest-first
             const id = nextShardId();
             adoptShard(id, chunk);
@@ -544,7 +577,16 @@ export function createShardedFileStore(config) {
         manifestDirty = true;
         const outcome = await runWriteLoop();
         if (!outcome) return 'unresolved';
-        await uploadDoc(monolithName, tombstoneDoc(label, version));
+        try {
+            await uploadDoc(monolithName, tombstoneDoc(label, version));
+        } catch (cause) {
+            // The migration has committed (the manifest exists), so a failed
+            // tombstone is benign across restarts: the next ready() takes the
+            // manifest path and never re-reads the monolith.
+            emit('store-migrated', { store: label, result: 'error', reason: String(cause?.message || cause) });
+            warn(`sharded-store[${label}]: tombstone upload failed:`, cause?.message || cause);
+            return 'migrated';
+        }
         emit('store-migrated', { store: label, result: 'ok', shards: shards.length, entries: records.length });
         log(`sharded-store[${label}]: migrated ${records.length} record(s) into ${shards.length} shard(s)`);
         return 'migrated';
@@ -607,6 +649,7 @@ export function createShardedFileStore(config) {
             lastFailureToastAt = 0;
             totalBytes = null;
             lastError = null;
+            writeBlockedReason = null;
             refusedNotified.clear();
         },
     };

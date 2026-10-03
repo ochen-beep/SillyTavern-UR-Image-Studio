@@ -154,6 +154,19 @@ describe('load from manifest', () => {
         assert.equal(await store.ready(), 'readonly');
         assert.match(toastErrors[0], /часть данных/);
     });
+
+    it('a corrupt manifest makes the store readonly and a mutation writes nothing', async () => {
+        const store = makeStore();
+        serverFiles.set(manifestName(store), '{ not json');
+        serverFiles.set(shardName(store, 's0000'), JSON.stringify({
+            v: 1, kind: 'shard', store: 'x', id: 's0000', records: [card(0)],
+        }));
+        assert.equal(await store.ready(), 'readonly');
+        await store.mutate(list => { list.unshift(card(9)); });
+        await store.flush();
+        assert.equal(uploads.length, 0, 'an unreadable manifest must not be clobbered by an empty-mirror write');
+        assert.match(toastErrors[0], /оглавление/);
+    });
 });
 
 describe('mutation and documents', () => {
@@ -177,16 +190,34 @@ describe('mutation and documents', () => {
         const store = makeStore();
         await store.ready();
         await store.mutate(list => { list.unshift(card(0)); });
+        // flush() is a Task 9 stub; the count below holds only because mutate awaits its write.
         await store.flush();
         const before = uploads.length;
         await store.mutate(list => {
             const item = list.find(r => r.id === 'c0000');
             item.prompt = 'changed';
         });
+        // flush() is a Task 9 stub; the assert below holds only because mutate awaits its write.
         await store.flush();
         assert.equal(uploads.length - before, 2, 'shard + manifest (rows are cheap and always refreshed)');
         const shard = JSON.parse(serverFiles.get(shardName(store, 's0000')));
         assert.equal(shard.records[0].prompt, 'changed');
+    });
+
+    it('a deletion removes the record from its shard file and refreshes the manifest row', async () => {
+        const store = makeStore();
+        await store.ready();
+        await store.mutate(list => { list.unshift(card(1)); list.unshift(card(0)); });
+        let manifest = JSON.parse(serverFiles.get(manifestName(store)));
+        assert.deepEqual(manifest.shards.map(s => s.count), [2]);
+        await store.mutate(list => {
+            const idx = list.findIndex(r => r.id === 'c0000');
+            list.splice(idx, 1);
+        });
+        const shard = JSON.parse(serverFiles.get(shardName(store, 's0000')));
+        assert.deepEqual(shard.records.map(r => r.id), ['c0001'], 'the deleted record is gone from the shard');
+        manifest = JSON.parse(serverFiles.get(manifestName(store)));
+        assert.deepEqual(manifest.shards.map(s => s.count), [1], 'the manifest row shrank');
     });
 });
 
@@ -234,5 +265,30 @@ describe('migration from monolith', () => {
         const store = makeStore();
         serverFiles.set(`t${labelCounter}_old.json`, JSON.stringify({ v: 99, cards: [card(0)] }));
         assert.equal(await store.ready(), 'readonly');
+    });
+
+    it('an empty monolith migrates to an empty manifest and a tombstone', async () => {
+        const store = makeStore();
+        serverFiles.set(`t${labelCounter}_old.json`, JSON.stringify({ v: 1, cards: [] }));
+        assert.equal(await store.ready(), 'file');
+        assert.deepEqual(store.snapshot(), []);
+        const manifest = JSON.parse(serverFiles.get(manifestName(store)));
+        assert.deepEqual(manifest.shards, [], 'zero records → zero shard rows');
+        assert.equal(uploads.length, 2, 'manifest + tombstone');
+        assert.equal(uploads.some(u => u.name === shardName(store, 's0000')), false, 'no shard files');
+        const tomb = JSON.parse(serverFiles.get(`t${labelCounter}_old.json`));
+        assert.equal(tomb.kind, 'migrated');
+    });
+
+    it('a refs-shaped store migrates its sharded collection out of the monolith object', async () => {
+        const store = makeStore({
+            shardedKey: 'refs', append: 'back', placeByStamp: false,
+            empty: () => ({ refs: [], folders: [] }),
+            countEntries: v => (Array.isArray(v?.refs) ? v.refs.length : null),
+            monolithKey: 'data',
+        });
+        serverFiles.set(`t${labelCounter}_old.json`, JSON.stringify({ v: 1, data: { refs: [card(1), card(0)] } }));
+        assert.equal(await store.ready(), 'file');
+        assert.deepEqual(store.snapshot().refs.map(r => r.id), ['c0001', 'c0000']);
     });
 });
