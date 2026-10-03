@@ -155,3 +155,84 @@ describe('load from manifest', () => {
         assert.match(toastErrors[0], /часть данных/);
     });
 });
+
+describe('mutation and documents', () => {
+    it('a mutation writes the shard doc (kind/store/id) and the manifest row', async () => {
+        const store = makeStore();
+        await store.ready();
+        await store.mutate(list => { list.unshift(card(0)); });
+        assert.equal(uploads.length, 2, 'one shard + one manifest write');
+        const shard = JSON.parse(serverFiles.get(shardName(store, 's0000')));
+        assert.equal(shard.kind, 'shard');
+        assert.equal(shard.store, store.label);
+        assert.equal(shard.id, 's0000');
+        assert.deepEqual(shard.records.map(r => r.id), ['c0000']);
+        const manifest = JSON.parse(serverFiles.get(manifestName(store)));
+        assert.equal(manifest.kind, 'manifest');
+        assert.deepEqual(manifest.shards,
+            [{ id: 's0000', count: 1, min: 1_700_000_000_000, max: 1_700_000_000_000 }]);
+    });
+
+    it('an update-in-place rewrites only its shard', async () => {
+        const store = makeStore();
+        await store.ready();
+        await store.mutate(list => { list.unshift(card(0)); });
+        await store.flush();
+        const before = uploads.length;
+        await store.mutate(list => {
+            const item = list.find(r => r.id === 'c0000');
+            item.prompt = 'changed';
+        });
+        await store.flush();
+        assert.equal(uploads.length - before, 2, 'shard + manifest (rows are cheap and always refreshed)');
+        const shard = JSON.parse(serverFiles.get(shardName(store, 's0000')));
+        assert.equal(shard.records[0].prompt, 'changed');
+    });
+});
+
+describe('migration from monolith', () => {
+    it('chunks the monolith by position, commits with the manifest, tombstones the monolith', async () => {
+        const store = makeStore();   // shardTarget 4
+        serverFiles.set(`t${labelCounter}_old.json`, JSON.stringify({
+            v: 1, cards: [card(7), card(6), card(5), card(4), card(3), card(2), card(1), card(0), card(-1)],
+        }));
+        assert.equal(await store.ready(), 'file');
+        assert.deepEqual(store.snapshot().map(r => r.id),
+            ['c0007', 'c0006', 'c0005', 'c0004', 'c0003', 'c0002', 'c0001', 'c0000', 'c00-1']);
+        // 9 records / target 4 → three shards; s0000 holds the OLDEST chunk.
+        const manifest = JSON.parse(serverFiles.get(manifestName(store)));
+        assert.deepEqual(manifest.shards.map(s => s.id), ['s0000', 's0001', 's0002']);
+        assert.deepEqual(manifest.shards.map(s => s.count), [4, 4, 1]);
+        const first = JSON.parse(serverFiles.get(shardName(store, 's0000')));
+        assert.deepEqual(first.records.map(r => r.id), ['c0002', 'c0001', 'c0000', 'c00-1'],
+            'the oldest chunk, stored newest-first');
+        const tomb = JSON.parse(serverFiles.get(`t${labelCounter}_old.json`));
+        assert.equal(tomb.kind, 'migrated');
+    });
+
+    it('an interrupted migration (shards written, manifest missing) repeats cleanly', async () => {
+        const store = makeStore();
+        serverFiles.set(`t${labelCounter}_old.json`, JSON.stringify({ v: 1, cards: [card(1), card(0)] }));
+        serverFiles.set(shardName(store, 's0000'), JSON.stringify({
+            v: 1, kind: 'shard', store: 'x', id: 's0000', records: [card(1)],
+        }));
+        assert.equal(await store.ready(), 'file');
+        assert.deepEqual(store.snapshot().map(r => r.id), ['c0001', 'c0000']);
+        const manifest = JSON.parse(serverFiles.get(manifestName(store)));
+        assert.deepEqual(manifest.shards.map(s => s.count), [2], 'the half-written shard was overwritten');
+    });
+
+    it('a tombstoned monolith is ignored (already migrated)', async () => {
+        const store = makeStore();
+        serverFiles.set(`t${labelCounter}_old.json`, JSON.stringify({ v: 1, kind: 'migrated', store: 'x' }));
+        assert.equal(await store.ready(), 'file');
+        assert.deepEqual(store.snapshot(), []);
+        assert.equal(uploads.length, 0, 'nothing to migrate — no writes');
+    });
+
+    it('a monolith from a newer build makes the store readonly', async () => {
+        const store = makeStore();
+        serverFiles.set(`t${labelCounter}_old.json`, JSON.stringify({ v: 99, cards: [card(0)] }));
+        assert.equal(await store.ready(), 'readonly');
+    });
+});

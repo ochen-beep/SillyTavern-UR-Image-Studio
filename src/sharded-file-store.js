@@ -49,6 +49,12 @@ function clone(value) {
     return JSON.parse(JSON.stringify(value));
 }
 
+/** Plain-data equality for diffing mirror records against the pre-mutate snapshot. */
+function sameRecord(a, b) {
+    if (a === b) return true;
+    try { return JSON.stringify(a) === JSON.stringify(b); } catch { return false; }
+}
+
 function defaultCountEntries(value) {
     if (Array.isArray(value)) return value.length;
     if (value && typeof value === 'object') return Object.keys(value).length;
@@ -309,12 +315,21 @@ export function createShardedFileStore(config) {
         if (text === undefined) return null;   // non-404 read failure — retry via ready()
 
         if (text === null) {
-            // No manifest: fresh store or migration candidate. Task 4 wires
-            // attemptMigration() here; until then treat as fresh.
-            mirror = empty();
-            emit('store-mode', { store: label, result: 'file', reason: 'missing' });
-            emit('store-load', { store: label, result: 'missing', entries: countEntries(mirror), bytes: 0, ms: Date.now() - started });
-            return mode;
+            if (!monolithName) {
+                mirror = empty();
+                emit('store-mode', { store: label, result: 'file', reason: 'missing' });
+                emit('store-load', { store: label, result: 'missing', entries: countEntries(mirror), bytes: 0, ms: Date.now() - started });
+                return mode;
+            }
+            const verdict = await attemptMigration();
+            if (verdict === 'unresolved') return null;   // monolith unreadable right now — retry
+            if (verdict === 'refused') return mode;
+            if (verdict === 'fresh') {
+                mirror = empty();
+                emit('store-mode', { store: label, result: 'file', reason: 'missing' });
+                emit('store-load', { store: label, result: 'missing', entries: countEntries(mirror), bytes: 0, ms: Date.now() - started });
+            }
+            return mode;   // 'migrated': mirror is built, diagnostics emitted inside
         }
 
         const parsed = parseManifest(text, version);
@@ -364,6 +379,177 @@ export function createShardedFileStore(config) {
         return readyPromise;
     }
 
+    // ── Mutation diff ──
+
+    /** Chunk helper: the logical list oldest-first, regardless of append side. */
+    function oldestFirst(list) {
+        return append === 'front' ? [...list].reverse() : list;
+    }
+
+    /**
+     * Place one new record into the newest shard (opening the next one at
+     * target size). Task 5 adds the out-of-range branch.
+     */
+    function placeRecord(record) {
+        if (!shards.length || shards[shards.length - 1].count >= shardTarget) {
+            adoptShard(nextShardId(), []);
+            manifestDirty = true;
+        }
+        const row = shards[shards.length - 1];
+        const state = shardState.get(row.id);
+        if (append === 'front') state.records.unshift(record);
+        else state.records.push(record);
+        recordShard.set(String(record.id), row.id);
+        recomputeRow(row.id);
+        dirtyShards.add(row.id);
+    }
+
+    /**
+     * Diff the mirror against the pre-mutate snapshot. New records are placed
+     * (frozen assignment), updated records mark their shard, removed records
+     * shrink theirs. Existing records never move between shards. Any real
+     * change dirties the manifest too — rows are cheap and derived.
+     */
+    function syncFromMirror(before) {
+        const list = recordList();
+        const seen = new Set();
+        let changed = false;
+        for (const record of list) {
+            const id = String(record.id);
+            seen.add(id);
+            const sid = recordShard.get(id);
+            if (sid === undefined) {
+                placeRecord(record);
+                changed = true;
+                continue;
+            }
+            if (!sameRecord(before.get(id), record)) {
+                const state = shardState.get(sid);
+                const idx = state.records.findIndex(r => String(r.id) === id);
+                if (idx !== -1) state.records[idx] = record;
+                recomputeRow(sid);
+                dirtyShards.add(sid);
+                changed = true;
+            }
+        }
+        for (const [id, sid] of recordShard) {
+            if (seen.has(id)) continue;
+            recordShard.delete(id);
+            const state = shardState.get(sid);
+            const idx = state.records.findIndex(r => String(r.id) === id);
+            if (idx !== -1) state.records.splice(idx, 1);
+            recomputeRow(sid);
+            dirtyShards.add(sid);
+            changed = true;
+        }
+        if (changed) manifestDirty = true;
+        return changed;
+    }
+
+    // ── Persist (minimal core; Task 6 replaces with the merge loop) ──
+
+    function schedulePersist() {
+        if (mirror === null) return Promise.resolve(false);
+        if (mode === 'readonly') { refusePersist('newer-version'); return Promise.resolve(false); }
+        if (mode !== 'file') return Promise.resolve(false);
+        if (!writeJob) writeJob = runWriteLoop();
+        return writeJob;
+    }
+
+    /** Upload every dirty shard, then the manifest. true = everything landed. */
+    async function runWriteLoop() {
+        let ok = true;
+        try {
+            while (dirtyShards.size || manifestDirty) {
+                const id = dirtyShards.values().next().value;
+                if (id !== undefined) {
+                    dirtyShards.delete(id);
+                    const state = shardState.get(id);
+                    try {
+                        totalBytes = await uploadDoc(shardFileName(id), shardDoc(label, version, id, state.records));
+                        state.base = clone(state.records);
+                    } catch (cause) {
+                        dirtyShards.add(id);
+                        lastWriteOk = false;
+                        lastError = String(cause?.message || cause);
+                        emit('store-write', { store: label, result: 'error', shard: id, level: 'error', reason: lastError });
+                        notifyFailure(cause);
+                        ok = false;
+                        break;
+                    }
+                    continue;
+                }
+                manifestDirty = false;
+                try {
+                    totalBytes = await uploadDoc(manifestName, manifestDoc(label, version, shards.map(row => ({ ...row }))));
+                } catch (cause) {
+                    manifestDirty = true;
+                    lastWriteOk = false;
+                    lastError = String(cause?.message || cause);
+                    emit('store-write', { store: label, result: 'error', shard: 'manifest', level: 'error', reason: lastError });
+                    notifyFailure(cause);
+                    ok = false;
+                    break;
+                }
+            }
+        } finally {
+            writeJob = null;
+        }
+        if (ok) { lastWriteOk = true; lastError = null; }
+        return ok;
+    }
+
+    // ── Migration ──
+
+    /**
+     * Manifest missing + monolith configured → migrate. Chunks the monolith by
+     * position (its array already IS the logical order), writes the shards
+     * WITHOUT merge (the monolith is the authority until the manifest commit;
+     * two simultaneous migrations produce identical content and converge),
+     * commits with the manifest, then tombstones the monolith. An interruption
+     * before the manifest write repeats cleanly on the next ready().
+     * @returns {Promise<'migrated'|'fresh'|'refused'|'unresolved'>}
+     */
+    async function attemptMigration() {
+        let text;
+        try { text = await readFile(monolithName); } catch { return 'unresolved'; }
+        if (text === null) return 'fresh';
+        const parsed = parseMonolith(text, version, monolithKey);
+        if (parsed.reason === 'newer') {
+            mode = 'readonly';
+            emit('store-mode', { store: label, result: 'readonly', reason: 'newer-version' });
+            refusePersist('newer-version');
+            return 'refused';
+        }
+        const body = parsed.reason === 'found' || parsed.reason === 'older' ? parsed.value : null;
+        if (body === null) {
+            // Already migrated (tombstoned monolith): nothing to move, nothing
+            // to write — the store simply comes up empty.
+            mirror = empty();
+            return 'migrated';
+        }
+        // Monolith values differ by store: the gallery is a bare array, refs is
+        // `{ refs, folders }` — the sharded collection rides `shardedKey`.
+        const records = body === null ? []
+            : (shardedKey ? (Array.isArray(body[shardedKey]) ? body[shardedKey] : []) : body);
+        const ordered = oldestFirst(records);
+        for (let i = 0; i < ordered.length; i += shardTarget) {
+            const chunk = ordered.slice(i, i + shardTarget).map(record => record);
+            if (append === 'front') chunk.reverse();   // shard-internal newest-first
+            const id = nextShardId();
+            adoptShard(id, chunk);
+            dirtyShards.add(id);
+        }
+        rebuildMirrorFromShards();   // the mirror must reflect the migrated records
+        manifestDirty = true;
+        const outcome = await runWriteLoop();
+        if (!outcome) return 'unresolved';
+        await uploadDoc(monolithName, tombstoneDoc(label, version));
+        emit('store-migrated', { store: label, result: 'ok', shards: shards.length, entries: records.length });
+        log(`sharded-store[${label}]: migrated ${records.length} record(s) into ${shards.length} shard(s)`);
+        return 'migrated';
+    }
+
     const store = {
         label,
         name: manifestName,
@@ -374,12 +560,23 @@ export function createShardedFileStore(config) {
         mode: () => mode,
         isFileMode: () => mode === 'file',
         snapshot() { return mirror === null ? null : clone(mirror); },
-        async mutate(mutator, { persist: shouldPersist = true } = {}) {   // Task 4
+        async mutate(mutator, { persist: shouldPersist = true } = {}) {
+            await ready();
             if (mirror === null) mirror = empty();
-            return mutator(mirror);
+            // The pre-mutate snapshot must be a COPY: mutators edit records in
+            // place, so reference or same-object comparison would never see
+            // their changes.
+            const before = new Map(recordList().map(record => [String(record.id), clone(record)]));
+            const result = mutator(mirror);
+            const changed = syncFromMirror(before);
+            // Awaited: when `mutate` resolves, its write has landed (callers
+            // and tests read server state right after; the loop still coalesces
+            // mutations issued while it is in flight).
+            if (changed && shouldPersist) await schedulePersist();
+            return result;
         },
         async replace(value) { mirror = value; },                          // Task 7
-        persist() { return Promise.resolve(true); },                       // Task 4
+        persist() { return schedulePersist(); },
         async flush() { return lastWriteOk; },                             // Task 9
         flushOnUnload() {},                                                // Task 9
         footprint() {
