@@ -16,8 +16,7 @@
  * A record never moves between shards after placement — new records go to the
  * newest shard, opening the next one at target size. Records arriving out of
  * range (via merge from another device) are placed by `placeStamp` into the
- * shard holding their stamp, overflowing it rather than splitting
- * (Tasks 5–6 wire this).
+ * shard holding their stamp, overflowing it rather than splitting.
  *
  * The mirror handed to mutators is byte-compatible with `createFileStore`:
  * the full logical value. Writes diff the mirror against per-shard state by
@@ -410,10 +409,36 @@ export function createShardedFileStore(config) {
     }
 
     /**
-     * Place one new record into the newest shard (opening the next one at
-     * target size). Task 5 adds the out-of-range branch.
+     * Place one new record. In-range adds go to the newest shard (opening the
+     * next one at target size). A record older than the newest shard's range
+     * (arrived via merge/import) is placed by `placeStamp` into the shard that
+     * holds its stamp — overflowing it rather than splitting, so placement
+     * stays deterministic across devices without B-tree machinery.
+     * @returns {boolean} true when the record landed OUT of the newest shard
+     *          (the mirror then needs a canonical-order rebuild)
      */
     function placeRecord(record) {
+        const stamp = placeStamp(record);
+        if (placeByStamp && shards.length && stamp < shards[shards.length - 1].min) {
+            let target = shards[0];   // older than everything → the oldest shard
+            for (const row of shards) {
+                if (stamp <= row.max) { target = row; break; }
+            }
+            const state = shardState.get(target.id);
+            let idx = state.records.length;   // default: the oldest edge
+            if (append === 'front') {
+                idx = state.records.findIndex(r => placeStamp(r) < stamp);
+                if (idx === -1) idx = state.records.length;
+            } else {
+                idx = state.records.findIndex(r => placeStamp(r) > stamp);
+                if (idx === -1) idx = state.records.length;
+            }
+            state.records.splice(idx, 0, record);
+            recordShard.set(String(record.id), target.id);
+            recomputeRow(target.id);
+            dirtyShards.add(target.id);
+            return true;
+        }
         if (!shards.length || shards[shards.length - 1].count >= shardTarget) {
             adoptShard(nextShardId(), []);
             manifestDirty = true;
@@ -425,6 +450,7 @@ export function createShardedFileStore(config) {
         recordShard.set(String(record.id), row.id);
         recomputeRow(row.id);
         dirtyShards.add(row.id);
+        return false;
     }
 
     /**
@@ -437,12 +463,13 @@ export function createShardedFileStore(config) {
         const list = recordList();
         const seen = new Set();
         let changed = false;
+        let outOfRange = false;
         for (const record of list) {
             const id = String(record.id);
             seen.add(id);
             const sid = recordShard.get(id);
             if (sid === undefined) {
-                placeRecord(record);
+                if (placeRecord(record)) outOfRange = true;
                 changed = true;
                 continue;
             }
@@ -465,6 +492,9 @@ export function createShardedFileStore(config) {
             dirtyShards.add(sid);
             changed = true;
         }
+        // After the removals too: the rebuild must see the settled shard state,
+        // or a record deleted by the same mutation would stay in the mirror.
+        if (outOfRange) rebuildMirrorFromShards();   // canonical newest-first order
         if (changed) manifestDirty = true;
         return changed;
     }

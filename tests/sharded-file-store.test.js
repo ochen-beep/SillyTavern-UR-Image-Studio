@@ -348,3 +348,31 @@ describe('migration from monolith', () => {
         assert.deepEqual(store.snapshot().refs.map(r => r.id), ['c0001', 'c0000']);
     });
 });
+
+describe('placement', () => {
+    it('a full newest shard opens the next one; the record goes to the new shard', async () => {
+        const store = makeStore();   // shardTarget 4
+        await store.ready();
+        for (let i = 0; i < 5; i++) await store.mutate(list => { list.unshift(card(i)); });
+        const manifest = JSON.parse(serverFiles.get(manifestName(store)));
+        assert.deepEqual(manifest.shards.map(s => s.id), ['s0000', 's0001']);
+        assert.deepEqual(manifest.shards.map(s => s.count), [4, 1]);
+        assert.deepEqual(store.snapshot().map(r => r.id),
+            ['c0004', 'c0003', 'c0002', 'c0001', 'c0000']);
+    });
+
+    it('an out-of-range record (older than the newest shard) lands in the shard holding its stamp', async () => {
+        const store = makeStore();
+        await store.ready();
+        for (let i = 0; i < 4; i++) await store.mutate(list => { list.unshift(card(i)); });
+        // createdAt far in the past: placeByStamp must find s0000, not the newest shard.
+        await store.mutate(list => { list.unshift(card(99, 1)); });
+        const manifest = JSON.parse(serverFiles.get(manifestName(store)));
+        assert.deepEqual(manifest.shards.map(s => s.count), [5], 'overflow allowed, no split');
+        const old = JSON.parse(serverFiles.get(shardName(store, 's0000')));
+        assert.equal(old.records.at(-1).id, 'c0099', 'stored at the oldest edge of the shard');
+        assert.deepEqual(store.snapshot().map(r => r.id),
+            ['c0003', 'c0002', 'c0001', 'c0000', 'c0099'],
+            'the mirror is rebuilt into canonical newest-first order');
+    });
+});
