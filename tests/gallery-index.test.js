@@ -50,8 +50,13 @@ beforeEach(async () => {
     context = { extensionSettings: {}, saveSettingsDebounced: () => {} };
     globalThis.SillyTavern = { getContext: () => context };
     installFileFetch();
+    // Flush BEFORE clearing: a write loop parked mid-upload from the previous
+    // test must land in the PREVIOUS map, not leak into this one (proven flake
+    // class — see flush-before-reset in the other store suites). Gallery is
+    // awaited since sharding, so this is belt-and-braces, kept for symmetry.
+    const { flushGalleryWrites, resetGalleryStoreForTests } = await import('../src/gallery-index.js');
+    await flushGalleryWrites().catch(() => {});
     serverFiles.clear();
-    const { resetGalleryStoreForTests } = await import('../src/gallery-index.js');
     resetGalleryStoreForTests();
 });
 
