@@ -79,16 +79,16 @@ async function uploadDoc(name, doc) {
 
 // ── Document shapes ──
 
-function shardDoc(store, version, id, records) {
-    return { v: version, kind: 'shard', store, id, records };
+function shardDoc(storeName, version, id, records) {
+    return { v: version, kind: 'shard', store: storeName, id, records };
 }
 
-function manifestDoc(store, version, shards) {
-    return { v: version, kind: 'manifest', store, shards };
+function manifestDoc(storeName, version, shards) {
+    return { v: version, kind: 'manifest', store: storeName, shards };
 }
 
-function tombstoneDoc(store, version) {
-    return { v: version, kind: 'migrated', store };
+function tombstoneDoc(storeName, version) {
+    return { v: version, kind: 'migrated', store: storeName };
 }
 
 function parseShard(text, version) {
@@ -111,6 +111,7 @@ function parseManifest(text, version) {
 function parseMonolith(text, version, key) {
     const parsed = parseVersionedDoc(text, { version });
     if (parsed.reason === 'corrupt') return parsed;
+    // A tombstone — even a newer-versioned one — means "nothing to migrate": the shards/manifest of that newer build refuse at their own parse.
     if (parsed.value?.kind === 'migrated') return { reason: 'migrated' };
     const records = parsed.value?.[key];
     if (!Array.isArray(records)) return { reason: 'corrupt' };
@@ -131,7 +132,7 @@ export function createShardedFileStore(config) {
         placeByStamp = false,
         placeStamp = r => (Number.isFinite(r?.createdAt) ? r.createdAt : 0),
         empty = () => [],
-        shardedKey = null,
+        shardedKey = null,            // null: the mirror IS the record array (gallery); a string: the array rides mirror[key] (refs)
         countEntries = defaultCountEntries,
         mergeWithServer = true,
         keepaliveLimit = KEEPALIVE_BODY_LIMIT,

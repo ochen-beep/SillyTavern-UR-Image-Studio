@@ -5,7 +5,7 @@
  * both layers see the same server shape.
  */
 import assert from 'node:assert/strict';
-import { beforeEach, describe, it } from 'node:test';
+import { after, beforeEach, describe, it } from 'node:test';
 
 const serverFiles = new Map();   // name → file text (what the server would store)
 const uploads = [];              // { name, data, keepalive }
@@ -48,7 +48,7 @@ const fetchStub = async (url, options = {}) => {
         if (!serverFiles.has(name) || missingNames.has(name)) return { ok: false, status: 404, text: async () => '', json: async () => ({}) };
         return { ok: true, status: 200, text: async () => serverFiles.get(name), json: async () => ({}) };
     }
-    return { ok: true, status: 200, json: async () => ({}), text: async () => ({}) };
+    return { ok: true, status: 200, json: async () => ({}), text: async () => '' };
 };
 
 const { createShardedFileStore } = await import('../src/sharded-file-store.js');
@@ -103,4 +103,12 @@ describe('skeleton', () => {
         assert.equal(store.mode(), 'file');
         assert.equal(uploads.length, 0, 'a fresh store creates no files until the first mutation');
     });
+});
+
+// node --test runs each file in its own process, but a restored global keeps
+// the harness honest if this file ever merges into a shared runner.
+after(() => {
+    globalThis.SillyTavern = originalSt;
+    globalThis.fetch = originalFetch;
+    globalThis.toastr = originalToastr;
 });
