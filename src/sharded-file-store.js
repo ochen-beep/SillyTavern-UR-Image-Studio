@@ -565,6 +565,27 @@ export function createShardedFileStore(config) {
         // `{ refs, folders }` — the sharded collection rides `shardedKey`.
         const records = body === null ? []
             : (shardedKey ? (Array.isArray(body[shardedKey]) ? body[shardedKey] : []) : body);
+        if (shardedKey === null && !Array.isArray(records)) {
+            // A hand-corrupted gallery monolith (`cards` holding an object)
+            // would crash `oldestFirst` and brick the session on a memoized
+            // rejected ready(). Come up empty and loud instead — the mirror is
+            // already `empty()` and the mode is 'file' — and leave the
+            // monolith untouched (no tombstone, no writes) so a hand-fixed
+            // file can still migrate later.
+            emit('store-migrated', { store: label, result: 'error', reason: 'monolith-shape' });
+            warn(`sharded-store[${label}]: monolith has an unexpected shape — migration skipped`);
+            return 'migrated';
+        }
+        // A retried migration (an earlier attempt failed mid-write) starts
+        // from a clean slate: re-adopting chunks onto the leftover placement
+        // state would renumber them past the already-written shards and
+        // duplicate every record on the server.
+        shards = [];
+        shardState = new Map();
+        recordShard = new Map();
+        dirtyShards = new Set();
+        emptyShards = new Set();
+        manifestDirty = false;
         const ordered = oldestFirst(records);
         for (let i = 0; i < ordered.length; i += shardTarget) {
             const chunk = ordered.slice(i, i + shardTarget);

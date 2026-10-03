@@ -11,6 +11,7 @@ const serverFiles = new Map();   // name → file text (what the server would st
 const uploads = [];              // { name, data, keepalive }
 let verifyAvailable = true;
 let failUploads = false;
+let failUploadsOnce = false;     // one-shot: only the next upload fails, then writes recover
 let missingNames = new Set();    // names answering 404 even if present in serverFiles
 
 const originalSt = globalThis.SillyTavern;
@@ -40,6 +41,7 @@ const fetchStub = async (url, options = {}) => {
         const body = JSON.parse(options.body);
         uploads.push({ ...body, keepalive: options.keepalive === true });
         if (failUploads) return { ok: false, status: 500, text: async () => 'boom' };
+        if (failUploadsOnce) { failUploadsOnce = false; return { ok: false, status: 500, text: async () => 'boom' }; }
         serverFiles.set(body.name, Buffer.from(body.data, 'base64').toString('utf8'));
         return { ok: true, status: 200, json: async () => ({}), text: async () => '' };
     }
@@ -90,6 +92,7 @@ beforeEach(() => {
     missingNames = new Set();
     verifyAvailable = true;
     failUploads = false;
+    failUploadsOnce = false;
     toastErrors.length = 0;
     installStubs();
     resetFileStoresForTests();
@@ -219,6 +222,25 @@ describe('mutation and documents', () => {
         manifest = JSON.parse(serverFiles.get(manifestName(store)));
         assert.deepEqual(manifest.shards.map(s => s.count), [1], 'the manifest row shrank');
     });
+
+    it('an update to a record loaded from the server rewrites its shard file', async () => {
+        const store = makeStore();
+        serverFiles.set(manifestName(store), JSON.stringify({
+            v: 1, kind: 'manifest', store: 'x',
+            shards: [{ id: 's0000', count: 1, min: 1_700_000_000_000, max: 1_700_000_000_000 }],
+        }));
+        serverFiles.set(shardName(store, 's0000'), JSON.stringify({
+            v: 1, kind: 'shard', store: 'x', id: 's0000', records: [card(0)],
+        }));
+        assert.equal(await store.ready(), 'file');
+        // c0000 arrived via adoptShard, not via an in-session placement.
+        await store.mutate(list => {
+            const item = list.find(r => r.id === 'c0000');
+            item.prompt = 'changed';
+        });
+        const shard = JSON.parse(serverFiles.get(shardName(store, 's0000')));
+        assert.equal(shard.records[0].prompt, 'changed', 'the server shard holds the edit');
+    });
 });
 
 describe('migration from monolith', () => {
@@ -251,6 +273,40 @@ describe('migration from monolith', () => {
         assert.deepEqual(store.snapshot().map(r => r.id), ['c0001', 'c0000']);
         const manifest = JSON.parse(serverFiles.get(manifestName(store)));
         assert.deepEqual(manifest.shards.map(s => s.count), [2], 'the half-written shard was overwritten');
+    });
+
+    it('a migration whose write failed re-adopts from scratch on the ready() retry (no duplicate rows)', async t => {
+        // ready() parks on PROBE_RETRY_MS (10 s) between attempts — fake the clock.
+        t.mock.timers.enable({ apis: ['setTimeout'] });
+        const store = makeStore();
+        failUploadsOnce = true;   // the first migration write (the shard) fails…
+        serverFiles.set(`t${labelCounter}_old.json`, JSON.stringify({ v: 1, cards: [card(1), card(0)] }));
+        let settled = false;
+        const ready = store.ready().then(result => { settled = true; return result; });
+        const turn = () => new Promise(resolve => setImmediate(resolve));
+        for (let i = 0; i < 5 && !settled; i++) {
+            await turn();   // let the in-flight attempt settle (fetch stubs are microtask-based)
+            t.mock.timers.tick(10_000);   // fire the retry sleep once attempt 1 scheduled it
+        }
+        assert.equal(await ready, 'file');
+        assert.deepEqual(store.snapshot().map(r => r.id), ['c0001', 'c0000']);
+        const manifest = JSON.parse(serverFiles.get(manifestName(store)));
+        assert.deepEqual(manifest.shards.map(s => s.id), ['s0000'], 'the retry rewrote the same shard id instead of opening new ones');
+        assert.deepEqual(manifest.shards.map(s => s.count), [2]);
+        const writtenShards = [...new Set(uploads.map(u => u.name).filter(n => n.startsWith(store.shardPrefix)))].sort();
+        assert.deepEqual(writtenShards, [shardName(store, 's0000')], 'no shard file under a second id');
+        assert.equal(serverFiles.has(shardName(store, 's0001')), false);
+    });
+
+    it('a gallery monolith whose collection is not an array comes up empty, preserving the file', async () => {
+        const store = makeStore();
+        const monolith = `t${labelCounter}_old.json`;
+        serverFiles.set(monolith, JSON.stringify({ v: 1, cards: { foo: 1 } }));
+        assert.equal(await store.ready(), 'file');
+        assert.deepEqual(store.snapshot(), []);
+        assert.equal(uploads.length, 0, 'a misshapen monolith is never migrated nor written over');
+        assert.equal(JSON.parse(serverFiles.get(monolith)).cards.foo, 1,
+            'the monolith is not tombstoned — a hand-fix can migrate later');
     });
 
     it('a tombstoned monolith is ignored (already migrated)', async () => {
