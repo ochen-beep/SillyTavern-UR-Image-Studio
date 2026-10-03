@@ -69,3 +69,10 @@ test('карточное меню: шит снизу <768px, поповер бе
 test('пункты меню не меньше 44px — зона пальца', () => {
     assert.match(ruleBody('.uris-action-menu-item'), /min-height:\s*44px/);
 });
+
+test('референсы: коллаж 2×2 в строках папок, чип-переключатель и липкий футер', () => {
+    assert.match(mobileRuleBody('.uris-mobile-folder-collage'), /grid-template-columns:\s*1fr 1fr/);
+    assert.match(ruleBody('.uris-mobile-folder-switch'), /cursor:\s*pointer/);
+    assert.match(mobileRuleBody('.uris-mobile-card-scroll .uris-ed-footer'), /position:\s*sticky/);
+    assert.match(mobileRuleBody('.uris-mobile-card-scroll .uris-ed-footer .uris-btn'), /min-height:\s*44px/);
+});
