@@ -8,6 +8,7 @@ import { getGallery, clearGallery } from '../storage.js';
 import { reconcileCards } from '../gallery-index.js';
 import { isStudioActive, resolveActiveChatId } from '../studio-scope.js';
 import { showLightbox } from './lightbox.js';
+import { openCardActionMenu, bindCardContextMenu } from './card-action-menu.js';
 
 // Test-only viewer seam: fake-dom tests cannot load PhotoSwipe, so the click
 // regression test swaps the viewer for a capture stub (same pattern as
@@ -33,8 +34,8 @@ export async function render(root) {
             <div class="uris-gallery-toolbar">
                 ${studio ? '<span class="uris-gallery-scope" title="Генерации без открытого чата">Студия</span>' : ''}
                 <span id="urisGalleryCount">${items.length}</span>
-                <button class="uris-btn uris-btn-outline uris-gallery-refresh" id="urisGalleryRefresh" title="Пересканировать папки на сервере: подхватить внешние добавления и пометить внешние удаления"><i class="fa-solid fa-rotate"></i> Обновить</button>
-                <button class="uris-btn uris-btn-danger uris-gallery-clear" id="urisGalleryClear"><i class="fa-solid fa-trash"></i> Очистить</button>
+                <button class="uris-btn uris-btn-outline uris-gallery-refresh" id="urisGalleryRefresh" title="Пересканировать папки на сервере: подхватить внешние добавления и пометить внешние удаления"><i class="fa-solid fa-rotate"></i> <span class="uris-btn-label">Обновить</span></button>
+                <button class="uris-btn uris-btn-danger uris-gallery-clear" id="urisGalleryClear"><i class="fa-solid fa-trash"></i> <span class="uris-btn-label">Очистить</span></button>
             </div>
             <div class="uris-gallery-grid" id="urisGalleryGrid"></div>
         </div>`;
@@ -152,6 +153,41 @@ function emptyState() {
     return '<div class="uris-gallery-empty">Нет генераций. Перейдите во вкладку «Генерация».</div>';
 }
 
+/**
+ * Action-menu items for one gallery card (the long-press/ПКМ menu). The same
+ * handlers the card buttons use, resolved lazily to keep the module's dynamic
+ * import of gallery-actions. Exported pure for tests.
+ * @param {Object} item gallery card
+ * @param {{ chatId: string, root: HTMLElement }} ctx
+ */
+export function galleryMenuItems(item, { chatId, root }) {
+    const items = [
+        { id: 'regen', icon: 'fa-rotate-right', label: 'Регенерировать',
+            onSelect: async () => { const a = await import('./gallery-actions.js'); await a.regenerate(item, root, null); } },
+        { id: 'copy', icon: 'fa-copy', label: 'Копировать промпт',
+            onSelect: async () => { const a = await import('./gallery-actions.js'); await a.copyItemText(item); } },
+    ];
+    if (item?.sourceMsgId != null) {
+        items.push({ id: 'goto', icon: 'fa-arrow-up-right-from-square', label: 'К посту-источнику',
+            onSelect: () => gotoSourcePost(item.sourceMsgId) });
+    }
+    items.push(
+        { id: 'saveRef', icon: 'fa-bookmark', label: 'Сохранить как референс',
+            onSelect: async () => { const a = await import('./gallery-actions.js'); await a.saveAsReference(item); } },
+        { id: 'del', icon: 'fa-trash', label: 'Удалить…', danger: true,
+            onSelect: async () => { const a = await import('./gallery-actions.js'); await a.deleteImage(item, chatId, root); } },
+    );
+    return items;
+}
+
+/** Navigate the chat to the source post; shared by the card button and the menu. */
+function gotoSourcePost(msgId) {
+    if (msgId == null) { toastr?.info('Пост-источник не указан'); return; }
+    const mes = document.querySelector(`.mes[mesid="${msgId}"]`);
+    if (!mes) { toastr?.info('Пост не найден в чате (возможно удалён)'); return; }
+    mes.scrollIntoView({ behavior: 'smooth', block: 'center' });
+}
+
 // root — корень ВКЛАДКИ (#urisBody), он нужен обработчикам для refreshRoot и
 // просмотра; scopeEl — контейнер сетки, в котором ищутся карточки. Это разные
 // элементы: смешение их давало «root is not defined» на клике по картинке
@@ -179,17 +215,17 @@ async function bindCards(scopeEl, root, items, chatId, from = 0, to = items.leng
         // Navigate to source post: scroll the chat to .mes[mesid="N"].
         cardEl.querySelector('[data-act="goto"]')?.addEventListener('click', (e) => {
             e.stopPropagation();
-            const msgId = it()?.sourceMsgId;
-            if (msgId == null) { toastr?.info('Пост-источник не указан'); return; }
-            const mes = document.querySelector(`.mes[mesid="${msgId}"]`);
-            if (!mes) { toastr?.info('Пост не найден в чате (возможно удалён)'); return; }
-            mes.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            gotoSourcePost(it()?.sourceMsgId);
         });
         cardEl.querySelector('[data-act="del"]')?.addEventListener('click', async (e) => {
             e.stopPropagation(); await deleteImage(it(), chatId, root);
         });
         cardEl.querySelector('[data-act="saveRef"]')?.addEventListener('click', async (e) => {
             e.stopPropagation(); await saveAsReference(it());
+        });
+        // Долгий тап (телефон) / ПКМ (десктоп): меню действий карточки.
+        bindCardContextMenu(cardEl, ({ x, y }) => {
+            openCardActionMenu({ title: 'Карточка', items: galleryMenuItems(it(), { chatId, root }), x, y });
         });
     });
 }

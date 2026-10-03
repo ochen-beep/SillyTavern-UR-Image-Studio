@@ -148,3 +148,42 @@ test('миниатюра показывает модель генерации, �
     // поэтому кликовая регрессия здесь невоспроизводима — покрытие клика
     // остаётся в первом тесте (клик по самой кнопке).
 });
+
+// Мобильный проход 2026-10-03: долгий тап / ПКМ по плитке открывает карточное
+// меню (card-action-menu.js); сами кнопочные строки на мобиле прячет CSS.
+test('contextmenu по карточке открывает меню действий с пунктами карточки', async () => {
+    const { document, root } = makeFakeDocument();
+    globalThis.document = document;
+    globalThis.document.body = root;
+    const mod = await import('../src/ui/tab-gallery.js');
+    delete globalThis.matchMedia;   // мобильная презентация — не важно для ассертов
+
+    root.__urisTabId = 'gallery';
+    await mod.render(root);
+    const card = root.querySelector('.uris-card');
+    let pd = false;
+    card.dispatchEvent({ type: 'contextmenu', clientX: 30, clientY: 40, preventDefault: () => { pd = true; } });
+
+    const overlay = document.body.children.find(n => n.querySelector?.('.uris-action-menu'));
+    assert.ok(overlay, 'меню открыто');
+    // fake-dom не понимает составных селекторов — берём пункты и читаем текст целиком
+    const labels = [...overlay.querySelectorAll('.uris-action-menu-item')].map(b => b.textContent.trim());
+    assert.deepEqual(labels, ['Регенерировать', 'Копировать промпт', 'Сохранить как референс', 'Удалить…'],
+        'без «К посту-источнику»: у тестовых карточек нет sourceMsgId');
+    const del = overlay.querySelectorAll('.uris-action-menu-item').find(b => b.dataset.id === 'del');
+    assert.ok(del.classList.contains('uris-action-menu-item-danger'), 'удаление помечено опасным');
+
+    // Фоновый тап закрывает
+    overlay.dispatchEvent({ type: 'click', target: overlay, preventDefault() {} });
+    assert.equal(overlay.parentNode, null, 'меню закрылось');
+});
+
+test('galleryMenuItems: «К посту-источнику» появляется только при sourceMsgId', async () => {
+    const { document, root } = makeFakeDocument();
+    const mod = await import('../src/ui/tab-gallery.js');
+    const without = mod.galleryMenuItems({ id: 'x' }, { chatId: 'c', root });
+    const withMsg = mod.galleryMenuItems({ id: 'x', sourceMsgId: 7 }, { chatId: 'c', root });
+    assert.equal(without.some(i => i.id === 'goto'), false);
+    assert.equal(withMsg.some(i => i.id === 'goto'), true);
+    assert.equal(withMsg.at(-1).danger, true, 'удаление — последний и опасный');
+});

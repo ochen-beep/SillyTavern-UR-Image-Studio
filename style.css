@@ -815,8 +815,17 @@
     #urisWindow.uris-mobile .uris-resizer { display: none !important; }
     #urisWindow.uris-mobile .uris-header { cursor: default !important; touch-action: pan-y !important; }
     .uris-gallery-grid { grid-template-columns: repeat(2, 1fr); }
-    .uris-card-actions { flex-wrap: wrap; }
-    .uris-card-btn { padding: 10px; font-size: calc(16px * var(--uris-font-scale, 1)); min-width: 44px; min-height: 44px; }
+    /* Кнопочные строки под плитками убраны: действия — долгим тапом по плитке
+       (карточное меню, card-action-menu.js). Тап по плитке = просмотр. */
+    .uris-card-actions { display: none; }
+    /* Тулбар — липкая компактная строка: счётчик слева, иконки 44px справа. */
+    .uris-gallery-toolbar {
+        position: sticky; top: 0; z-index: 5;
+        background: var(--uris-surface-card);
+        margin-bottom: 0; padding: 4px 0;
+    }
+    .uris-gallery-toolbar .uris-btn-label { display: none; }
+    .uris-gallery-toolbar .uris-btn { min-width: 44px; min-height: 44px; padding: 6px 10px; }
     /* Скроллтаб для 6+ вкладок на узком экране. Скроллбар скрыт, жест-подсказка
        не нужна: активная вкладка всегда автоматически доскролливается (tabs.js).
        scrollbar-width: none + ::-webkit-scrollbar — как у .uris-scroll-x. */
@@ -2636,6 +2645,48 @@ div.pswp__img--placeholder,
 .uris-copy-field-snippet {
     opacity: .7; font-size: var(--uris-font-xs);
     overflow-wrap: anywhere; white-space: normal;
+}
+
+/* ── Карточное меню жестов (card-action-menu.js) ──
+   Мобильный (<768px): шит снизу во всю ширину; десктоп: поповер у курсора
+   (позицию задаёт JS инлайном). Хост-оверлей — общий uris-picker-overlay. */
+.uris-action-menu {
+    background: var(--uris-surface-card);
+    border: 1px solid var(--uris-border-soft);
+    border-radius: var(--uris-radius-card);
+    padding: 6px; min-width: 200px; max-width: min(92vw, 320px);
+}
+.uris-action-menu-grip {
+    width: 36px; height: 4px; border-radius: 99px;
+    background: var(--uris-border); margin: 0 auto 4px;
+    display: none;
+}
+.uris-action-menu-title {
+    font-size: var(--uris-font-sm); color: var(--uris-text-mut);
+    padding: 4px 8px 6px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.uris-action-menu-list { display: flex; flex-direction: column; gap: 2px; }
+.uris-action-menu-item {
+    display: flex; align-items: center; gap: 10px; width: 100%;
+    padding: 11px 12px; border: 0; border-radius: var(--uris-radius);
+    background: none; color: var(--uris-text-strong); cursor: pointer;
+    font: inherit; font-size: var(--uris-font); text-align: left;
+    min-height: 44px; box-sizing: border-box;
+    transition: background .12s;
+}
+.uris-action-menu-item:hover { background: var(--uris-surface-btn); }
+.uris-action-menu-item i { width: 18px; text-align: center; color: var(--uris-text-mut); }
+.uris-action-menu-item-danger, .uris-action-menu-item-danger i { color: var(--uris-err); }
+.uris-action-menu-item-danger:hover { background: var(--uris-err-soft); }
+.uris-action-menu-item:disabled { opacity: .45; cursor: default; }
+
+@media (max-width: 767px) {
+    .uris-action-menu-overlay { align-items: flex-end; }
+    .uris-action-menu {
+        width: 100%; max-width: none; border-radius: var(--uris-radius-card) var(--uris-radius-card) 0 0;
+        padding-bottom: calc(6px + env(safe-area-inset-bottom, 0px));
+    }
+    .uris-action-menu-grip { display: block; }
 }
 
 /* ── Инлайн-оболочки в сообщениях чата (src/inline/render.js) ──

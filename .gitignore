@@ -32,3 +32,4 @@ Desktop.ini
 
 # cloud-sync conflict leftovers (Nextcloud/Dropbox style)
 *.sync-conflict-*
+.superpowers/
