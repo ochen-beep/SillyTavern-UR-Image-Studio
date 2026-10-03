@@ -20,19 +20,23 @@ function ruleBody(selector) {
 }
 
 /**
- * Тело правила селектора ВНУТРИ @media с заданным условием: у многих
- * селекторов есть базовое правило вне медиа — искать нужно мобильное.
+ * Тело правила селектора ВНУТРИ @media с заданным условием. Файлов несколько
+ * блоков с одним условием (705 и 799) — каскадно побеждает ПОСЛЕДНЕЕ правило,
+ * его и возвращаем.
  */
 function mobileRuleBody(selector, mediaPattern = /max-width:\s*768px/) {
+    let found = null;
     let from = 0;
     for (;;) {
         const idx = css.indexOf(`${selector} {`, from);
-        assert.notEqual(idx, -1, `мобильное правило ${selector} не найдено`);
+        if (idx === -1) break;
         const mediaStart = css.lastIndexOf('@media', idx);
         const mediaText = css.slice(mediaStart, css.indexOf('{', mediaStart));
-        if (mediaPattern.test(mediaText)) return ruleBodyAt(idx);
+        if (mediaPattern.test(mediaText)) found = ruleBodyAt(idx);
         from = idx + 1;
     }
+    assert.notEqual(found, null, `мобильное правило ${selector} не найдено`);
+    return found;
 }
 
 function ruleBodyAt(idx) {
