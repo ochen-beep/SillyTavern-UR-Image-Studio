@@ -265,7 +265,7 @@ describe('gallery file store: two-session lost update', () => {
         }
     });
 
-    it('an external stale full-file overwrite is picked up by the pre-write merge', async () => {
+    it('an external stale whole-shard overwrite is picked up by the pre-write merge', async () => {
         await gallery.ensureGalleryStoreReady();
         await gallery.addCard({ id: 'a', imagePath: img('a.png'), prompt: 'a' });
         await gallery.flushGalleryWrites();
@@ -282,7 +282,7 @@ describe('gallery file store: two-session lost update', () => {
 
         // Локальная сессия пишет снова: pre-write merge перечитывает шард и
         // вбирает чужую карточку в свою запись (карточка «a» при этом честно
-        // удалена внешней полнодокументной записью — сервер её уже не имел).
+        // удалена внешней записью шарда целиком — сервер её уже не имел).
         await gallery.addCard({ id: 'c', imagePath: img('c.png'), prompt: 'c' });
         await gallery.flushGalleryWrites();
 

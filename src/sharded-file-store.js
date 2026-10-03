@@ -899,7 +899,14 @@ export function createShardedFileStore(config) {
                 for (const k of Object.keys(m)) delete m[k];
                 Object.assign(m, satellite);
             });
-            await metaStore.flush();
+            const flushed = await metaStore.flush();
+            // A transient meta-upload failure must not commit the migration:
+            // manifest + tombstone would strand folders that only lived in the
+            // monolith. 'unresolved' sends ready() into the idempotent retry —
+            // the monolith is untouched and this attempt has written no shards.
+            // A readonly meta store (a newer build's meta file) stays as-is:
+            // there the mutate no-ops and the newer document owns the data.
+            if (!flushed && metaStore.mode() === 'file') return 'unresolved';
         }
         // A retried migration (an earlier attempt failed mid-write) starts
         // from a clean slate: re-adopting chunks onto the leftover placement

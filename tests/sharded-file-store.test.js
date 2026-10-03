@@ -811,6 +811,44 @@ describe('replace and meta', () => {
         assert.equal(tomb.kind, 'migrated');
     });
 
+    it('a failed meta upload during a refs migration retries; folders commit only with the migration', async t => {
+        // The meta satellite upload is the migration's FIRST write: failing it
+        // once must return 'unresolved' (nothing committed, monolith intact),
+        // and the ready() retry must repeat the whole migration cleanly.
+        // ready() parks on PROBE_RETRY_MS (10 s) between attempts — fake the clock.
+        t.mock.timers.enable({ apis: ['setTimeout'] });
+        const n = labelCounter + 1;
+        const store = makeStore({
+            shardedKey: 'refs',
+            append: 'back',
+            placeByStamp: false,
+            monolithKey: 'data',
+            empty: () => ({ refs: [], folders: [] }),
+            countEntries: value => (Array.isArray(value?.refs) ? value.refs.length : null),
+            meta: { name: `t${n}_meta.json`, keys: ['folders'], empty: () => ({ folders: [] }) },
+        });
+        serverFiles.set(`t${n}_old.json`, JSON.stringify({
+            v: 1, data: { refs: [card(1), card(0)], folders: [{ id: 'f1', name: 'x' }] },
+        }));
+        failUploadsOnce = true;   // exactly the next upload — the meta satellite — fails
+        let settled = false;
+        const ready = store.ready().then(result => { settled = true; return result; });
+        const turn = () => new Promise(resolve => setImmediate(resolve));
+        for (let i = 0; i < 5 && !settled; i++) {
+            await turn();   // let the in-flight attempt settle (fetch stubs are microtask-based)
+            t.mock.timers.tick(10_000);   // fire the retry sleep once attempt 1 scheduled it
+        }
+        assert.equal(await ready, 'file');
+        assert.deepEqual(store.snapshot().refs.map(r => r.id), ['c0001', 'c0000']);
+        assert.deepEqual(store.snapshot().folders.map(f => f.id), ['f1']);
+        assert.equal(uploads.filter(u => u.name === `t${n}_meta.json`).length, 2,
+            'the meta upload flew twice: the failed attempt and the retry');
+        const metaFile = JSON.parse(serverFiles.get(`t${n}_meta.json`));
+        assert.deepEqual(metaFile.data.folders.map(f => f.id), ['f1']);
+        const tomb = JSON.parse(serverFiles.get(`t${n}_old.json`));
+        assert.equal(tomb.kind, 'migrated', 'the monolith is tombstoned only after the migration commits');
+    });
+
     it('meta carries a satellite array in its own file; mutate syncs it', async () => {
         // makeStore increments labelCounter, but the overrides object is
         // evaluated at the call site — pre-compute the label for meta.name.
