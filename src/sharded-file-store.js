@@ -31,6 +31,9 @@
  * reason: 'shard-unreadable' — the manifest names a shard the server cannot
  * deliver (404/corrupt/newer): the merge base is incomplete, so writes are
  * refused for the session instead of silently clobbering the missing part.
+ * A corrupt manifest does not refuse: the shard sequence is gapless by
+ * construction, so the manifest is rebuilt by probing shard GETs until the
+ * first 404 and re-written (a store with no readable shards starts empty).
  */
 
 import { log, warn } from './core.js';
@@ -188,7 +191,8 @@ export function createShardedFileStore(config) {
     let totalBytes = null;
     let lastError = null;
     // Session-level persist refusal — WHY the mode is readonly
-    // ('no-user-files' | 'newer-version' | 'shard-unreadable' | 'corrupt-manifest').
+    // ('no-user-files' | 'newer-version' | 'shard-unreadable' — a corrupt
+    // manifest no longer blocks: it is rebuilt from a shard scan).
     // schedulePersist reports this cause instead of guessing.
     let writeBlockedReason = null;
     const refusedNotified = new Set();
@@ -229,7 +233,6 @@ export function createShardedFileStore(config) {
                 'newer-version': `«${label}»: данные записаны более новой версией расширения — обновите UR Image Studio; запись отключена.`,
                 'no-user-files': `«${label}»: SillyTavern не поддерживает файловое хранилище (обновите SillyTavern); запись отключена.`,
                 'shard-unreadable': `«${label}»: не удалось прочитать часть данных при запуске — запись заблокирована, чтобы не потерять остальное. Перезагрузите страницу.`,
-                'corrupt-manifest': `«${label}»: не удалось прочитать оглавление данных при запуске — запись заблокирована, чтобы не потерять остальное. Перезагрузите страницу.`,
             };
             const message = messages[reason] || `«${label}»: запись отключена (${reason}).`;
             if (onWriteFailure) onWriteFailure(new Error(reason));
@@ -347,6 +350,37 @@ export function createShardedFileStore(config) {
         return true;
     }
 
+    /**
+     * The manifest is corrupt or lost, but shard files may exist. Shard ids
+     * are gapless s0000…sNNNN by construction, so the sequence is recoverable
+     * by probing GETs until the first 404 (user-files has no directory
+     * listing). Every readable shard is adopted; the rebuilt manifest is
+     * written immediately so the next session does not re-probe.
+     */
+    async function rebuildFromScan() {
+        shards = [];
+        shardState = new Map();
+        recordShard = new Map();
+        for (let n = 0; n < 10_000; n++) {
+            const id = 's' + String(n).padStart(4, '0');
+            let text;
+            try { text = await readFile(shardFileName(id)); } catch { break; }
+            if (text === null) break;
+            const parsed = parseShard(text, version);
+            if (parsed.reason !== 'found' && parsed.reason !== 'older') break;
+            adoptShard(id, parsed.value);
+        }
+        rebuildMirrorFromShards();
+        if (!shards.length) {
+            warn(`sharded-store[${label}]: corrupt manifest and no readable shards — starting empty`);
+            return;
+        }
+        manifestDirty = true;
+        await writeManifest([]);
+        emit('store-recovered', { store: label, result: 'ok', shards: shards.length, entries: countEntries(mirror) });
+        log(`sharded-store[${label}]: manifest rebuilt from ${shards.length} shard(s)`);
+    }
+
     async function detectAndLoadOnce() {
         const started = Date.now();
         let probe;
@@ -404,14 +438,15 @@ export function createShardedFileStore(config) {
             return mode;
         }
         if (parsed.reason === 'corrupt') {
-            // Task 8 wires rebuildFromScan() here. Until then: readonly — the
-            // mirror is an empty base, and one mutation would overwrite the
-            // real shards the unreadable manifest still names.
-            mode = 'readonly';
-            writeBlockedReason = 'corrupt-manifest';
+            // The scan is safe: it only reads shard files and writes a derived
+            // manifest. With NO readable shards the store legitimately starts
+            // empty — file-store's corrupt→repair semantics for a document
+            // whose data is already gone.
             mirror = empty();
-            emit('store-mode', { store: label, result: 'readonly', reason: 'corrupt-manifest' });
-            refusePersist('corrupt-manifest');
+            mode = 'file';
+            writeBlockedReason = null;
+            await rebuildFromScan();
+            emit('store-mode', { store: label, result: 'file', reason: 'corrupt-manifest' });
             return mode;
         }
 

@@ -170,17 +170,53 @@ describe('load from manifest', () => {
         assert.match(toastErrors[0], /часть данных/);
     });
 
-    it('a corrupt manifest makes the store readonly and a mutation writes nothing', async () => {
+    it('a corrupt manifest is rebuilt by probing the shard sequence and re-written', async () => {
+        const store = makeStore();
+        serverFiles.set(manifestName(store), '{ not json');
+        serverFiles.set(shardName(store, 's0000'), JSON.stringify({
+            v: 1, kind: 'shard', store: 'x', id: 's0000', records: [card(1), card(0)],
+        }));
+        serverFiles.set(shardName(store, 's0001'), JSON.stringify({
+            v: 1, kind: 'shard', store: 'x', id: 's0001', records: [card(2)],
+        }));
+        assert.equal(await store.ready(), 'file');
+        assert.deepEqual(store.snapshot().map(r => r.id), ['c0002', 'c0001', 'c0000']);
+        const rebuilt = JSON.parse(serverFiles.get(manifestName(store)));
+        assert.deepEqual(rebuilt.shards.map(s => s.id), ['s0000', 's0001']);
+        assert.deepEqual(rebuilt.shards.map(s => s.count), [2, 1]);
+    });
+
+    it('a corrupt manifest is rebuilt; the next mutation writes only its own shard', async () => {
         const store = makeStore();
         serverFiles.set(manifestName(store), '{ not json');
         serverFiles.set(shardName(store, 's0000'), JSON.stringify({
             v: 1, kind: 'shard', store: 'x', id: 's0000', records: [card(0)],
         }));
-        assert.equal(await store.ready(), 'readonly');
+        assert.equal(await store.ready(), 'file', 'the rebuild un-blocks writes: no readonly, no refusal toast');
+        assert.deepEqual(store.snapshot().map(r => r.id), ['c0000'],
+            'the pre-existing shard is adopted, its records are the mirror');
+        assert.match(serverFiles.get(manifestName(store)), /s0000/, 'the manifest was re-written from the scan');
+        const afterLoad = uploads.length;
         await store.mutate(list => { list.unshift(card(9)); });
         await store.flush();
-        assert.equal(uploads.length, 0, 'an unreadable manifest must not be clobbered by an empty-mirror write');
-        assert.match(toastErrors[0], /оглавление/);
+        const written = uploads.slice(afterLoad).map(u => u.name).sort();
+        assert.deepEqual(written, [shardName(store, 's0000'), manifestName(store)].sort(),
+            'the mutation writes only its own shard + the manifest — no second scan, no orphan shards');
+        const shard = JSON.parse(serverFiles.get(shardName(store, 's0000')));
+        assert.deepEqual(shard.records.map(r => r.id), ['c0009', 'c0000']);
+    });
+
+    it('a failed upload keeps the shard dirty; the next mutation re-sends it', async () => {
+        const store = makeStore();
+        await store.ready();
+        failUploads = true;
+        await store.mutate(list => { list.unshift(card(0)); });
+        assert.equal(await store.flush(), false);
+        failUploads = false;
+        await store.mutate(list => { list.unshift(card(1)); });
+        assert.equal(await store.flush(), true);
+        const shard = JSON.parse(serverFiles.get(shardName(store, 's0000')));
+        assert.deepEqual(shard.records.map(r => r.id), ['c0001', 'c0000']);
     });
 });
 
