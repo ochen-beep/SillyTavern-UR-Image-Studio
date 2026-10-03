@@ -72,6 +72,18 @@ function storedDoc(name) {
     return text ? JSON.parse(text) : null;
 }
 
+/** The stored refs records across the sharded files (manifest → shards). */
+function storedRefs() {
+    const manifest = storedDoc(refs.REFS_MANIFEST_NAME);
+    if (!manifest) return null;
+    const records = [];
+    for (const row of (manifest.shards || [])) {
+        const shard = storedDoc(`${refs.REFS_SHARD_PREFIX}${row.id}.json`);
+        if (shard) records.push(...shard.records);
+    }
+    return records;
+}
+
 beforeEach(() => {
     installStubs();
     for (const key of Object.keys(extensionSettings)) delete extensionSettings[key];
@@ -108,26 +120,26 @@ describe('reference pool file store', () => {
 
         const created = await refs.createRef({ name: 'Aria', aliases: ['Ария'], description: 'рыжая' });
         await refs.flushRefsWrites();
-        assert.deepEqual(storedDoc(refs.REFS_FILE_NAME).data.refs.map(r => r.id), [created.id]);
+        assert.deepEqual(storedRefs().map(r => r.id), [created.id]);
 
         await refs.updateRef(created.id, { name: 'Aria II' });
         await refs.flushRefsWrites();
-        assert.equal(storedDoc(refs.REFS_FILE_NAME).data.refs[0].name, 'Aria II');
+        assert.equal(storedRefs()[0].name, 'Aria II');
 
         await refs.deleteRef(created.id);
         await refs.flushRefsWrites();
-        assert.deepEqual(storedDoc(refs.REFS_FILE_NAME).data.refs, []);
+        assert.deepEqual(storedRefs(), []);
     });
 
-    it('keeps folders in the same document as the pool', async () => {
+    it('keeps folders alongside the pool (meta file next to the shards)', async () => {
         await refs.ensureRefsStoreReady();
         const folder = await refs.createFolder('Мама');
         await refs.createRef({ name: 'Aria', folders: [folder.id] });
         await refs.flushRefsWrites();
 
-        const doc = storedDoc(refs.REFS_FILE_NAME);
-        assert.deepEqual(doc.data.folders.map(f => f.name), ['Мама']);
-        assert.deepEqual(doc.data.refs[0].folders, [folder.id]);
+        const metaDoc = storedDoc(refs.REFS_META_NAME);
+        assert.deepEqual(metaDoc.data.folders.map(f => f.name), ['Мама']);
+        assert.deepEqual(storedRefs()[0].folders, [folder.id]);
     });
 
     it('no user-files API → readonly, writes refused, nothing uploaded', async () => {
@@ -227,7 +239,7 @@ describe('backup round-trip with file-backed data', () => {
         await refs.flushRefsWrites();
         await presets.flushParamPresetWrites();
 
-        assert.deepEqual(storedDoc(refs.REFS_FILE_NAME).data.refs.map(r => r.id), [ref.id]);
+        assert.deepEqual(storedRefs().map(r => r.id), [ref.id]);
         assert.deepEqual(storedDoc(presets.PRESETS_FILE_NAME).presets.map(p => p.name), ['Cinematic']);
         assert.deepEqual((await refs.listRefs()).map(r => r.name), ['Aria']);
     });
@@ -257,7 +269,7 @@ describe('backup round-trip with file-backed data', () => {
         await presets.flushParamPresetWrites();
 
         assert.deepEqual(
-            storedDoc(refs.REFS_FILE_NAME).data.refs.map(r => r.id),
+            storedRefs().map(r => r.id),
             [ref.id],
             'an absent section must not be imported as an empty pool',
         );
@@ -280,7 +292,7 @@ describe('backup round-trip with file-backed data', () => {
         await backup.importUrisData(exported, { mode: 'replace' });
         await refs.flushRefsWrites();
 
-        assert.deepEqual(storedDoc(refs.REFS_FILE_NAME).data.refs, [], 'the backup says the pool is empty');
+        assert.deepEqual(storedRefs(), [], 'the backup says the pool is empty');
     });
 });
 
