@@ -390,6 +390,13 @@ function bindWindowEscape(winEl) {
         if (!isPanelVisible()) return;
         const target = event.target;
         if (!target || typeof winEl.contains !== 'function' || !winEl.contains(target)) return;
+        // Открытый оверлей-диалог (кроп, пикер папок, карточное меню) поглощает
+        // Esc своим capture-обработчиком — но тот зарегистрирован позже окна, и
+        // его stopPropagation уже не действует: capture-обработчики документа
+        // вызываются в порядке регистрации, окно — первым. Поэтому окно само
+        // уступает (регресс 2026-10-04: одно нажатие закрывало карточное меню И
+        // прятало всё окно). Повторный Esc после закрытия оверлея — как обычно.
+        if (typeof document !== 'undefined' && document.querySelector?.('.uris-picker-overlay')) return;
         // Открытая бейдж-панель (QUEUE/INFO) поглощает Esc: её собственный
         // keydown-обработчик закрывает панель, окно не сворачивается. Раньше
         // одно нажатие закрывало панель И окно разом (capture-фаза окна и

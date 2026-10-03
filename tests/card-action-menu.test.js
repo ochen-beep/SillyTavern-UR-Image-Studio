@@ -58,6 +58,33 @@ test('item click: closes first, then calls that item onSelect', async () => {
     close();
 });
 
+test('item click on the label (target = вложенный span): onSelect срабатывает', async () => {
+    // Реальный браузер: клик по тексту пункта всплывает в кнопку с
+    // target = <span>. Регресс 2026-10-04: guard `e.target !== btn` глотал
+    // именно такие клики — меню отвечало только на попадание в паддинг.
+    const { openCardActionMenu } = await import('../src/ui/card-action-menu.js');
+    const calls = [];
+    openCardActionMenu({ title: 'T', items: [{ id: 'a', icon: 'x', label: 'A', onSelect: () => calls.push('a') }] });
+    const overlay = fake.document.body.children.find(n => n.querySelector?.('.uris-action-menu'));
+    const btn = overlay.querySelector('.uris-action-menu-item');
+    const span = btn.querySelector('span');
+    assert.ok(span, 'у пункта есть <span> с подписью');
+    btn.dispatchEvent({ type: 'click', target: span, preventDefault() {} });
+    assert.deepEqual(calls, ['a'], 'клик по подписи не должен глотаться');
+    assert.equal(overlay.parentNode, null, 'оверлей закрыт');
+});
+
+test('item click с чужим target (каскад фейк-дома от оверлея) игнорируется', async () => {
+    const { openCardActionMenu } = await import('../src/ui/card-action-menu.js');
+    const calls = [];
+    openCardActionMenu({ title: 'T', items: [{ id: 'a', icon: 'x', label: 'A', onSelect: () => calls.push('a') }] });
+    const overlay = fake.document.body.children.find(n => n.querySelector?.('.uris-action-menu'));
+    const btn = overlay.querySelector('.uris-action-menu-item');
+    btn.dispatchEvent({ type: 'click', target: overlay, preventDefault() {} });
+    assert.deepEqual(calls, [], 'чужой target не выбирает пункт');
+    assert.ok(overlay.parentNode, 'оверлей остаётся открытым');
+});
+
 test('backdrop click closes without firing items', async () => {
     const { openCardActionMenu } = await import('../src/ui/card-action-menu.js');
     const calls = [];

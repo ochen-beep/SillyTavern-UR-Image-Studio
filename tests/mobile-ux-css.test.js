@@ -66,6 +66,16 @@ test('карточное меню: шит снизу <768px, поповер бе
     assert.match(ruleBody('.uris-action-menu-grip'), /display:\s*none/, 'на десктопе грипа нет');
 });
 
+test('карточное меню: поповер абсолютен на десктопе, шит на мобиле — статичен', () => {
+    // Регресс 2026-10-04: без position у .uris-action-menu инлайн left/top из
+    // card-action-menu.js инертны — flex оверлея центрировал меню, и поповер
+    // «у курсора» (как и клэмп к краю) не работал вовсе.
+    assert.match(ruleBody('.uris-action-menu'), /position:\s*absolute/,
+        'inline left/top работает только у позиционированного элемента');
+    const mobile = mobileRuleBody('.uris-action-menu', /max-width:\s*76[78]px/);
+    assert.match(mobile, /position:\s*static/, 'шит снизу позиционируется флексом, не абсолютом');
+});
+
 test('пункты меню не меньше 44px — зона пальца', () => {
     assert.match(ruleBody('.uris-action-menu-item'), /min-height:\s*44px/);
 });

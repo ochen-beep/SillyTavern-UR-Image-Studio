@@ -172,6 +172,19 @@ export function makeFakeDocument() {
             },
         };
         node.ownerDocument = document;
+        // В браузере classList всегда синхронен строке class: прямой
+        // `el.className = 'a b'` обязан обновить classList — иначе оверлеи,
+        // созданные через createElement + className (card-action-menu и др.),
+        // невидимы для querySelector по классу (регресс 2026-10-04).
+        let _className = '';
+        Object.defineProperty(node, 'className', {
+            get() { return _className; },
+            set(v) {
+                _className = String(v ?? '');
+                node.classList._set.clear();
+                for (const cls of _className.split(/\s+/).filter(Boolean)) node.classList._set.add(cls);
+            },
+        });
         allNodes.push(node);
         return node;
     }

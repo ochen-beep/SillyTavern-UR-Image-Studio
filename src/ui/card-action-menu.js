@@ -95,9 +95,11 @@ export function openCardActionMenu({ title = '', items = [], x = null, y = null 
     });
     overlay.querySelectorAll('.uris-action-menu-item').forEach(btn => {
         btn.addEventListener('click', (e) => {
-            // Fake-dom каскадирует dispatchEvent вниз к детям: прямой клик по
-            // пункту всегда имеет target === btn, каскадный (клик по фону) — нет.
-            if (e.target && e.target !== btn) return;
+            // Реальный клик по пункту всплывает из <span>/<i> с target = ребёнок
+            // кнопки — он обязан срабатывать (guard `e.target !== btn` глотал
+            // именно его). Отсекается только каскадный клик фейк-дома: тот
+            // диспатчит оверлей вниз к детям, и до кнопки доходит target-чужак.
+            if (e.target && e.target !== btn && !btn.contains(e.target)) return;
             const item = items.find(entry => entry.id === btn.dataset.id);
             close();
             if (item) item.onSelect?.();

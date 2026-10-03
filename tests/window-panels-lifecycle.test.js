@@ -115,3 +115,23 @@ test('Esc с открытой INFO-панелью: окно уступает, п
 
     _testWindowLifecycle.removePanel();
 });
+
+test('Esc при открытом карточном меню закрывает только меню — окно не сворачивается', async () => {
+    // Регресс 2026-10-04: capture-обработчик Esc окна зарегистрирован раньше
+    // менюшного и не знал об оверлеях в body — одно нажатие закрывало меню И
+    // прятало всё окно (uris-hidden). Оверлей диалога теперь сам заставляет
+    // окно уступить, как QUEUE/INFO-панели.
+    const el = mount();
+    _testWindowLifecycle.bindWindowEscape(el);
+    const { openCardActionMenu } = await import('../src/ui/card-action-menu.js');
+    const menu = openCardActionMenu({ title: 'T', items: [] });
+    const target = el.querySelector('#urisTabs') || el;   // фокус внутри окна
+
+    const keydownHandlers = documentRef._docListeners.filter(l => l.type === 'keydown');
+    // Порядок фаз как в браузере: capture в порядке регистрации — окно первым.
+    const inPhaseOrder = [...keydownHandlers.filter(h => h.capture), ...keydownHandlers.filter(h => !h.capture)];
+    const ev = { key: 'Escape', target, preventDefault() {}, stopPropagation() {} };
+    for (const h of inPhaseOrder) h.fn(ev);
+    assert.equal(core.state.settings.collapsed, false, 'окно НЕ сворачивается при открытом меню');
+    assert.equal(menu.overlay.parentNode, null, 'меню закрыто своим capture-обработчиком');
+});
