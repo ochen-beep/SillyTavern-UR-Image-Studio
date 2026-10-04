@@ -413,6 +413,86 @@ export function filterRefsByFolders(refs, folderIds = []) {
     return out;
 }
 
+// ── Folder tree (2 levels: группа верхнего уровня → подпапки) ──
+
+/**
+ * Group folders by parent: Map(parentId | '' for top level → [folders in list
+ * order]). Pure; missing/null parentId counts as top level.
+ */
+export function folderChildrenMap(folders) {
+    const map = new Map();
+    for (const folder of (Array.isArray(folders) ? folders : [])) {
+        const key = folder?.parentId ? String(folder.parentId) : '';
+        if (!map.has(key)) map.set(key, []);
+        map.get(key).push(folder);
+    }
+    return map;
+}
+
+/** Direct children of folderId, in list order. */
+export function folderChildFolders(folders, folderId) {
+    return folderChildrenMap(folders).get(String(folderId)) || [];
+}
+
+/** True when the folder has at least one subfolder (i.e. renders as a group). */
+export function folderHasChildren(folders, folderId) {
+    return folderChildFolders(folders, folderId).length > 0;
+}
+
+/**
+ * Descendant ids of folderId (excluding itself), depth-first in list order.
+ * Cycle-safe: the walk never revisits an id, so a corrupt parentId loop
+ * degrades to a partial walk instead of hanging the tab.
+ */
+export function folderDescendantIds(folders, folderId) {
+    const kids = folderChildrenMap(folders);
+    const out = [];
+    const seen = new Set([String(folderId)]);
+    const walk = (parentId) => {
+        for (const child of (kids.get(parentId) || [])) {
+            if (seen.has(child.id)) continue;
+            seen.add(child.id);
+            out.push(child.id);
+            walk(child.id);
+        }
+    };
+    walk(String(folderId));
+    return out;
+}
+
+/** folderId + all descendants — the id set behind a recursive (group) filter. */
+export function folderSubtreeIds(folders, folderId) {
+    return [String(folderId), ...folderDescendantIds(folders, folderId)];
+}
+
+/**
+ * Refs belonging to folderId OR any of its descendants (unique, refs order).
+ * The recursive counterpart of filterRefsByFolder behind the group tap.
+ */
+export function filterRefsByFolderTree(refs, folders, folderId) {
+    const ids = new Set(folderSubtreeIds(folders, folderId));
+    return (Array.isArray(refs) ? refs : []).filter(ref =>
+        Array.isArray(ref?.folders) && ref.folders.some(id => ids.has(String(id))));
+}
+
+/**
+ * Expand selected folder ids so every folder id stands for its full subtree
+ * (unique, stable order). Used by the generation whitelist: picking a group
+ * there must pull in all descendant folders' references.
+ */
+export function expandFolderIdsToSubtrees(folders, ids = []) {
+    const out = [];
+    const seen = new Set();
+    for (const id of (Array.isArray(ids) ? ids : []).map(String)) {
+        for (const sub of folderSubtreeIds(folders, id)) {
+            if (seen.has(sub)) continue;
+            seen.add(sub);
+            out.push(sub);
+        }
+    }
+    return out;
+}
+
 // ── Folders CRUD ──
 
 // Folder color palette (from Figma mockup). Assigned cyclically by
@@ -422,7 +502,12 @@ export const FOLDER_COLOR_PALETTE = [
     '#7a5cc9', '#c94090', '#40a060', '#a04040', '#4a70b9',
 ];
 
-/** Normalize a folder record: guarantees id/name/color/order fields. */
+/**
+ * Normalize a folder record: guarantees id/name/color/order fields.
+ * `parentId` is optional tree navigation (v4.1): null = top level; a folder
+ * with parentId is a subfolder of a top-level folder. Depth cap is enforced
+ * in createFolder/updateFolder, not here — normalization must stay total.
+ */
 export function normalizeFolder(data = {}, fallbackIndex = 0) {
     return {
         id: data.id ? String(data.id) : uid(),
@@ -433,7 +518,28 @@ export function normalizeFolder(data = {}, fallbackIndex = 0) {
                 ? FOLDER_COLOR_PALETTE[fallbackIndex % FOLDER_COLOR_PALETTE.length]
                 : '#808080'),
         order: Number.isFinite(data.order) ? data.order : 0,
+        parentId: (typeof data.parentId === 'string' && data.parentId) ? data.parentId : null,
     };
+}
+
+/**
+ * Depth cap for the folder tree: only top-level folders may contain children.
+ * Returns a human-readable error when `parentId` is not a legal parent for
+ * `folder`, or null when the move is legal. `parentId = null` (top level) is
+ * always legal. A subfolder may move to another top-level group — the depth
+ * stays 2; only a folder WITH children cannot go under anything.
+ */
+export function folderMoveError(folders, folder, parentId) {
+    if (!parentId) return null;
+    const list = Array.isArray(folders) ? folders : [];
+    const parent = list.find(item => item.id === parentId);
+    if (!parent) return 'Родительская папка не найдена';
+    if (parent.id === folder.id) return 'Нельзя вложить папку в саму себя';
+    if (parent.parentId) return 'Глубина вложенности ограничена двумя уровнями';
+    if (list.some(item => item.parentId === folder.id)) {
+        return 'Папка с подпапками не может быть вложена в другую папку';
+    }
+    return null;
 }
 
 export async function listFolders() {
@@ -443,9 +549,15 @@ export async function listFolders() {
 
 export async function createFolder(name, opts = {}) {
     const folders = await listFolders();
+    if (opts.parentId) {
+        const parent = folders.find(folder => folder.id === opts.parentId);
+        if (!parent) throw new Error('Родительская папка не найдена');
+        if (parent.parentId) throw new Error('Глубина вложенности ограничена двумя уровнями');
+    }
     const item = normalizeFolder({
         name: String(name || 'Папка').trim() || 'Папка',
         color: typeof opts.color === 'string' ? opts.color : undefined,
+        parentId: opts.parentId ? String(opts.parentId) : null,
         order: folders.length,
     }, folders.length);
     const store = await requireSharedStore();
@@ -459,10 +571,18 @@ export async function updateFolder(id, patch = {}) {
     const index = folders.findIndex(folder => folder.id === id);
     if (index === -1) return null;
     const current = folders[index];
+    let parentId = current.parentId;
+    if (patch.parentId !== undefined) {
+        const wanted = patch.parentId ? String(patch.parentId) : null;
+        const moveError = folderMoveError(folders, current, wanted);
+        if (moveError) throw new Error(moveError);
+        parentId = wanted;
+    }
     const next = normalizeFolder({
         ...current,
         name: patch.name !== undefined ? String(patch.name || '').trim() || 'Папка' : current.name,
         color: patch.color !== undefined ? patch.color : current.color,
+        parentId,
         id: current.id,
         order: current.order,
     }, index);
@@ -475,11 +595,17 @@ export async function renameFolder(id, name) {
 }
 
 // Deleting a folder does not delete references: only removes the folder id from affected records.
+// Subfolders of the deleted folder are lifted to the top level (approved design:
+// cascade delete of folders is an unpredictable surprise; lift is reversible by hand).
 export async function deleteFolder(id) {
     const folders = await listFolders();
     if (!folders.some(folder => folder.id === id)) return;
     const store = await requireSharedStore();
     await store.delete('ref-folders', id);
+    await store.updateWhere('ref-folders',
+        folder => folder && folder.parentId === id,
+        folder => ({ ...folder, parentId: null }),
+    );
     // One batch mutate: a per-reference update loop re-read and re-uploaded
     // the whole refs file once per record (2N+2 round-trips for N refs).
     await store.updateWhere('refs',
@@ -487,7 +613,10 @@ export async function deleteFolder(id) {
         ref => normalizePoolReference({ ...ref, folders: ref.folders.filter(folderId => folderId !== id) }),
     );
     const prefs = getFolderPrefs();
-    if (prefs.pinned.includes(id)) saveFolderPrefs({ pinned: prefs.pinned.filter(pinnedId => pinnedId !== id) });
+    const prefsPatch = {};
+    if (prefs.pinned.includes(id)) prefsPatch.pinned = prefs.pinned.filter(pinnedId => pinnedId !== id);
+    if (prefs.collapsed.includes(id)) prefsPatch.collapsed = prefs.collapsed.filter(collapsedId => collapsedId !== id);
+    if (Object.keys(prefsPatch).length) saveFolderPrefs(prefsPatch);
     await refreshPoolCache();
     recordDiagnosticEvent({ event: 'refs-crud', stage: 'refs', operation: 'folder-delete', details: { id } });
     log('Folder deleted', id);
@@ -533,6 +662,8 @@ export function normalizeFolderPrefs(data = {}) {
         pinned: uniqueStrings(Array.isArray(data.pinned) ? data.pinned : []).slice(0, FOLDER_PREFS_MAX_PINNED),
         sort: FOLDER_SORT_MODES.includes(data.sort) ? data.sort : 'manual',
         hideEmpty: data.hideEmpty === true,
+        // Свёрнутые группы дерева (device-local UI state, как pinned).
+        collapsed: uniqueStrings(Array.isArray(data.collapsed) ? data.collapsed : []),
     };
 }
 
