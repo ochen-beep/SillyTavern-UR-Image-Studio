@@ -1,0 +1,803 @@
+<!doctype html>
+<!--
+    UR Image Studio — вкладка «Референсы»: карта ТЕКУЩЕГО макета (as-is).
+    Все размеры/цвета взяты из style.css и src/ui/tab-references.js (окт 2026).
+    Назначение: общая картина для обсуждения пересборки, не пиксель-перфект
+    воспроизведение. Легенда с номерами — под каждым фреймом.
+    v4.1 (commits 8e1ffaf · b5f9e02 · ea09e05): дерево папок (группа → подпапка,
+    кап глубины 2), рекурсивные счётчики, крошки в тулбаре, меню папок без
+    кнопок в строках, экран группы на мобайле, шит «Переместить в…».
+    Актуализировано по результатам GUI-прогона тест-плана 2026-10-04.
+-->
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>URIS · Референсы — карта макета (as-is, v4.1)</title>
+<style>
+    :root {
+        /* ── токены из style.css ── */
+        --bg: #1c1c1c;
+        --surface-header: #141414;
+        --surface-tabs: #1a1a1a;
+        --surface-card: #1e1e1e;
+        --surface-btn: #252525;
+        --surface-btn-hover: #2d2d2d;
+        --border: #3a3a3a;
+        --border-soft: #2a2a2a;
+        --text-strong: #d4d4d4;
+        --text-mut: #888;
+        --text-dim: #666;
+        --accent: #5a9e3a;
+        --accent-soft: rgba(90, 158, 58, .18);
+        --accent-line: rgba(90, 158, 58, .45);
+        --err: #e05050;
+        --radius: 4px;
+        --radius-card: 6px;
+        --gap: 6px;
+        --pad: 8px;
+        --font: 12px;
+        --font-sm: 11px;
+        --font-xs: 10px;
+        --label: 9px; /* uppercase, letter-spacing .15em */
+    }
+    * { box-sizing: border-box; }
+    body {
+        margin: 0; padding: 32px 24px 80px;
+        background: #101010; color: var(--text-strong);
+        font: 14px/1.5 "Segoe UI", "Noto Sans", system-ui, sans-serif;
+    }
+    .wrap { max-width: 1460px; margin: 0 auto; }
+    h1 { font-size: 22px; margin: 0 0 4px; }
+    h1 small { color: var(--text-mut); font-weight: 400; }
+    .sub { color: var(--text-mut); margin: 0 0 28px; font-size: 13px; }
+    h2 { font-size: 16px; margin: 48px 0 6px; color: var(--text-strong); }
+    h2 .src { color: var(--text-dim); font-weight: 400; font-size: 12px; }
+    .section-sub { color: var(--text-mut); font-size: 13px; margin: 0 0 14px; }
+
+    /* ── аннотации ── */
+    .pin {
+        position: absolute; z-index: 50;
+        width: 18px; height: 18px; border-radius: 50%;
+        background: var(--accent); color: #fff;
+        font: 700 11px/18px "Segoe UI", sans-serif; text-align: center;
+        box-shadow: 0 0 0 2px rgba(0,0,0,.55);
+        cursor: default;
+    }
+    .legend {
+        display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+        gap: 10px; margin: 14px 0 0;
+    }
+    .legend-item {
+        display: flex; gap: 10px; align-items: flex-start;
+        background: #161616; border: 1px solid #242424; border-radius: 8px;
+        padding: 10px 12px; font-size: 13px;
+    }
+    .legend-item .n {
+        flex: 0 0 20px; width: 20px; height: 20px; border-radius: 50%;
+        background: var(--accent); color: #fff; font: 700 11px/20px sans-serif; text-align: center;
+    }
+    .legend-item b { color: var(--text-strong); }
+    .legend-item .dim { color: var(--text-mut); }
+    code { background: #20241f; border: 1px solid #2c3328; border-radius: 4px; padding: 0 4px; font-size: 12px; color: #a9c99a; }
+
+    /* ═══════════ ФРЕЙМЫ ═══════════ */
+    .frame {
+        position: relative;
+        background: var(--bg);
+        border: 1px solid #333; border-radius: 10px;
+        overflow: hidden;
+        box-shadow: 0 12px 40px rgba(0,0,0,.5);
+    }
+    .frame-caption {
+        color: var(--text-dim); font-size: 12px; margin: 8px 2px 0;
+    }
+
+    /* ── таб-бар окна (контекст) ── */
+    .tabs {
+        display: flex; gap: 2px; padding: 6px 8px 0;
+        background: var(--surface-tabs);
+        border-bottom: 1px solid var(--border-soft);
+    }
+    .tabs span {
+        padding: 5px 12px; font-size: var(--font-sm); color: var(--text-mut);
+        border-radius: 6px 6px 0 0; white-space: nowrap;
+    }
+    .tabs span.on { background: var(--bg); color: var(--accent); border: 1px solid var(--border-soft); border-bottom-color: var(--bg); }
+
+    /* ═══════════ ДЕСКТОП ═══════════ */
+    .refs { display: flex; height: 560px; }
+
+    /* сайдбар */
+    .sb {
+        position: relative;
+        flex: 0 0 178px; width: 178px;
+        display: flex; flex-direction: column;
+        background: var(--surface-tabs);
+        border-right: 1px solid var(--border-soft);
+    }
+    .sb-search { padding: 8px 8px 6px; }
+    .sb-search input, .tb-search input, .inp {
+        width: 100%; padding: 4px 8px; font-size: var(--font-sm);
+        background: var(--surface-btn); border: 1px solid var(--border);
+        border-radius: var(--radius); color: var(--text-strong); outline: none;
+    }
+    .sb-list { flex: 1; overflow-y: auto; padding: 4px 0; font-size: var(--font-sm); }
+    .frow { display: flex; align-items: center; }
+    .fitem {
+        display: flex; align-items: center; gap: 8px; width: 100%;
+        padding: 6px 10px; color: var(--text-mut); cursor: pointer;
+    }
+    .fitem:hover { color: var(--text-strong); background: rgba(255,255,255,.03); }
+    .fitem.on { background: var(--accent-soft); color: var(--accent); }
+    .fdot { flex: 0 0 8px; width: 8px; height: 8px; border-radius: 50%; }
+    .fdot.mute { background: var(--text-dim); opacity: .5; }
+    .fname { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .fname.group { font-weight: 600; }
+    .fcount { font-size: var(--font-xs); color: var(--text-dim); }
+    .fcount.total { color: var(--text-mut); font-weight: 700; }
+    .fitem.child { padding-left: 26px; } /* подпапка: +1 уровень отступа */
+    .fstar { flex: 0 0 10px; font-size: 9px; color: var(--accent); } /* статус-★ пина, не кнопка */
+    .fchev {
+        flex: 0 0 20px; width: 20px; height: 28px; border: none; background: transparent;
+        display: inline-flex; align-items: center; justify-content: center;
+        color: var(--text-dim); font-size: 9px; cursor: pointer;
+    }
+    .fchev:hover { color: var(--text-strong); }
+    .fhead {
+        display: flex; align-items: center; justify-content: space-between;
+        padding: 8px 8px 4px 10px;
+    }
+    .flabel {
+        font-size: var(--label); text-transform: uppercase; letter-spacing: .15em; color: var(--text-dim);
+    }
+    .ftools { display: inline-flex; align-items: center; gap: 2px; }
+    .ftool {
+        width: 22px; height: 22px; display: inline-flex; align-items: center; justify-content: center;
+        color: var(--text-dim); font-size: 10px; cursor: pointer;
+    }
+    .ftool:hover { color: var(--text-strong); }
+    .hint-bar {
+        padding: 8px 10px; font-size: var(--font-xs); color: var(--text-dim);
+        border-top: 1px solid var(--border-soft); flex-shrink: 0;
+    }
+
+    /* main */
+    .main { position: relative; flex: 1; min-width: 0; display: flex; flex-direction: column; }
+    .tb {
+        position: relative;
+        display: flex; flex-wrap: wrap; align-items: center; gap: 6px;
+        padding: 6px var(--pad); border-bottom: 1px solid var(--border-soft); flex-shrink: 0;
+    }
+    .crumbs { display: inline-flex; align-items: center; gap: 2px; min-width: 0; overflow: hidden; flex: 0 1 auto; }
+    .crumb {
+        padding: 4px 10px; font-size: var(--font-sm); color: var(--text-mut);
+        background: var(--surface-btn); border: 1px solid var(--border-soft); border-radius: 999px;
+        white-space: nowrap; cursor: pointer; max-width: 140px;
+        overflow: hidden; text-overflow: ellipsis;
+    }
+    .crumb:hover { color: var(--text-strong); }
+    .crumb.cur { background: var(--accent-soft); border-color: var(--accent-line); color: var(--accent); font-weight: 600; }
+    .csep { color: var(--text-dim); font-size: 9px; }
+    .tb-menu {
+        flex: 0 0 26px; width: 26px; height: 26px; display: inline-flex; align-items: center; justify-content: center;
+        background: var(--surface-btn); border: 1px solid var(--border); border-radius: var(--radius);
+        color: var(--text-mut); font-size: 11px; cursor: pointer; letter-spacing: 1px;
+    }
+    .tb-menu.off { opacity: .35; cursor: default; }
+    .tb-search { flex: 1 1 140px; min-width: 140px; }
+    .add-btn {
+        display: inline-flex; align-items: center; gap: 6px;
+        flex: 0 0 auto; padding: 6px 12px;
+        background: var(--accent-soft);
+        border: 1px dashed var(--accent-line); border-radius: var(--radius);
+        color: var(--accent); font-size: var(--font-sm); white-space: nowrap;
+    }
+    .grid-wrap { flex: 1; min-height: 0; overflow: hidden; display: flex; flex-direction: column; }
+    .grid {
+        flex: 1; min-height: 0; overflow-y: auto;
+        display: grid; grid-template-columns: repeat(auto-fill, minmax(72px, 1fr));
+        grid-auto-rows: min-content; align-items: start;
+        gap: var(--gap); padding: var(--pad);
+    }
+    .tile {
+        position: relative; width: 100%; aspect-ratio: 3 / 4;
+        border-radius: var(--radius-card); overflow: hidden;
+        background: var(--surface-card); border: 1px solid transparent; cursor: pointer;
+    }
+    .tile:hover { border-color: var(--accent); }
+    .tile.sel { border-color: var(--accent); }
+    .tile img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; display: block; }
+    .tname {
+        position: absolute; left: 0; right: 0; bottom: 0; z-index: 2;
+        font-size: 9px; line-height: 1.2; padding: 16px 4px 4px; text-align: center;
+        color: #fff; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+        background: linear-gradient(to top, rgba(0,0,0,.82) 30%, rgba(0,0,0,0));
+    }
+    .tdots { position: absolute; left: 4px; bottom: 18px; z-index: 2; display: flex; gap: 3px; }
+    .tdot { width: 8px; height: 8px; border-radius: 50%; box-shadow: 0 0 0 1.5px rgba(0,0,0,.45), 0 1px 2px rgba(0,0,0,.4); }
+
+    /* overlay-редактор */
+    .ov {
+        position: relative;
+        flex: 0 0 260px; width: 260px;
+        border-left: 1px solid var(--border-soft);
+        background: var(--surface-card);
+        display: flex; flex-direction: column;
+        transition: flex-basis .15s, width .15s;
+    }
+    .frame.ov-closed .ov { flex-basis: 0; width: 0; border-left: none; overflow: hidden; }
+    .ov-head {
+        display: flex; align-items: center; gap: 8px;
+        padding: 6px 10px; border-bottom: 1px solid var(--border-soft); flex-shrink: 0;
+    }
+    .ov-title { flex: 1; font-size: var(--font-sm); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .ov-close { color: var(--text-dim); font-size: 14px; padding: 2px 6px; cursor: pointer; }
+    .ov-body { flex: 1; overflow-y: auto; padding: 10px; display: flex; flex-direction: column; gap: 4px; }
+    .prev-wrap { position: relative; margin-bottom: 8px; }
+    .prev {
+        width: 100%; aspect-ratio: 3 / 4; object-fit: cover;
+        border-radius: var(--radius-card); display: block; cursor: zoom-in;
+    }
+    .prev-actions { position: absolute; right: 8px; bottom: 8px; display: flex; gap: 6px; }
+    .mini-btn {
+        background: rgba(20,20,20,.85); border: 1px solid var(--border); border-radius: var(--radius);
+        color: var(--text-strong); font-size: 10px; padding: 4px 9px; white-space: nowrap;
+    }
+    .ov-body .flabel { margin-top: 4px; }
+    .hint { font-size: var(--font-xs); color: var(--text-dim); }
+    .check { display: flex; align-items: center; gap: 6px; font-size: var(--font-sm); color: var(--text-mut); margin-top: 4px; }
+    .chips { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; }
+    .chip {
+        display: inline-flex; align-items: center; gap: 6px;
+        padding: 3px 4px 3px 9px; border-radius: 999px;
+        background: var(--surface-btn); border: 1px solid var(--border-soft);
+        color: var(--text-strong); font-size: var(--font-sm);
+    }
+    .chip .x { color: var(--text-mut); }
+    .chip-add {
+        padding: 3px 12px; border-radius: 999px; border: 1px dashed var(--border);
+        color: var(--text-mut); font-size: var(--font-sm);
+    }
+    .autosave { font-size: var(--font-xs); color: var(--text-dim); text-align: right; min-height: 1em; padding-top: 2px; }
+    .ed-foot { display: flex; align-items: center; gap: 8px; margin-top: 4px; }
+    .ghost {
+        background: transparent; border: 1px solid transparent; border-radius: var(--radius);
+        color: var(--text-mut); font-size: var(--font-sm); padding: 4px 8px; cursor: pointer;
+    }
+    .ghost.del { margin-left: auto; }
+    .ghost.del:hover { color: var(--err); }
+
+    .tb-toggle {
+        position: absolute; right: 10px; top: -34px; z-index: 60;
+        background: #222; border: 1px solid #3a3a3a; color: var(--text-strong);
+        border-radius: 6px; font-size: 12px; padding: 5px 10px; cursor: pointer;
+    }
+
+    /* ═══════════ МОБАЙЛ ═══════════ */
+    .phones { display: flex; gap: 28px; flex-wrap: wrap; align-items: flex-start; }
+    .phone-col { flex: 0 0 300px; }
+    .phone {
+        position: relative;
+        width: 300px; height: 620px;
+        background: var(--bg); border: 1px solid #333; border-radius: 18px;
+        overflow: hidden; box-shadow: 0 12px 40px rgba(0,0,0,.5);
+        display: flex; flex-direction: column;
+    }
+    .phone .ptitle {
+        padding: 10px 14px 8px; color: var(--text-dim); font-size: 12px;
+        border-bottom: 1px solid #242424; background: #141414;
+    }
+    .mtoolbar {
+        position: relative;
+        display: flex; align-items: center; gap: 6px; padding: 8px 10px;
+        border-bottom: 1px solid var(--border-soft); flex-shrink: 0;
+    }
+    .m-add-folder {
+        padding: 4px 10px; font-size: var(--font-sm); color: var(--text-mut);
+        border: 1px solid var(--border); border-radius: var(--radius); background: transparent;
+    }
+    .m-add-ref {
+        display: inline-flex; align-items: center; gap: 6px;
+        padding: 4px 10px; font-size: var(--font-sm); color: var(--accent);
+        border: 1px dashed var(--accent-line); border-radius: var(--radius); background: var(--accent-soft);
+        margin-left: auto;
+    }
+    .m-manage { width: 26px; height: 26px; display: inline-flex; align-items: center; justify-content: center; color: var(--text-dim); font-size: 11px; }
+    .m-search-wrap { padding: 8px 10px 0; flex-shrink: 0; }
+    .mlist { flex: 1; overflow-y: auto; display: flex; flex-direction: column; }
+    .mitem {
+        position: relative;
+        display: flex; align-items: center; gap: 8px; width: 100%;
+        padding: 8px 12px; border-bottom: 1px solid #202020; cursor: pointer;
+    }
+    .mitem .fname { font-size: var(--font-sm); }
+    .mitem .fname.group { font-weight: 600; }
+    .mitem .arr { color: var(--text-dim); }
+    .mitem .tri { color: var(--text-dim); font-size: 9px; }
+    .collage { display: flex; gap: 2px; }
+    .cthumb { width: 18px; height: 24px; border-radius: 3px; background-size: cover; background-position: center; }
+    .cthumb.empty { opacity: .35; background: var(--surface-btn); }
+    .mback {
+        width: 28px; height: 28px; display: inline-flex; align-items: center; justify-content: center;
+        color: var(--text-strong); font-size: 18px; background: var(--surface-btn); border-radius: var(--radius);
+    }
+    .mtitle { font-size: var(--font-sm); color: var(--text-strong); }
+    .mcount { font-size: var(--font-xs); color: var(--text-dim); }
+    .mgrid { flex: 1; overflow-y: auto; display: grid; grid-template-columns: repeat(3, 1fr); gap: var(--gap); padding: var(--pad); align-content: start; }
+    .mcard-scroll { flex: 1; overflow-y: auto; padding: 10px; display: flex; flex-direction: column; gap: 4px; }
+    .mfoot {
+        position: relative;
+        display: flex; gap: 8px; padding: 8px 10px;
+        border-top: 1px solid var(--border-soft); background: var(--surface-tabs); flex-shrink: 0;
+    }
+    .mfoot .ghost {
+        flex: 1; min-height: 44px; border: 1px solid var(--border);
+        display: inline-flex; align-items: center; justify-content: center;
+    }
+
+    /* ═══════════ вторичные поверхности ═══════════ */
+    .extras { display: flex; gap: 28px; flex-wrap: wrap; align-items: flex-start; }
+    .extras > div { flex: 0 1 420px; min-width: 300px; max-width: 420px; }
+    .extra-frame {
+        position: relative; width: 420px; height: 330px;
+        background: rgba(0,0,0,.6); border: 1px solid #333; border-radius: 10px;
+        display: flex; align-items: center; justify-content: center;
+        box-shadow: 0 12px 40px rgba(0,0,0,.5);
+    }
+    .dlg {
+        width: 380px; max-height: 300px;
+        background: var(--surface-card); border: 1px solid var(--border); border-radius: 8px;
+        padding: 12px; display: flex; flex-direction: column; gap: 8px;
+        box-shadow: 0 18px 60px rgba(0,0,0,.7);
+    }
+    .dlg h4 { margin: 0; font-size: 13px; }
+    .chiprow { display: flex; gap: 6px; flex-wrap: wrap; }
+    .fchip {
+        padding: 4px 12px; border-radius: 999px; background: var(--surface-btn);
+        color: var(--text-mut); font-size: var(--font-sm); white-space: nowrap;
+    }
+    .fchip.on { background: var(--accent); color: #fff; }
+    .dlg .grid { display: grid; grid-template-columns: repeat(6, 1fr); gap: var(--gap); flex: 1; overflow: hidden; }
+    .dlg-actions { display: flex; justify-content: flex-end; gap: 8px; }
+    .btn-primary { background: var(--accent); color: #fff; border: 1px solid var(--accent); border-radius: var(--radius); padding: 5px 14px; font-size: var(--font-sm); }
+    .btn-ghost2 { background: transparent; color: var(--text-mut); border: 1px solid var(--border); border-radius: var(--radius); padding: 5px 14px; font-size: var(--font-sm); }
+    .popmenu {
+        width: 200px; background: var(--surface-card); border: 1px solid var(--border); border-radius: 8px;
+        padding: 4px; box-shadow: 0 18px 60px rgba(0,0,0,.7);
+    }
+    .pm-head {
+        padding: 7px 10px 5px; font-size: var(--font-xs); color: var(--text-dim);
+        border-bottom: 1px solid var(--border-soft); margin-bottom: 3px;
+        white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    }
+    .pmi { display: flex; align-items: center; gap: 10px; padding: 8px 10px; border-radius: 6px; font-size: var(--font-sm); color: var(--text-strong); }
+    .pmi .ic { width: 14px; text-align: center; color: var(--text-mut); font-size: 11px; }
+    .pmi.danger { color: var(--err); }
+    /* шит «Переместить в…» / «Папки референса» */
+    .sheet {
+        width: 320px; max-height: 320px;
+        background: var(--surface-card); border: 1px solid var(--border); border-radius: 8px;
+        padding: 12px; display: flex; flex-direction: column; gap: 8px;
+        box-shadow: 0 18px 60px rgba(0,0,0,.7);
+    }
+    .sheet h4 { margin: 0; font-size: 13px; }
+    .sheet-list { flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 2px; }
+    .fs-row {
+        display: flex; align-items: center; gap: 8px; width: 100%;
+        padding: 6px 8px; border: none; border-radius: var(--radius);
+        background: transparent; color: var(--text-strong); font-size: var(--font-sm); cursor: pointer; text-align: left;
+    }
+    .fs-row:hover { background: var(--surface-btn); }
+    .fs-row.disabled { color: var(--text-dim); opacity: .55; cursor: default; }
+    .fs-row.on { background: var(--accent-soft); }
+    .fs-row .ok { margin-left: auto; color: var(--accent); font-size: 10px; }
+    .btn-block { background: var(--accent); color: #fff; border: 1px solid var(--accent); border-radius: var(--radius); padding: 7px 14px; font-size: var(--font-sm); text-align: center; }
+
+    /* ═══════════ токены ═══════════ */
+    table.tok { border-collapse: collapse; font-size: 13px; min-width: 720px; }
+    table.tok th, table.tok td { border: 1px solid #242424; padding: 6px 12px; text-align: left; }
+    table.tok th { color: var(--text-mut); font-weight: 600; background: #161616; }
+    table.tok td:first-child { color: var(--text-mut); white-space: nowrap; }
+    .tok-scroll { overflow-x: auto; }
+
+    .obs { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 10px; }
+    .obs-item { background: #161616; border: 1px solid #242424; border-left: 3px solid var(--accent); border-radius: 8px; padding: 10px 12px; font-size: 13px; color: var(--text-mut); }
+    .obs-item b { color: var(--text-strong); }
+</style>
+</head>
+<body>
+<div class="wrap">
+    <h1>UR Image Studio · вкладка «Референсы» — карта макета <small>(as-is, v4.1 · окт 2026)</small></h1>
+    <p class="sub">Схема построена по <code>src/ui/tab-references.js</code> и <code>style.css</code>: все размеры, цвета и поведения — реальные значения из кода. Актуализировано после фичи «дерево папок» (v4.1: <code>8e1ffaf</code> модель · <code>b5f9e02</code> сайдбар/тулбар · <code>ea09e05</code> генерация/менеджер) и GUI-прогона тест-плана 2026-10-04. Номера-метки ↔ легенда под каждым фреймом. Рисованные превью — заглушки.</p>
+
+    <!-- ══════════════════ ДЕСКТОП ══════════════════ -->
+    <h2>Десктоп <span class="src">— flex-row: сайдбар ~178px · main · оверлей 260px</span></h2>
+    <p class="section-sub">Контейнер ≥ 480px. Показано состояние «активна подпапка»: крошки «Все карточки › Сцены › Лицо Рады», кнопка «＋ В «Лицо Рады»», тулбарное «⋯» активно. Оверлей открывается кликом по карточке и <b>сдвигает</b> сетку. Переключатель справа — оба состояния.</p>
+
+    <div style="position:relative;">
+        <button class="tb-toggle" id="ovToggle">Оверлей: открыть ⇄</button>
+        <div class="frame" id="deskFrame">
+            <div class="tabs">
+                <span>API</span><span class="on">Референсы</span><span>Генерация</span><span>Галерея</span><span>Шаблоны</span><span>Настройки</span>
+            </div>
+            <div class="refs" id="deskRefs">
+                <!-- сайдбар -->
+                <div class="sb">
+                    <span class="pin" style="left:6px; top:6px;">1</span>
+                    <div class="sb-search"><input placeholder="Поиск папок…"></div>
+                    <div class="sb-list" id="sbList"></div>
+                    <div class="hint-bar">ПКМ / долгий тап — действия папки</div>
+                </div>
+                <!-- main -->
+                <div class="main">
+                    <div class="tb">
+                        <span class="pin" style="left:30%; margin-left:-9px; bottom:-9px;">2</span>
+                        <div class="crumbs">
+                            <span class="crumb">Все карточки</span><span class="csep">›</span>
+                            <span class="crumb">Сцены</span><span class="csep">›</span>
+                            <span class="crumb cur">Лицо Рады</span>
+                        </div>
+                        <span class="tb-menu">⋯</span>
+                        <div class="tb-search"><input placeholder="Поиск..."></div>
+                        <span class="add-btn">＋ <span id="addLabel">В «Лицо Рады»</span></span>
+                    </div>
+                    <div class="grid-wrap">
+                        <div class="grid" id="deskGrid"></div>
+                    </div>
+                    <span class="pin" style="right:14px; top:44%;">3</span>
+                </div>
+                <!-- оверлей -->
+                <div class="ov">
+                    <span class="pin" style="left:6px; top:44px;">4</span>
+                    <div class="ov-head">
+                        <span class="ov-title">Рада</span>
+                        <span class="ov-close">✕</span>
+                    </div>
+                    <div class="ov-body">
+                        <div class="prev-wrap">
+                            <img class="prev" alt="" id="prevImg">
+                            <div class="prev-actions">
+                                <span class="mini-btn">▣ Обрезать</span>
+                                <span class="mini-btn">🖼 Заменить картинку</span>
+                            </div>
+                        </div>
+                        <span class="pin" style="right:4px; top:120px;">5</span>
+                        <div class="flabel">Имя</div>
+                        <input class="inp" value="Рада">
+                        <div class="flabel">Aliases</div>
+                        <input class="inp" value="Рада, Радмила" placeholder="через запятую">
+                        <div class="hint">Сопоставление с промптом идёт по алиасам — перечислите имена и прозвища через запятую. Имя — только подпись. Поддерживаются {{char}}/{{user}}.</div>
+                        <div class="flabel">Описание</div>
+                        <textarea class="inp" rows="3" placeholder="Текст для Stage1" style="resize:vertical; min-height:56px;"></textarea>
+                        <label class="check"><input type="checkbox"> Только описание</label>
+                        <div class="hint">Без картинки в генерацию попадёт только это описание.</div>
+                        <div class="flabel">Папки</div>
+                        <div class="chips">
+                            <span class="chip"><span class="fdot" style="background:#4a90d9"></span>Лицо Рады <span class="x">✕</span></span>
+                            <span class="chip"><span class="fdot" style="background:#c9a030"></span>Юность <span class="x">✕</span></span>
+                            <span class="chip-add">＋ Папка</span>
+                        </div>
+                        <div class="autosave">Автосохранение</div>
+                        <div class="ed-foot">
+                            <span class="ghost">⧉ Клонировать</span>
+                            <span class="ghost del">🗑 Удалить карточку</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="legend">
+        <div class="legend-item"><span class="n">1</span><div><b>Сайдбар-дерево — фикс ~178px</b>. <span class="dim">Поиск папок; «Все карточки», «Без папки»; секция «Избранное» (пины; закреплённая <b>группа</b> остаётся и в дереве); «ПАПКИ» с тулзами: <b>⋯ вид списка</b> (своя / по имени / по количеству / скрывать пустые / управление папками) и <b>＋ создать папку верхнего уровня</b>. Дерево: группа — жирное имя, <b>шеврон свёртки</b> (prefs.collapsed), рекурсивный <b>жирный счётчик</b> (свои + все подпапки, union); подпапка — отступ 1 уровень (кап глубины 2). В строках <b>нет кнопок</b>: маркер, имя, статус-★ пина, счётчик. Внизу — подсказка «ПКМ / долгий тап — действия папки».</span></div></div>
+        <div class="legend-item"><span class="n">2</span><div><b>Тулбар</b>: <b>крошки пути</b> «Все карточки › Группа › Папка» (текущая подсвечена, клик — навигация: группа = рекурсивный фильтр), <b>«⋯» меню активной папки</b> (гашено на «Все/Без папки»), поиск референсов (в группе ищет всё поддерево), «＋ В «имя папки»» — назначение новой карточки видно заранее.</div></div>
+        <div class="legend-item"><span class="n">3</span><div><b>Сетка карточек 3:4</b> — <code>repeat(auto-fill, minmax(72px,1fr))</code>, gap 6px, pad 8px, скролл. <span class="dim">Имя — 9px по градиенту; <b>точки папок</b> (по одной на каждую папку карточки, ≤ отображаемых, слева снизу); hover/выбор — акцентная рамка. Клик → оверлей.</span></div></div>
+        <div class="legend-item"><span class="n">4</span><div><b>Оверлей-редактор — 260px справа</b>. <span class="dim">Head: имя + ✕. Тело скроллится, поля автосохраняются (мигает «Автосохранение»). Закрытие → сетка возвращает ширину.</span></div></div>
+        <div class="legend-item"><span class="n">5</span><div><b>Превью 3:4</b> → клик открывает лайтбокс на весь экран. <span class="dim">Поверх нижнего угла: «Обрезать» / «Заменить картинку» (кроп-диалог).</span></div></div>
+        <div class="legend-item"><span class="n">6</span><div><b>Брейкпоинт — по контейнеру, не по окну</b>: <code>root.clientWidth &lt; 480px</code> (ResizeObserver) → мобильный стек. <span class="dim">Сделано из-за боковых панелей ST: 480px контейнера ≈ 768px медиа. UI-зум влияет: плотный масштаб раньше уводит в компакт.</span></div></div>
+    </div>
+
+    <!-- ══════════════════ МОБАЙЛ ══════════════════ -->
+    <h2>Мобильный стек <span class="src">— контейнер &lt; 480px: 4 экрана вместо одного</span></h2>
+    <p class="section-sub">Вертикальная навигация «папки → группа → сетка → карточка». Состояние в JS-модуле (<code>_mobileScreen</code>), переживает фоновые ре-рендеры.</p>
+
+    <div class="phones">
+        <!-- экран 1: папки -->
+        <div class="phone-col">
+            <div class="phone">
+                <div class="ptitle">Экран 1 · Список папок (дерево)</div>
+                <div class="mtoolbar">
+                    <span class="pin" style="right:6px; top:-6px;">M1</span>
+                    <span class="m-add-folder">＋ Создать папку</span>
+                    <span class="m-add-ref">＋ Референс</span>
+                </div>
+                <div class="m-search-wrap"><input class="inp" placeholder="Поиск папок..."></div>
+                <div class="mlist" id="mList"></div>
+            </div>
+            <div class="frame-caption">Группы — жирным, с ▸ и рекурсивным счётчиком; коллаж — поддерево. Тап по группе → экран 2.</div>
+        </div>
+        <!-- экран 2: группа -->
+        <div class="phone-col">
+            <div class="phone">
+                <div class="ptitle">Экран 2 · Экран группы</div>
+                <div class="mtoolbar">
+                    <span class="pin" style="left:6px; bottom:-6px;">M2</span>
+                    <span class="mback">‹</span>
+                    <span class="fdot" style="background:#d97f3a"></span>
+                    <span class="mtitle">Сцены</span>
+                    <span class="mcount" style="margin-left:auto">5</span>
+                </div>
+                <div class="mlist" style="padding-top:4px;">
+                    <div class="mitem">
+                        <span style="color:var(--text-dim)">◈</span>
+                        <span class="fname">Все из группы</span><span class="fcount">5</span>
+                        <span class="collage"><span class="cthumb" style="background-image:url('')"></span><span class="cthumb" style="background-image:url('')"></span><span class="cthumb empty"></span></span>
+                        <span class="arr">›</span>
+                    </div>
+                    <div class="mitem">
+                        <span class="fdot" style="background:#4a90d9"></span>
+                        <span class="fname">Лицо Рады</span><span class="fcount">3</span>
+                        <span class="collage"><span class="cthumb" style="background-image:url('')"></span><span class="cthumb empty"></span><span class="cthumb empty"></span></span>
+                        <span class="arr">›</span>
+                    </div>
+                    <div class="mitem">
+                        <span class="fdot" style="background:#c9a030"></span>
+                        <span class="fname">Юность</span><span class="fcount">2</span>
+                        <span class="collage"><span class="cthumb empty"></span><span class="cthumb empty"></span></span>
+                        <span class="arr">›</span>
+                    </div>
+                </div>
+            </div>
+            <div class="frame-caption">«Все из группы» → сетка со всем поддеревом (union). Долгий тап по строке → меню папки: пин, перемещение, удаление (без «Правки…»).</div>
+        </div>
+        <!-- экран 3: сетка -->
+        <div class="phone-col">
+            <div class="phone">
+                <div class="ptitle">Экран 3 · Сетка папки</div>
+                <div class="mtoolbar">
+                    <span class="pin" style="left:6px; bottom:-6px;">M3</span>
+                    <span class="mback">‹</span>
+                    <span class="fdot" style="background:#4a90d9"></span>
+                    <span class="mtitle">Лицо Рады</span>
+                    <span style="font-size:9px; color:var(--text-dim)">▾</span>
+                    <span class="mcount">3</span>
+                    <span class="m-add-ref">＋ Референс</span>
+                </div>
+                <div class="m-search-wrap"><input class="inp" placeholder="Поиск..."></div>
+                <div class="mgrid" id="mGrid"></div>
+            </div>
+            <div class="frame-caption">Тап по названию папки → шит всех папок (плоско, с поиском). Поиск фильтрует без перерисовки тулбара.</div>
+        </div>
+        <!-- экран 4: карточка -->
+        <div class="phone-col">
+            <div class="phone">
+                <div class="ptitle">Экран 4 · Карточка (редактор)</div>
+                <div class="mtoolbar">
+                    <span class="mback">‹</span>
+                    <span class="mtitle">Рада</span>
+                </div>
+                <div class="mcard-scroll" id="mCard"></div>
+                <div class="mfoot">
+                    <span class="ghost">⧉ Клонировать</span>
+                    <span class="ghost del">🗑 Удалить</span>
+                </div>
+            </div>
+            <div class="frame-caption">Тело карточки — тот же <code>refEditorBodyHtml()</code>, что в десктопном оверлее. Футер прибит к низу, кнопки ≥44px.</div>
+        </div>
+    </div>
+
+    <div class="legend">
+        <div class="legend-item"><span class="n">M1</span><div><b>Дерево папок</b>: тулбар (создать папку / ＋ референс) + поиск + строки: группы — <b>жирное имя, ▸, рекурсивный счётчик, коллаж поддерева 2×2</b>. <span class="dim">Маркер цвета; свёртка групп сохраняется в prefs.</span></div></div>
+        <div class="legend-item"><span class="n">M2</span><div><b>Экран группы</b> (новый): назад, «Все из группы · N» (union поддерева) + подпапки. <span class="dim">Долгий тап по папке — меню: пин есть, «Правка…» нет, перемещение и удаление есть.</span></div></div>
+        <div class="legend-item"><span class="n">M3</span><div><b>Сетка</b>: назад, переключатель папки (точка+имя+▾ → шит), счётчик, ＋. <span class="dim">Тайлы те же 3:4, точки папок. Долгий тап по карточке — контекстное меню.</span></div></div>
+    </div>
+
+    <!-- ══════════════════ ВТОРИЧНЫЕ ПОВЕРХНОСТИ ══════════════════ -->
+    <h2>Вторичные поверхности <span class="src">— отдельные оверлеи поверх вкладки</span></h2>
+    <div class="extras">
+        <div>
+            <div class="extra-frame">
+                <span class="pin" style="left:10px; top:10px;">S1</span>
+                <div class="dlg">
+                    <h4>Выберите референсы</h4>
+                    <div class="chiprow">
+                        <span class="fchip on">Все</span><span class="fchip">Без папки</span><span class="fchip">Лицо Рады</span><span class="fchip">Юность</span><span class="fchip">Все папки ▾</span>
+                    </div>
+                    <div class="grid" id="dlgGrid"></div>
+                    <div class="dlg-actions">
+                        <span class="btn-ghost2">Отмена</span>
+                        <span class="btn-primary">Готово</span>
+                    </div>
+                </div>
+            </div>
+            <div class="frame-caption">S1 · Пикер пула (мульти/сингл): чипы «Все / Без папки / избранное (≤5) / Все папки ▾» → шит с поиском. Используется из Генерации.</div>
+        </div>
+        <div>
+            <div class="extra-frame">
+                <span class="pin" style="left:10px; top:10px;">S2</span>
+                <div class="popmenu">
+                    <div class="pm-head">Лицо Рады · 3 · в «Сцены»</div>
+                    <div class="pmi"><span class="ic">★</span>В избранное</div>
+                    <div class="pmi"><span class="ic">✎</span>Правка…</div>
+                    <div class="pmi"><span class="ic">▣</span>Новая подпапка</div>
+                    <div class="pmi"><span class="ic">⇄</span>Переместить в…</div>
+                    <div class="pmi danger"><span class="ic">🗑</span>Удалить…</div>
+                </div>
+            </div>
+            <div class="frame-caption">S2 · Меню папки (ПКМ / долгий тап / тулбарный «⋯»): заголовок «Имя · счётчик · в „Группа“»; «Новая подпапка» — только у групп (кап глубины 2). У карточки — своё меню: Правка · Клонировать · Удалить. Поповер у курсора с клэмпом; Esc не закрывает окно вкладки.</div>
+        </div>
+        <div>
+            <div class="extra-frame">
+                <span class="pin" style="left:10px; top:10px;">S3</span>
+                <div class="sheet">
+                    <h4>Переместить «Юность»…</h4>
+                    <input class="inp" placeholder="Поиск папок...">
+                    <div class="sheet-list">
+                        <button class="fs-row disabled"><span class="fdot mute"></span>Без группы (верхний уровень)</button>
+                        <button class="fs-row"><span class="fdot" style="background:#4a90d9"></span>Лицо Рады</button>
+                        <button class="fs-row disabled"><span class="fdot" style="background:#d97f3a"></span>Сцены</button>
+                        <button class="fs-row"><span class="fdot" style="background:#3ab09e"></span>Город</button>
+                        <button class="fs-row on"><span class="fdot" style="background:#c94040"></span>Антагонисты<span class="ok">✓</span></button>
+                    </div>
+                    <span class="btn-block">Отмена</span>
+                </div>
+            </div>
+            <div class="frame-caption">S3 · Шит «Переместить в…»: недопустимые цели (собственная группа и все группы при переносе группы с детьми, «верхний уровень» для неё же) — disabled, клик игнорируется. Тот же шит — «Папки референса» (чипы в редакторе) и «Папки в whitelist» (Генерация).</div>
+        </div>
+    </div>
+
+    <!-- ══════════════════ ТОКЕНЫ ══════════════════ -->
+    <h2>Токены и константы <span class="src">— то, с чем придётся договариваться при пересборке</span></h2>
+    <div class="tok-scroll">
+    <table class="tok">
+        <tr><th>Параметр</th><th>Значение</th><th>Источник</th></tr>
+        <tr><td>Сайдбар папок</td><td>~178px, фикс</td><td><code>.uris-refs-sidebar</code></td></tr>
+        <tr><td>Оверлей-редактор</td><td>260px, сдвигает контент</td><td><code>.uris-refs-overlay-host</code></td></tr>
+        <tr><td>Тайл карточки</td><td>aspect-ratio 3:4, min 72px</td><td><code>.uris-pool-grid / .uris-pool-tile</code></td></tr>
+        <tr><td>Сетка</td><td>auto-fill, gap 6px, pad 8px</td><td><code>--uris-gap / --uris-pad</code></td></tr>
+        <tr><td>Радиусы</td><td>4px (UI) / 6px (карточки) / 999px (чипы, крошки)</td><td><code>--uris-radius*</code></td></tr>
+        <tr><td>Шрифты</td><td>12 / 11 / 10 px, метки 9px caps ×0.15em; всё × <code>--uris-font-scale</code></td><td><code>--uris-font*</code></td></tr>
+        <tr><td>Фоны</td><td>окно #1c1c1c · сайдбар #1a1a1a · карточка #1e1e1e · кнопки #252525</td><td><code>--uris-surface*</code></td></tr>
+        <tr><td>Акцент</td><td>= <code>--SmartThemeQuoteColor</code> темы ST (дефолт #5a9e3a)</td><td><code>--uris-accent</code></td></tr>
+        <tr><td>Мобильный брейкпоинт</td><td>контейнер &lt; 480px (ResizeObserver, не @media)</td><td><code>REFS_MOBILE_BREAK</code></td></tr>
+        <tr><td>Палитра папок</td><td>10 цветов (#4a90d9, #d97f3a, #3ab09e, #c94040, #c9a030, …)</td><td><code>FOLDER_COLOR_PALETTE</code></td></tr>
+        <tr><td>Кап глубины дерева</td><td>2 (группа → подпапка; подпапке «Новая подпапка» не показывается)</td><td><code>FOLDER_DEPTH_CAP</code></td></tr>
+        <tr><td>Отступ подпапки</td><td>26px (24px padding + маркер), строка группы — шеврон справа</td><td><code>.uris-folder-item / .uris-folder-chev</code></td></tr>
+        <tr><td>Счётчики</td><td>у группы — рекурсивный union, жирный (<code>uris-folder-count-total</code>); у листа — свои</td><td><code>filterRefsByFolderTree()</code></td></tr>
+        <tr><td>Скоуп группы в генерации</td><td>группа в whitelist → <code>expandFolderIdsToSubtrees()</code>: референсы группы + всех подпапок</td><td><code>pipeline-config.js</code></td></tr>
+        <tr><td>Prefs папок</td><td><code>collapsed[]</code>, <code>pinned[]</code> (≤5), сортировка; переживают перезапуск</td><td><code>getFolderPrefs()</code></td></tr>
+        <tr><td>Сохранение в редакторе</td><td>автосейв по change, без кнопки «Сохранить»</td><td><code>_bindEditorBody()</code></td></tr>
+    </table>
+    </div>
+
+    <!-- ══════════════════ НАБЛЮДЕНИЯ ══════════════════ -->
+    <h2>Что видно уже сейчас <span class="src">— нейтральные зацепки для обсуждения, не решения</span></h2>
+    <div class="obs">
+        <div class="obs-item"><b>Оверлей сдвигает сетку.</b> 260px отнимается у области карточек — при узком окне редактор «съедает» ряд превью; альтернатива — наслоение/выдвижение поверх.</div>
+        <div class="obs-item"><b>Два поиска в разных местах.</b> «Поиск папок» в сайдбаре, «Поиск» карточек в тулбаре — на мобиле их тоже два, на разных экранах.</div>
+        <div class="obs-item"><b>~178px сайдбар тесен для дерева.</b> Отступ подпапки + длинные имена → обрезка с … (полное имя в тултипе); при 3-м уровне пришлось бы резать агрессивнее — кап глубины 2 это страхует.</div>
+        <div class="obs-item"><b>Действия папки — только через меню.</b> Кнопок в строках больше нет (чище), но пин/правка требуют ПКМ или долгого тапа — на десктопе без мыши (тач-экран) открывается лист, обнаруживаемость зависит от подсказки внизу сайдбара.</div>
+        <div class="obs-item"><b>Чип группы в whitelist показывает только прямые карточки.</b> Скоуп при генерации раскрывает поддерево (<code>expandFolderIdsToSubtrees</code>), но в чипе «Генерации» подпапочные карточки не видны — пользователь не может заранее проверить скоуп глазами.</div>
+        <div class="obs-item"><b>Крошки + свёртка не связаны.</b> Активная подпапка свёрнутой группы остаётся активной; крошки позволяют вернуться, но дерево при этом не разворачивается само.</div>
+        <div class="obs-item"><b>Карточка-тайл почти без атрибутов.</b> Только картинка, имя и точки папок: описание/алиасы видны лишь в редакторе; имя 9px при мелкой сетке.</div>
+        <div class="obs-item"><b>Мобильный стек — 4 экрана с общими кусками.</b> Экран группы добавил ещё один рендер; тайлы и тело редактора общие, но список/группа/сетка — три разные разметки одних данных.</div>
+        <div class="obs-item"><b>Пикер — отдельный мир.</b> Шиты «Переместить/Папки референса» (плоский список с поиском) не показывают дерево — вложенность видна только подписью «в группе …» после поиска.</div>
+    </div>
+
+    <p class="sub" style="margin-top:36px;">Источники: <code>src/ui/tab-references.js</code> · <code>style.css</code> · <code>src/ui/folder-picker.js</code> · <code>src/ui/card-action-menu.js</code> · <code>src/refs-library.js</code> (<code>filterRefsByFolderTree</code>, <code>expandFolderIdsToSubtrees</code>) · <code>src/pipeline-config.js</code>. Живой рендер реальной вкладки: <code>tests/manual/refs-real-render.html</code>.</p>
+</div>
+
+<script>
+    // ── заглушки превью ──
+    const HUES = ['#3a4a5a', '#5a3a4a', '#3a5a46', '#5a523a', '#433a5a', '#2f4858', '#6b4444', '#3d5a3a', '#54432e', '#38556b'];
+    const ph = (i, w = 120, h = 160) => 'data:image/svg+xml,' + encodeURIComponent(
+        `<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="${h}">` +
+        `<defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1">` +
+        `<stop offset="0" stop-color="${HUES[i % HUES.length]}"/>` +
+        `<stop offset="1" stop-color="#141414"/></linearGradient></defs>` +
+        `<rect width="${w}" height="${h}" fill="url(#g)"/>` +
+        `<text x="${w / 2}" y="${h / 2 + 6}" text-anchor="middle" fill="#fff8" font-family="sans-serif" font-size="26">${i + 1}</text></svg>`);
+
+    const NAMES = ['Рада', 'Миу', 'Каэла', 'Юни', 'Саша', 'Веста', 'Ирис', 'Ноко', 'Тэй', 'Лисья нора', 'Оги', 'Мару', 'Сэф', 'Ая', 'Кира', 'Нэя', 'Эмма', 'Юки'];
+    const P = ['#4a90d9', '#d97f3a', '#3ab09e', '#c94040', '#c9a030', '#7a5cc9', '#c94090', '#40a060'];
+    const dot = c => `<span class="tdot" style="background:${c}"></span>`;
+
+    // ── десктопная сетка ──
+    const deskGrid = document.getElementById('deskGrid');
+    deskGrid.innerHTML = NAMES.slice(0, 17).map((n, i) =>
+        `<div class="tile${i === 0 ? ' sel' : ''}">
+            <img src="${ph(i)}" alt="">
+            ${i % 3 === 0 ? `<div class="tdots">${dot(P[0])}${dot(P[4])}</div>` : i % 3 === 1 ? `<div class="tdots">${dot(P[1])}</div>` : ''}
+            <div class="tname">${n}</div>
+        </div>`).join('');
+    document.getElementById('prevImg').src = ph(0);
+
+    // ── сайдбар: дерево (группа → подпапка), без кнопок в строках ──
+    const frow = (name, count, color, opts = {}) =>
+        `<div class="frow">
+            <div class="fitem${opts.on ? ' on' : ''}${opts.child ? ' child' : ''}">
+                <span class="fdot${color ? '' : ' mute'}" style="${color ? `background:${color}` : ''}"></span>
+                <span class="fname${opts.group ? ' group' : ''}">${name}</span>
+                ${opts.pinned ? '<span class="fstar">★</span>' : ''}
+                <span class="fcount${opts.group ? ' total' : ''}">${count}</span>
+            </div>
+            ${opts.group ? '<button class="fchev">▾</button>' : ''}
+        </div>`;
+    document.getElementById('sbList').innerHTML =
+        frow('Все карточки', 104, null, { on: false }) +
+        frow('Без папки', 58, null) +
+        `<div class="sect">Избранное</div>` +
+        frow('Город', 4, '#3ab09e', { group: true, pinned: true }) +
+        `<div class="fhead"><span class="flabel">Папки</span><span class="ftools">
+            <span class="ftool" title="Вид списка">⋯</span><span class="ftool add" title="Создать папку (верхний уровень)">＋</span>
+        </span></div>` +
+        frow('Сцены', 5, '#d97f3a', { group: true }) +
+        frow('Лицо Рады', 3, '#4a90d9', { child: true, on: true }) +
+        frow('Юность', 2, '#c9a030', { child: true }) +
+        frow('Город', 4, '#3ab09e', { group: true, pinned: true }) +
+        frow('Антагонисты', 3, '#c94040', { group: true }) +
+        frow('Фоны', 6, '#7a5cc9', { group: true }) +
+        frow('Мимика', 9, '#c94090', { group: true }) +
+        frow('Одежда', 8, '#40a060', { group: true }) +
+        frow('Артефакты', 2, '#a04040', { group: true }) +
+        frow('Прочее', 1, '#4a70b9', { group: true });
+
+    // ── тумблер оверлея ──
+    const deskFrame = document.getElementById('deskFrame');
+    document.getElementById('ovToggle').addEventListener('click', () => {
+        const closed = deskFrame.classList.toggle('ov-closed');
+        document.getElementById('ovToggle').textContent = closed ? 'Оверлей: открыть ⇄' : 'Оверлей: закрыть ⇄';
+    });
+
+    // ── мобильный список папок: дерево с ▸ и коллажами ──
+    const collage = (seed) => {
+        let s = '';
+        for (let k = 0; k < 4; k++) s += `<span class="cthumb${k > 2 ? ' empty' : ''}" style="${k < 3 ? `background-image:url('${ph(seed + k, 60, 80)}')` : ''}"></span>`;
+        return `<span class="collage">${s}</span>`;
+    };
+    document.getElementById('mList').innerHTML =
+        [['Все карточки', 24, null, '◈', false], ['Без папки', 3, null, null, false], ['Сцены', 5, '#d97f3a', null, true], ['Город', 4, '#3ab09e', null, true], ['Антагонисты', 3, '#c94040', null, true], ['Фоны', 6, '#7a5cc9', null, true]]
+            .map(([n, c, col, ic, group], i) =>
+                `<div class="mitem">
+                    ${ic ? `<span style="color:var(--text-dim)">${ic}</span>` : `<span class="fdot${col ? '' : ' mute'}" style="${col ? `background:${col}` : ''}"></span>`}
+                    <span class="fname${group ? ' group' : ''}">${n}</span>
+                    ${group ? '<span class="tri">▸</span>' : ''}
+                    <span class="fcount">${c}</span>
+                    ${collage(i * 2)}<span class="arr">›</span>
+                </div>`).join('');
+
+    // ── мобильная сетка ──
+    document.getElementById('mGrid').innerHTML = NAMES.slice(0, 11).map((n, i) =>
+        `<div class="tile">
+            <img src="${ph(i + 4)}" alt="">
+            ${i % 2 ? `<div class="tdots">${dot(P[0])}${dot(P[2])}${dot(P[4])}</div>` : ''}
+            <div class="tname">${n}</div>
+        </div>`).join('');
+
+    // ── мобильная карточка (сокращённое тело редактора) ──
+    document.getElementById('mCard').innerHTML = `
+        <div class="prev-wrap">
+            <img class="prev" src="${ph(0)}" alt="">
+            <div class="prev-actions"><span class="mini-btn">▣ Обрезать</span><span class="mini-btn">🖼 Заменить</span></div>
+        </div>
+        <div class="flabel">Имя</div><input class="inp" value="Рада">
+        <div class="flabel">Aliases</div><input class="inp" value="Рада, Радмила">
+        <div class="flabel">Описание</div><textarea class="inp" rows="3" style="resize:vertical; min-height:56px;"></textarea>
+        <label class="check"><input type="checkbox"> Только описание</label>
+        <div class="flabel">Папки</div>
+        <div class="chips">
+            <span class="chip"><span class="fdot" style="background:#4a90d9"></span>Лицо Рады <span class="x">✕</span></span>
+            <span class="chip"><span class="fdot" style="background:#c9a030"></span>Юность <span class="x">✕</span></span>
+            <span class="chip-add">＋ Папка</span>
+        </div>
+        <div class="autosave">Автосохранение</div>`;
+
+    // ── пикер ──
+    document.getElementById('dlgGrid').innerHTML = NAMES.slice(0, 11).map((n, i) =>
+        `<div class="tile${i < 4 ? ' sel' : ''}" style="outline:${i < 4 ? '2px solid var(--accent); outline-offset:-2px' : ''}">
+            <img src="${ph(i + 2)}" alt=""><div class="tname">${n}</div>
+        </div>`).join('');
+</script>
+</body>
+</html>
