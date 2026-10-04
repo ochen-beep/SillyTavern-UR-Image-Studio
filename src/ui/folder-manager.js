@@ -114,6 +114,12 @@ export function showFolderManager({ onChanged } = {}) {
 
     function renderRows() {
         const rows = visibleFolders();
+        const byId = new Map(folders.map(folder => [folder.id, folder]));
+        const parentLabel = (folder) => {
+            if (!folder.parentId) return '';
+            const parent = byId.get(folder.parentId);
+            return parent ? `· ${parent.name}` : '';
+        };
         if (!rows.length) {
             listEl.innerHTML = `<div class="uris-fs-empty">${query ? 'Ничего не найдено' : 'Папок пока нет'}</div>`;
         } else {
@@ -126,7 +132,8 @@ export function showFolderManager({ onChanged } = {}) {
                         aria-label="Сменить цвет папки ${escapeHtml(folder.name)}"></button>
                     <input type="text" class="text_pole uris-fm-name" data-id="${escapeHtml(folder.id)}"
                         value="${escapeHtml(folder.name)}" aria-label="Имя папки">
-                    <span class="uris-fm-count" title="Референсов в папке">${countOf(folder.id)}</span>
+                    <span class="uris-fm-parent" title="Группа">${escapeHtml(parentLabel(folder))}</span>
+                    <span class="uris-fm-count" title="Референсов в папке (без подпапок)">${countOf(folder.id)}</span>
                     <select class="text_pole uris-fm-merge" data-id="${escapeHtml(folder.id)}"
                         aria-label="Перенести содержимое в другую папку">
                         <option value="" disabled selected>→ в…</option>
@@ -176,8 +183,10 @@ export function showFolderManager({ onChanged } = {}) {
             btn.addEventListener('click', async () => {
                 const folder = folders.find(item => item.id === btn.dataset.id);
                 if (!folder) return;
+                const hasKids = folders.some(item => item.parentId === folder.id);
                 if (!await showConfirmModal(
                     `Удалить папку «${folder.name}»?` +
+                    (hasKids ? '\n\nПодпапки поднимутся на верхний уровень.' : '') +
                     (countOf(folder.id) ? '\n\nРеференсы останутся, но выпадут из этой папки.' : '')
                 )) return;
                 selected.delete(folder.id);
@@ -205,8 +214,11 @@ export function showFolderManager({ onChanged } = {}) {
         bulkDel?.addEventListener('click', async () => {
             if (!selected.size) return;
             const names = [...selected].map(id => folders.find(item => item.id === id)?.name || '?');
+            const anyKids = folders.some(item => selected.has(item.id) && folders.some(other => other.parentId === item.id));
             if (!await showConfirmModal(
-                `Удалить папки (${selected.size}): ${names.join(', ')}?\n\nРеференсы останутся, но выпадут из этих папок.`
+                `Удалить папки (${selected.size}): ${names.join(', ')}?` +
+                (anyKids ? '\n\nПодпапки удалённых групп поднимутся на верхний уровень.' : '') +
+                '\n\nРеференсы останутся, но выпадут из этих папок.'
             )) return;
             const ids = [...selected];
             selected.clear();

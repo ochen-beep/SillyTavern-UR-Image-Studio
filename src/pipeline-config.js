@@ -7,7 +7,7 @@ import { state } from './core.js';
 import { getConnection } from './connections.js';
 import { resolveDispatchPlan, assertImageModelEligible } from './dispatch-plan.js';
 import { loadChatConfig } from './chat-binding.js';
-import { getChatRefs, getRefSync, listRefs, filterRefsByFolders } from './refs-library.js';
+import { getChatRefs, getRefSync, listRefs, listFolders, filterRefsByFolders, expandFolderIdsToSubtrees } from './refs-library.js';
 import { normalizeSceneEntity } from './scene-context.js';
 import { resolveSTMacros } from './template-runtime.js';
 
@@ -115,9 +115,15 @@ export async function buildCandidates(chatId) {
     const directRefs = chatRefs.referenceIds
         .map(refId => getRefSync(refId))
         .filter(Boolean);
-    const folderRefs = chatRefs.folderIds?.length
-        ? filterRefsByFolders(await listRefs(), chatRefs.folderIds)
-        : [];
+    let folderRefs = [];
+    if (chatRefs.folderIds?.length) {
+        // Группа в белом списке влечёт референсы всех подпапок: id раскрываются
+        // в поддеревья (docs/2026-10-04-refs-folders-nesting-design.md §11).
+        // Старые сохранённые folderIds не ломаются: листья разворачиваются в себя.
+        const folders = await listFolders();
+        const ids = expandFolderIdsToSubtrees(folders, chatRefs.folderIds);
+        folderRefs = filterRefsByFolders(await listRefs(), ids);
+    }
 
     const seen = new Set();
     const candidates = [];
