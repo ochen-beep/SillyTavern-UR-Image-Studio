@@ -153,8 +153,11 @@ export function openFolderSheet({ folders = [], title = 'Папки', mode = 'mu
 
     function renderRows() {
         const { chosen, rest, canCreate } = folderSheetRows(items, query, [...selected]);
+        // disabled-строки (например, недопустимые цели «Переместить в…»):
+        // видны приглушённо, клик игнорируется — структура читается.
         const row = (folder, isOn) => `
-            <button type="button" class="uris-fs-row ${isOn ? 'uris-fs-row-on' : ''}" data-folder-id="${escapeHtml(folder.id)}">
+            <button type="button" class="uris-fs-row ${isOn ? 'uris-fs-row-on' : ''}${folder.disabled ? ' uris-fs-row-disabled' : ''}"
+                    data-folder-id="${escapeHtml(folder.id)}" ${folder.disabled ? 'disabled' : ''}>
                 <span class="uris-folder-dot" style="background:${escapeHtml(folder.color || '#808080')}"></span>
                 <span class="uris-fs-name">${escapeHtml(folder.name)}</span>
                 ${isOn ? '<span class="uris-fs-check">✓</span>' : ''}
@@ -178,7 +181,7 @@ export function openFolderSheet({ folders = [], title = 'Папки', mode = 'mu
             if (!rowEl.dataset.folderId) return; // строка создания
             rowEl.addEventListener('click', async () => {
                 const folder = items.find(item => item.id === rowEl.dataset.folderId);
-                if (!folder) return;
+                if (!folder || folder.disabled) return;
                 if (mode === 'pick-one') {
                     onPick?.(folder);
                     finish(folder, 'pick');

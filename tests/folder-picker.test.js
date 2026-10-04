@@ -281,8 +281,22 @@ test('sidebar: поиск фильтрует папки не трогая инп
         .filter(item => item.dataset.folder !== 'all' && item.dataset.folder !== 'none')
         .map(item => item.dataset.folder);
 
-    // Пин f3 → секция «Избранное» сверху.
-    await [...el.querySelectorAll('.uris-folder-pin')].find(btn => btn.dataset.folderId === f3.id).click();
+    // Кнопок действий в строках больше нет — всё через контекстное меню (ПКМ).
+    assert.equal(el.querySelectorAll('.uris-folder-pin').length, 0, 'пин-кнопок нет');
+    assert.equal(el.querySelectorAll('.uris-folder-edit').length, 0, 'кнопок правки нет');
+    const openFolderMenu = async (folderId) => {
+        const row = [...el.querySelectorAll('.uris-folder-item')].find(b => b.dataset.folder === folderId);
+        row.dispatchEvent({ type: 'contextmenu', clientX: 8, clientY: 8, preventDefault() {} });
+        await new Promise(resolve => setTimeout(resolve, 0));
+    };
+    const menuOverlay = () => document.body.children.find(n => n.querySelector?.('.uris-action-menu'));
+    const menuItem = (id) => [...(menuOverlay()?.querySelectorAll('.uris-action-menu-item') || [])]
+        .find(button => button.dataset.id === id);
+
+    // Пин f3 через меню строки → секция «Избранное» сверху.
+    await openFolderMenu(f3.id);
+    await menuItem('pin').click();
+    await new Promise(resolve => setTimeout(resolve, 0));
     const section = el.querySelector('.uris-folder-section-label');
     assert.ok(section, 'секция «Избранное» появилась');
     assert.equal(section.textContent, 'Избранное');
@@ -302,16 +316,22 @@ test('sidebar: поиск фильтрует папки не трогая инп
     await new Promise(resolve => setTimeout(resolve, 0));
     assert.ok(el.querySelector('.uris-folder-empty'), 'пустой результат поиска подписан');
 
-    // Сброс поиска; сортировка: клик 1 → по имени, клик 2 → по количеству.
+    // Сброс поиска; сортировка — пунктами меню «⋯» (вид списка) с галкой состояния.
     search.value = '';
     await search.dispatchEvent({ type: 'input', target: search, currentTarget: search });
     await new Promise(resolve => setTimeout(resolve, 0));
-    await el.querySelector('#urisFolderSortBtn').click();
+    await el.querySelector('#urisFolderViewBtn').click();
+    await menuItem('sort-name').click();
+    await new Promise(resolve => setTimeout(resolve, 0));
     assert.deepEqual(customFolders(), [f3.id, f1.id, f2.id], 'по имени: Персонажи < Ростовые');
-    await el.querySelector('#urisFolderSortBtn').click();
+    await el.querySelector('#urisFolderViewBtn').click();
+    await menuItem('sort-count').click();
+    await new Promise(resolve => setTimeout(resolve, 0));
     assert.deepEqual(customFolders(), [f3.id, f2.id, f1.id], 'по количеству: 2 > 1');
 
-    // hideEmpty прячет только пустые (pinned f3 пуст — скрывается тоже).
-    await el.querySelector('#urisFolderHideEmptyBtn').click();
+    // hideEmpty (меню «⋯») прячет пустые, включая пустой pinned f3.
+    await el.querySelector('#urisFolderViewBtn').click();
+    await menuItem('hide-empty').click();
+    await new Promise(resolve => setTimeout(resolve, 0));
     assert.deepEqual(customFolders(), [f2.id, f1.id], 'пустая папка скрыта, непустые на месте');
 });

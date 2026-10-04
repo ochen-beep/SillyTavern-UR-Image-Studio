@@ -10,6 +10,8 @@ import {
     listFolders, createFolder, updateFolder, deleteFolder, FOLDER_COLOR_PALETTE,
     filterRefsByFolder, refreshPoolCache, getRefSync,
     getFolderPrefs, saveFolderPrefs, persistPoolOrThrow, releaseRefImage, cloneRef,
+    FOLDER_PREFS_MAX_PINNED,
+    folderChildrenMap, folderChildFolders, folderHasChildren, filterRefsByFolderTree,
 } from '../refs-library.js';
 
 import { ingestReferenceImage } from '../references.js';
@@ -20,7 +22,7 @@ import { refreshActive, getActiveTab } from './tabs.js';
 import { lockBodyScroll, unlockBodyScroll } from './window.js';
 import { reportFailure, URIS_SCOPES } from '../error-pool.js';
 import {
-    createFolderField, openFolderSheet, orderSidebarFolders, nextFolderSortMode, filterFolders,
+    createFolderField, openFolderSheet, orderSidebarFolders, filterFolders,
 } from './folder-picker.js';
 import { showFolderManager } from './folder-manager.js';
 import { openCardActionMenu, bindCardContextMenu } from './card-action-menu.js';
@@ -98,6 +100,7 @@ function _setupResize(root) {
         root.classList.toggle('uris-refs-mobile', isMobile);
         if (wasMobile !== isMobile) {
             _mobileScreen = isMobile ? 'folders' : null;
+            _mobileGroupId = null;
             render(root);
         } else if (isMobile) {
             _renderMobileAll(root);
@@ -122,10 +125,12 @@ async function _renderAll(root) {
 }
 
 // ── Sidebar ──
-// Поиск + секции (Избранное/Папки) + сортировка/скрытие пустых переживают
-// списки в 50+ папок. Инпут поиска живёт ВНЕ перерисовываемого списка:
-// _renderFolderList обновляет только строки, иначе каретка прыгает (см.
-// комментарий про caret в _renderMobileGrid).
+// Дерево папок (2 уровня) + поиск. Поиск уплощает дерево: совпадения плоским
+// списком с подписью «в группе …». Инпут поиска живёт ВНЕ перерисовываемого
+// списка: _renderFolderList обновляет только строки, иначе каретка прыгает
+// (см. комментарий про caret в _renderMobileGrid).
+// Строки без кнопок (v4.1): действия папки — ПКМ/долгий тап по строке или
+// тулбарный «⋯» активной папки; закрепление — статус-звёздочка + «Избранное».
 function _renderSidebar(root, folders, refs) {
     const host = root.querySelector('#urisRefsSidebar');
     if (!host) return;
@@ -134,7 +139,8 @@ function _renderSidebar(root, folders, refs) {
             <input type="text" class="uris-folder-search-input" placeholder="Поиск папок…"
                 value="${escapeHtml(_folderSearchQuery)}" aria-label="Поиск папок" autocomplete="off">
         </div>
-        <div class="uris-folder-list" id="urisFolderList"></div>`;
+        <div class="uris-folder-list" id="urisFolderList"></div>
+        <div class="uris-folder-hint"><b>ПКМ / долгий тап</b> — действия папки</div>`;
     _renderFolderList(root, folders, refs);
     host.querySelector('.uris-folder-search-input')?.addEventListener('input', (e) => {
         _folderSearchQuery = e.target.value || '';
@@ -142,20 +148,67 @@ function _renderSidebar(root, folders, refs) {
     });
 }
 
+/** Референсы активного фильтра: группа отдаёт всё поддерево, подпапка — себя. */
+function refsForActiveFilter(refs, folders) {
+    if (_activeFolderFilter === 'all' || _activeFolderFilter === 'none') {
+        return filterRefsByFolder(refs, _activeFolderFilter);
+    }
+    return filterRefsByFolderTree(refs, folders, _activeFolderFilter);
+}
+
 function _renderFolderList(root, folders, refs) {
     const host = root.querySelector('#urisFolderList');
     if (!host) return;
     const prefs = getFolderPrefs();
     const query = _folderSearchQuery.trim().toLowerCase();
+    const inSearch = Boolean(query);
     const countAll = refs.length;
     const countNone = filterRefsByFolder(refs, 'none').length;
-    const itemHtml = (folderId, label, count, dotColor) => `
-        <button class="uris-folder-item ${_activeFolderFilter === folderId ? 'uris-folder-item-on' : ''}"
-                data-folder="${escapeHtml(folderId)}">
-            ${dotColor ? `<span class="uris-folder-dot" style="background:${dotColor}"></span>` : `<span class="uris-folder-dot uris-folder-dot-mute"></span>`}
-            <span class="uris-folder-name">${escapeHtml(label)}</span>
-            <span class="uris-folder-count">${count}</span>
-        </button>`;
+    const countById = new Map(folders.map(f => [f.id, filterRefsByFolder(refs, f.id).length]));
+    const kidsMap = folderChildrenMap(folders);
+    const collapsedSet = new Set(prefs.collapsed);
+    const pinnedSet = new Set(prefs.pinned);
+    const countAllRefs = (folder) => (folderHasChildren(folders, folder.id)
+        ? filterRefsByFolderTree(refs, folders, folder.id).length
+        : (countById.get(folder.id) || 0));
+    const parentOf = (folder) => (folder.parentId ? folders.find(f => f.id === folder.parentId) : null);
+
+    const pseudoItem = (folderId, label, count) => `
+        <div class="uris-folder-row">
+            <button type="button" class="uris-folder-item ${_activeFolderFilter === folderId ? 'uris-folder-item-on' : ''}"
+                    data-folder="${escapeHtml(folderId)}">
+                <span class="uris-folder-dot uris-folder-dot-mute"></span>
+                <span class="uris-folder-name">${escapeHtml(label)}</span>
+                <span class="uris-folder-count">${count}</span>
+            </button>
+        </div>`;
+
+    // Строка папки: маркер + имя (+ статус-★ + подпись группы в поиске) + счётчик.
+    // Кнопок действий в строке нет — меню по ПКМ/долгому тапу и из тулбара.
+    const rowHtml = (folder, { indent = false } = {}) => {
+        const isGroup = folderHasChildren(folders, folder.id);
+        const on = _activeFolderFilter === folder.id;
+        const collapsed = collapsedSet.has(folder.id);
+        const parent = parentOf(folder);
+        const sub = inSearch && parent ? `<span class="uris-folder-sub">в группе «${escapeHtml(parent.name)}»</span>` : '';
+        return `
+        <div class="uris-folder-row${indent ? ' uris-folder-row-child' : ''}">
+            <button type="button" class="uris-folder-item ${on ? 'uris-folder-item-on' : ''}"
+                    data-folder="${escapeHtml(folder.id)}">
+                <span class="uris-folder-dot" style="background:${escapeHtml(folder.color)}"></span>
+                <span class="uris-folder-name${isGroup ? ' uris-folder-name-group' : ''}">${escapeHtml(folder.name)}${sub}</span>
+                ${pinnedSet.has(folder.id) ? '<span class="uris-folder-star" title="В избранном"><i class="fa-solid fa-star"></i></span>' : ''}
+                <span class="uris-folder-count${isGroup ? ' uris-folder-count-total' : ''}">${inSearch ? (countById.get(folder.id) || 0) : countAllRefs(folder)}</span>
+            </button>
+            ${isGroup && !inSearch ? `
+            <button type="button" class="uris-folder-chev${collapsed ? ' uris-folder-chev-closed' : ''}"
+                    data-folder-id="${escapeHtml(folder.id)}"
+                    title="${collapsed ? 'Развернуть' : 'Свернуть'}" aria-label="${collapsed ? 'Развернуть' : 'Свернуть'} папку ${escapeHtml(folder.name)}">
+                <i class="fa-solid fa-chevron-down"></i>
+            </button>` : ''}
+        </div>`;
+    };
+
     const editorHtml = (folder) => {
         if (_editingFolderId !== folder.id) return '';
         const swatches = FOLDER_COLOR_PALETTE.map(color => `
@@ -173,85 +226,131 @@ function _renderFolderList(root, folders, refs) {
                 </div>
             </div>`;
     };
-    const countById = new Map(folders.map(f => [f.id, filterRefsByFolder(refs, f.id).length]));
-    const pinnedSet = new Set(prefs.pinned);
-    let visible = orderSidebarFolders(folders, { pinnedIds: prefs.pinned, sort: prefs.sort, countById });
-    // «Скрывать пустые» не действует в поиске: ищут, чтобы найти любую папку.
-    if (prefs.hideEmpty && !query) visible = visible.filter(f => (countById.get(f.id) || 0) > 0);
-    if (query) visible = filterFolders(visible, query);
 
-    const rowsHtml = (list) => list.map(f => `
-        <div class="uris-folder-row">
-            ${itemHtml(f.id, f.name, countById.get(f.id) || 0, f.color)}
-            <button class="uris-folder-pin ${pinnedSet.has(f.id) ? 'uris-folder-pin-on' : ''}" type="button"
-                    data-folder-id="${escapeHtml(f.id)}"
-                    title="${pinnedSet.has(f.id) ? 'Убрать из избранного' : 'В избранное'}" aria-label="В избранное"><i class="fa-solid fa-star"></i></button>
-            <button class="uris-folder-edit" type="button" data-folder-id="${escapeHtml(f.id)}" title="Изменить папку" aria-label="Изменить папку"><i class="fa-solid fa-pencil"></i></button>
-        </div>
-        ${editorHtml(f)}`).join('');
-
-    const SORT_UI = {
-        manual: { icon: 'fa-bars', title: 'Сортировка: своя → по имени' },
-        name: { icon: 'fa-arrow-down-a-z', title: 'Сортировка: по имени → по количеству' },
-        count: { icon: 'fa-arrow-down-short-wide', title: 'Сортировка: по количеству → своя' },
-    };
-    const sortUi = SORT_UI[prefs.sort] || SORT_UI.manual;
+    const SORT_UI = [
+        { sort: 'manual', label: 'Своя' },
+        { sort: 'name', label: 'По имени' },
+        { sort: 'count', label: 'По количеству' },
+    ];
     const headerHtml = `
         <div class="uris-folder-header">
             <span class="uris-folder-header-label">Папки</span>
             <span class="uris-folder-tools">
-                <button class="uris-folder-tool" id="urisFolderSortBtn" type="button" title="${escapeHtml(sortUi.title)}" aria-label="Сортировка папок"><i class="fa-solid ${sortUi.icon}"></i></button>
-                <button class="uris-folder-tool" id="urisFolderHideEmptyBtn" type="button" title="${prefs.hideEmpty ? 'Показывать пустые папки' : 'Скрывать пустые папки'}" aria-label="Скрывать пустые папки"><i class="fa-solid ${prefs.hideEmpty ? 'fa-eye-slash' : 'fa-eye'}"></i></button>
-                <button class="uris-folder-tool" id="urisFolderManageBtn" type="button" title="Управление папками" aria-label="Управление папками"><i class="fa-solid fa-folder-tree"></i></button>
-                <button class="uris-folder-header-add" id="urisRefsAddFolderBtn" type="button" title="Создать папку" aria-label="Создать папку"><i class="fa-solid fa-plus"></i></button>
+                <button class="uris-folder-tool" id="urisFolderViewBtn" type="button" title="Вид списка" aria-label="Вид списка"><i class="fa-solid fa-ellipsis"></i></button>
+                <button class="uris-folder-header-add" id="urisRefsAddFolderBtn" type="button" title="${escapeHtml(_folderCreateTitle(folders))}" aria-label="Создать папку"><i class="fa-solid fa-plus"></i></button>
             </span>
         </div>`;
 
-    const inSearch = Boolean(query);
-    const pinnedVisible = visible.filter(f => pinnedSet.has(f.id));
-    const restVisible = visible.filter(f => !pinnedSet.has(f.id));
-    host.innerHTML = `
-        ${itemHtml('all', 'Все карточки', countAll, null)}
-        ${itemHtml('none', 'Без папки', countNone, null)}
-        ${!inSearch && pinnedVisible.length ? `<div class="uris-folder-section-label">Избранное</div>${rowsHtml(pinnedVisible)}` : ''}
-        ${!inSearch ? headerHtml : ''}
-        ${inSearch ? rowsHtml(visible) : rowsHtml(restVisible)}
-        ${inSearch && !visible.length ? '<div class="uris-folder-empty">Папки не найдены</div>' : ''}`;
+    // Верхний уровень в порядке сайдбара; дети — в том же режиме сортировки.
+    const topLevel = orderSidebarFolders(
+        folders.filter(f => !f.parentId),
+        { pinnedIds: prefs.pinned, sort: prefs.sort, countById },
+    );
+    const orderKids = (parentFolder) => orderSidebarFolders(
+        kidsMap.get(parentFolder.id) || [],
+        { pinnedIds: prefs.pinned, sort: prefs.sort, countById },
+    );
+
+    let bodyRows = '';
+    const pseudoHtml = `${pseudoItem('all', 'Все карточки', countAll)}${pseudoItem('none', 'Без папки', countNone)}`;
+    if (inSearch) {
+        // Поиск уплощает дерево: любые совпадения плоским списком, у детей —
+        // подпись «в группе …». «Скрывать пустые» в поиске не действует.
+        // «Все карточки»/«Без папки» остаются — быстрый выход из поиска.
+        const matches = filterFolders(folders, query);
+        bodyRows = `${pseudoHtml}
+            ${matches.length ? matches.map(f => rowHtml(f)).join('') : '<div class="uris-folder-empty">Папки не найдены</div>'}`;
+    } else {
+        // Закреплённые листья показываются только в «Избранном» (дедупликация,
+        // как и раньше); закреплённые ГРУППЫ остаются в дереве — иначе их дети
+        // становятся недостижимы кроме как через рекурсивный фильтр.
+        const isPinnedLeaf = (f) => pinnedSet.has(f.id) && !folderHasChildren(folders, f.id);
+        const visibleTop = topLevel
+            .filter(f => !isPinnedLeaf(f))
+            .filter(f => !prefs.hideEmpty || countAllRefs(f) > 0);
+        const groupHtml = (folder) => {
+            const kids = orderKids(folder)
+                .filter(kid => !prefs.hideEmpty || (countById.get(kid.id) || 0) > 0);
+            const collapsed = collapsedSet.has(folder.id);
+            return rowHtml(folder)
+                + editorHtml(folder)
+                + (kids.length && !collapsed
+                    ? `<div class="uris-folder-kids">${kids.map(kid => rowHtml(kid, { indent: true }) + editorHtml(kid)).join('')}</div>`
+                    : '');
+        };
+        const pinnedVisible = prefs.pinned
+            .map(id => folders.find(f => f.id === id))
+            .filter(f => f && (!prefs.hideEmpty || (countById.get(f.id) || 0) > 0));
+        bodyRows = `${pseudoHtml}
+            ${pinnedVisible.length ? `<div class="uris-folder-section-label">Избранное</div>${pinnedVisible.map(f => rowHtml(f)).join('')}` : ''}
+            ${headerHtml}
+            ${visibleTop.map(groupHtml).join('')}`;
+    }
+    host.innerHTML = bodyRows;
 
     host.querySelectorAll('.uris-folder-item').forEach(btn => {
         btn.addEventListener('click', async () => {
             _activeFolderFilter = btn.dataset.folder;
             await _renderAll(root);
         });
+        bindCardContextMenu(btn, ({ x, y }) => {
+            const folder = folders.find(f => f.id === btn.dataset.folder);
+            if (folder) _openFolderMenu({ root, folder, folders, refs, x, y });
+        });
     });
-    host.querySelectorAll('.uris-folder-pin').forEach(btn => {
-        btn.addEventListener('click', () => {
+    host.querySelectorAll('.uris-folder-chev').forEach(btn => {
+        btn.addEventListener('click', async (e) => {
+            e.stopPropagation();
             const id = btn.dataset.folderId;
             const current = getFolderPrefs();
-            const pinned = current.pinned.includes(id)
-                ? current.pinned.filter(pinnedId => pinnedId !== id)
-                : [...current.pinned, id];
-            saveFolderPrefs({ pinned });
+            const collapsed = current.collapsed.includes(id)
+                ? current.collapsed.filter(collapsedId => collapsedId !== id)
+                : [...current.collapsed, id];
+            saveFolderPrefs({ collapsed });
             _renderFolderList(root, folders, refs);
         });
     });
-    host.querySelector('#urisFolderSortBtn')?.addEventListener('click', () => {
-        saveFolderPrefs({ sort: nextFolderSortMode(prefs.sort) });
-        _renderFolderList(root, folders, refs);
-    });
-    host.querySelector('#urisFolderHideEmptyBtn')?.addEventListener('click', () => {
-        saveFolderPrefs({ hideEmpty: !prefs.hideEmpty });
-        _renderFolderList(root, folders, refs);
-    });
-    host.querySelector('#urisFolderManageBtn')?.addEventListener('click', () => {
-        showFolderManager({ onChanged: () => { void _renderAll(root); } });
-    });
-    host.querySelectorAll('.uris-folder-edit').forEach(btn => {
-        btn.addEventListener('click', async () => {
-            _editingFolderId = btn.dataset.folderId;
-            await _renderAll(root);
+    // ── Шапка: ⋯ (вид списка) + ＋ (контекстно-умное создание) ──
+    host.querySelector('#urisFolderViewBtn')?.addEventListener('click', (e) => {
+        const rect = typeof e.currentTarget?.getBoundingClientRect === 'function'
+            ? e.currentTarget.getBoundingClientRect() : null;
+        const current = getFolderPrefs();
+        const check = (mode) => (current.sort === mode ? '✓ ' : '') + SORT_UI.find(item => item.sort === mode).label;
+        openCardActionMenu({
+            title: 'Вид списка',
+            x: rect ? Math.round(rect.left) : null,
+            y: rect ? Math.round(rect.bottom + 4) : null,
+            items: [
+                ...SORT_UI.map(item => ({
+                    id: `sort-${item.sort}`,
+                    icon: 'fa-solid fa-bars',
+                    label: check(item.sort),
+                    onSelect: async () => { saveFolderPrefs({ sort: item.sort }); _renderFolderList(root, folders, refs); },
+                })),
+                {
+                    id: 'hide-empty',
+                    icon: current.hideEmpty ? 'fa-solid fa-eye-slash' : 'fa-solid fa-eye',
+                    label: (current.hideEmpty ? '✓ ' : '') + 'Скрывать пустые',
+                    onSelect: async () => { saveFolderPrefs({ hideEmpty: !current.hideEmpty }); _renderFolderList(root, folders, refs); },
+                },
+                {
+                    id: 'manage',
+                    icon: 'fa-solid fa-folder-tree',
+                    label: 'Управление папками…',
+                    onSelect: () => showFolderManager({ onChanged: () => { void _renderAll(root); } }),
+                },
+            ],
         });
     });
+    host.querySelector('#urisRefsAddFolderBtn')?.addEventListener('click', async () => {
+        const dest = _folderCreateDestination(folders);
+        const name = await showInputModal(
+            dest.label ? `Имя папки (в «${dest.label}»):` : 'Имя папки:', 'Новая папка');
+        if (!name) return;
+        await createFolder(name, { parentId: dest.parentId });
+        refreshActive();
+    });
+    // Инлайн-редактор папки (имя + палитра) — открывается из меню «Правка…».
     const editor = host.querySelector('.uris-folder-editor');
     if (editor) {
         const folder = folders.find(f => f.id === _editingFolderId);
@@ -277,21 +376,139 @@ function _renderFolderList(root, folders, refs) {
         });
         editor.querySelector('.uris-folder-editor-delete')?.addEventListener('click', async () => {
             if (!await showConfirmModal('Удалить папку?')) return;
-            await deleteFolder(folder.id);
-            _editingFolderId = null;
-            if (_activeFolderFilter === folder.id) _activeFolderFilter = 'none';
-            await _renderAll(root);
+            await _deleteFolderAndRerender(root, folder, folders);
         });
     }
-    host.querySelector('#urisRefsAddFolderBtn')?.addEventListener('click', async () => {
-        const name = await showInputModal('Имя папки:', 'Новая папка');
-        if (!name) return;
-        await createFolder(name);
-        refreshActive();
+}
+
+/** Куда попадёт новая папка по «＋» шапки: активная группа → внутрь, активная
+ *  подпапка → соседняя в её группе, иначе верхний уровень. */
+function _folderCreateDestination(folders) {
+    const active = folders.find(f => f.id === _activeFolderFilter);
+    if (!active) return { parentId: null, label: '' };
+    if (active.parentId) {
+        const parent = folders.find(f => f.id === active.parentId);
+        return { parentId: active.parentId, label: parent?.name || '' };
+    }
+    if (folderHasChildren(folders, active.id)) return { parentId: active.id, label: active.name };
+    return { parentId: null, label: '' };
+}
+
+function _folderCreateTitle(folders) {
+    const dest = _folderCreateDestination(folders);
+    return dest.label ? `Создать папку в «${dest.label}»` : 'Создать папку (верхний уровень)';
+}
+
+/** Удаление с обновлением активного фильтра и полным ре-рендером. */
+async function _deleteFolderAndRerender(root, folder) {
+    await deleteFolder(folder.id);
+    _editingFolderId = null;
+    if (_activeFolderFilter === folder.id) _activeFolderFilter = 'none';
+    await _renderAll(root);
+}
+
+/**
+ * Меню действий папки. Один и тот же набор открывается ПКМ по строке,
+ * долгим тапом (мобила) и кнопкой «⋯» в тулбаре активной папки.
+ */
+async function _openFolderMenu({ root, folder, folders, x = null, y = null, mobile = false }) {
+    const prefs = getFolderPrefs();
+    const pinned = prefs.pinned.includes(folder.id);
+    const hasKids = folderHasChildren(folders, folder.id);
+    const parent = folder.parentId ? folders.find(f => f.id === folder.parentId) : null;
+    const items = [
+        pinned
+            ? { id: 'unpin', icon: 'fa-solid fa-star', label: 'Убрать из избранного', onSelect: async () => {
+                saveFolderPrefs({ pinned: prefs.pinned.filter(id => id !== folder.id) });
+                await _renderAll(root);
+            } }
+            : { id: 'pin', icon: 'fa-solid fa-star', label: 'В избранное', onSelect: async () => {
+                saveFolderPrefs({ pinned: [...prefs.pinned, folder.id].slice(0, FOLDER_PREFS_MAX_PINNED) });
+                await _renderAll(root);
+            } },
+        { id: 'edit', icon: 'fa-solid fa-pencil', label: 'Правка…',
+          // На мобиле инлайн-редактора папок нет (правка — через «Управление папками»),
+          // мёртвый пункт меню не показываем.
+          hidden: mobile,
+          onSelect: async () => {
+            _editingFolderId = folder.id;
+            await _renderAll(root);
+        } },
+    ];
+    if (!folder.parentId) {
+        items.push({ id: 'subfolder', icon: 'fa-solid fa-folder-plus', label: 'Новая подпапка', onSelect: async () => {
+            const name = await showInputModal(`Имя подпапки (в «${folder.name}»):`, 'Новая папка');
+            if (!name) return;
+            await createFolder(name, { parentId: folder.id });
+            refreshActive();
+        } });
+    }
+    items.push(
+        { id: 'move', icon: 'fa-solid fa-right-left', label: 'Переместить в…', onSelect: () => _openMoveSheet(root, folder, folders) },
+        { id: 'delete', icon: 'fa-solid fa-trash', danger: true, label: hasKids ? 'Удалить группу…' : 'Удалить…', onSelect: async () => {
+            const msg = hasKids
+                ? `Удалить группу «${folder.name}»? Подпапки поднимутся на верхний уровень, референсы не изменятся.`
+                : 'Удалить папку?';
+            if (!await showConfirmModal(msg)) return;
+            await _deleteFolderAndRerender(root, folder);
+        } },
+    );
+    openCardActionMenu({
+        title: folder.name + (hasKids ? ` · ${filterRefsByFolderTree(await listRefs(), folders, folder.id).length}` : '')
+            + (parent ? ` · в «${parent.name}»` : ''),
+        x, y,
+        items: items.filter(item => !item.hidden),
+    });
+}
+
+/**
+ * «Переместить в…»: цели — группы верхнего уровня и «верхний уровень».
+ * Недопустимые цели (группа с подпапками не может вложиться; папка уже на
+ * верхнем уровне) видны приглушённо-disabled, чтобы структура читалась.
+ */
+function _openMoveSheet(root, folder, folders) {
+    const hasKids = folderHasChildren(folders, folder.id);
+    const entries = [
+        { id: '__root__', name: 'Без группы (верхний уровень)', color: '', disabled: !folder.parentId },
+        ...folders
+            .filter(f => !f.parentId && f.id !== folder.id)
+            .map(f => ({ ...f, disabled: hasKids })),
+    ];
+    openFolderSheet({
+        title: `Переместить «${folder.name}»…`,
+        mode: 'pick-one',
+        folders: entries,
+        onPick: async (target) => {
+            try {
+                await updateFolder(folder.id, { parentId: target.id === '__root__' ? null : target.id });
+                refreshActive();
+            } catch (err) {
+                toastr?.error(err?.message || String(err));
+            }
+        },
     });
 }
 
 // ── Toolbar ──
+// Крошки пути + «⋯» действий активной папки + поиск + «＋ Референс».
+// «⋯» — тот же набор, что в меню строки (ПКМ/долгий тап); на виртуальных
+// фильтрах (Все/Без папки) гаснет, но не прячется — место стабильно.
+function _activeFolderChain(folders) {
+    const chain = [{ id: 'all', label: 'Все карточки' }];
+    if (_activeFolderFilter === 'none') {
+        chain.push({ id: 'none', label: 'Без папки' });
+        return chain;
+    }
+    const active = folders.find(f => f.id === _activeFolderFilter);
+    if (!active) return chain;
+    if (active.parentId) {
+        const parent = folders.find(f => f.id === active.parentId);
+        if (parent) chain.push({ id: parent.id, label: parent.name });
+    }
+    chain.push({ id: active.id, label: active.name });
+    return chain;
+}
+
 function _renderToolbar(root, folders) {
     const host = root.querySelector('#urisRefsToolbar');
     if (!host) return;
@@ -304,7 +521,17 @@ function _renderToolbar(root, folders) {
     const addBtnTitle = activeFolder
         ? `Добавить референс в «${activeFolder.name}»`
         : 'Добавить референс (без папки)';
+    const hasCtx = Boolean(activeFolder);
+    const crumbs = _activeFolderChain(folders);
     host.innerHTML = `
+        <nav class="uris-refs-crumbs" aria-label="Папка">
+            ${crumbs.map((crumb, index) => `${index ? '<span class="uris-crumb-sep">›</span>' : ''}
+                <button type="button" class="uris-crumb${index === crumbs.length - 1 ? ' uris-crumb-cur' : ''}" data-folder="${escapeHtml(crumb.id)}">${escapeHtml(crumb.label)}</button>`).join('')}
+        </nav>
+        <button type="button" class="uris-refs-folder-menu${hasCtx ? '' : ' uris-refs-folder-menu-off'}" id="urisRefsFolderMenu"
+            title="${hasCtx ? `Действия с «${escapeHtml(activeFolder.name)}»` : 'Действия с папкой'}" aria-label="Действия с папкой" ${hasCtx ? '' : 'disabled'}>
+            <i class="fa-solid fa-ellipsis"></i>
+        </button>
         <div class="uris-refs-search">
             <input type="text" id="urisRefsSearch" placeholder="Поиск..." autocomplete="off">
         </div>
@@ -324,6 +551,24 @@ function _renderToolbar(root, folders) {
     });
     host.querySelector('#urisRefsSearch')?.addEventListener('input', (e) => {
         _renderGrid(root, folders, null, e.target.value);
+    });
+    host.querySelectorAll('.uris-crumb').forEach(btn => {
+        btn.addEventListener('click', async () => {
+            _activeFolderFilter = btn.dataset.folder;
+            await _renderAll(root);
+        });
+    });
+    host.querySelector('#urisRefsFolderMenu')?.addEventListener('click', (e) => {
+        if (!activeFolder) return;
+        const rect = typeof e.currentTarget?.getBoundingClientRect === 'function'
+            ? e.currentTarget.getBoundingClientRect() : null;
+        void _openFolderMenu({
+            root,
+            folder: activeFolder,
+            folders,
+            x: rect ? Math.round(rect.left) : null,
+            y: rect ? Math.round(rect.bottom + 4) : null,
+        });
     });
 }
 
@@ -394,7 +639,7 @@ async function _renderGrid(root, folders, refsOverride, searchQuery = '') {
     const host = root.querySelector('#urisRefsGrid');
     if (!host) return;
     const refs = refsOverride ?? await listRefs();
-    const filtered = filterRefsByFolder(refs, _activeFolderFilter);
+    const filtered = refsForActiveFilter(refs, folders);
     const searched = filterRefsBySearch(filtered, searchQuery);
     if (!searched.length) {
         host.innerHTML = `<div class="uris-refs-empty">${searchQuery ? 'Не найдено' : 'Пусто. Добавьте референс кнопкой «+».'}</div>`;
@@ -464,12 +709,14 @@ function _bindOverlay(root, host, ref, folders) {
 }
 
 // ── Mobile stack ──
-let _mobileScreen = 'folders';  // 'folders' | 'grid' | 'card'
+let _mobileScreen = 'folders';  // 'folders' | 'group' | 'grid' | 'card'
+let _mobileGroupId = null;      // открытая группа на экране 'group'
 
 /** Test-only: reset mobile navigation state. It is module-level and, by design
  * (refresh must not kick the user back to folders), survives render(). */
 export function __resetMobileNavForTests() {
     _mobileScreen = 'folders';
+    _mobileGroupId = null;
     _mobileSearchQuery = '';
     _folderSearchQuery = '';
 }
@@ -485,9 +732,11 @@ async function _renderMobileAll(root) {
     // Неизвестное/остаточное состояние (null после десктопного ресайза, «карточка
     // без refId» посреди правки) иначе молча оставляет вкладку пустой —
     // откатываемся: неизвестное — в список папок, битую карточку — в сетку.
-    if (_mobileScreen !== 'folders' && _mobileScreen !== 'grid' && _mobileScreen !== 'card') _mobileScreen = 'folders';
+    if (_mobileScreen !== 'folders' && _mobileScreen !== 'grid' && _mobileScreen !== 'card' && _mobileScreen !== 'group') _mobileScreen = 'folders';
     if (_mobileScreen === 'card' && !_editingRefId) _mobileScreen = 'grid';
+    if (_mobileScreen === 'group' && !_mobileGroupId) _mobileScreen = 'folders';
     if (_mobileScreen === 'folders') return _renderMobileFolders(root);
+    if (_mobileScreen === 'group') return _renderMobileGroup(root);
     if (_mobileScreen === 'grid')   return _renderMobileGrid(root);
     return _renderMobileCard(root);
 }
@@ -510,6 +759,7 @@ async function _renderMobileFolders(root) {
     const [folders, refs] = await Promise.all([listFolders(), listRefs()]);
     const prefs = getFolderPrefs();
     const countById = new Map(folders.map(f => [f.id, filterRefsByFolder(refs, f.id).length]));
+    const kidsMap = folderChildrenMap(folders);
     const previewCollage = rs => mobileFolderCollageHtml(rs);
     host.innerHTML = `
         <div class="uris-mobile-toolbar">
@@ -529,9 +779,26 @@ async function _renderMobileFolders(root) {
         const listHost = host.querySelector('#urisMobileFolderList');
         if (!listHost) return;
         const query = _folderSearchQuery.trim().toLowerCase();
-        let ordered = orderSidebarFolders(folders, { pinnedIds: prefs.pinned, sort: prefs.sort, countById });
+        // Верхний уровень в порядке сайдбара; группы (с подпапками) открывают
+        // подэкран, обычные папки — сетку как раньше.
+        let ordered = orderSidebarFolders(
+            folders.filter(f => !f.parentId),
+            { pinnedIds: prefs.pinned, sort: prefs.sort, countById });
         if (query) ordered = filterFolders(ordered, query);
         const noFolder = filterRefsByFolder(refs, 'none');
+        const rowHtml = (f) => {
+            const isGroup = (kidsMap.get(f.id) || []).length > 0;
+            const subtreeRefs = isGroup ? filterRefsByFolderTree(refs, folders, f.id) : filterRefsByFolder(refs, f.id);
+            const count = isGroup ? subtreeRefs.length : (countById.get(f.id) || 0);
+            return `<button class="uris-mobile-folder-item" data-folder="${escapeHtml(f.id)}" data-group="${isGroup ? '1' : ''}">
+                ${isGroup ? '<span class="uris-mobile-folder-icon">▸</span>' : ''}
+                <span class="uris-folder-dot" style="background:${escapeHtml(f.color)}"></span>
+                <span class="uris-mobile-folder-name${isGroup ? ' uris-folder-name-group' : ''}">${escapeHtml(f.name)}</span>
+                <span class="uris-mobile-folder-count">${count}</span>
+                <span class="uris-mobile-folder-previews">${previewCollage(subtreeRefs)}</span>
+                <span class="uris-mobile-folder-arrow">›</span>
+            </button>`;
+        };
         listHost.innerHTML = `
             <button class="uris-mobile-folder-item" data-folder="all">
                 <span class="uris-mobile-folder-icon">◈</span>
@@ -547,22 +814,24 @@ async function _renderMobileFolders(root) {
                 <span class="uris-mobile-folder-previews">${previewCollage(noFolder)}</span>
                 <span class="uris-mobile-folder-arrow">›</span>
             </button>
-            ${ordered.map(f => {
-                const inFolder = filterRefsByFolder(refs, f.id);
-                return `<button class="uris-mobile-folder-item" data-folder="${escapeHtml(f.id)}">
-                    <span class="uris-folder-dot" style="background:${escapeHtml(f.color)}"></span>
-                    <span class="uris-mobile-folder-name">${escapeHtml(f.name)}</span>
-                    <span class="uris-mobile-folder-count">${inFolder.length}</span>
-                    <span class="uris-mobile-folder-previews">${previewCollage(inFolder)}</span>
-                    <span class="uris-mobile-folder-arrow">›</span>
-                </button>`;
-            }).join('')}
+            ${ordered.map(rowHtml).join('')}
             ${query && !ordered.length ? '<div class="uris-refs-empty">Папки не найдены</div>' : ''}`;
         listHost.querySelectorAll('.uris-mobile-folder-item').forEach(btn => {
             btn.addEventListener('click', () => {
-                _activeFolderFilter = btn.dataset.folder;
-                _mobileScreen = 'grid';
+                const folderId = btn.dataset.folder;
+                if (btn.dataset.group) {
+                    _mobileGroupId = folderId;
+                    _mobileScreen = 'group';
+                } else {
+                    _activeFolderFilter = folderId;
+                    _mobileScreen = 'grid';
+                }
                 _renderMobileAll(root);
+            });
+            // Долгий тап — действия папки (то же меню, что на десктопе; нижний лист).
+            bindCardContextMenu(btn, ({ x, y }) => {
+                const folder = folders.find(f => f.id === btn.dataset.folder);
+                if (folder) _openFolderMenu({ root, folder, folders, x, y, mobile: true });
             });
         });
     };
@@ -584,12 +853,71 @@ async function _renderMobileFolders(root) {
     _bindMobileAddRef(host, root);
 }
 
+/**
+ * Экран «внутри группы»: первая строка — вся группа рекурсивно, далее подпапки.
+ * Тап по строке → сетка; назад → список папок.
+ */
+async function _renderMobileGroup(root) {
+    const host = root.querySelector('#urisMobileScreen');
+    if (!host || !_mobileGroupId) { _mobileScreen = 'folders'; return _renderMobileAll(root); }
+    const [folders, refs] = await Promise.all([listFolders(), listRefs()]);
+    const group = folders.find(f => f.id === _mobileGroupId);
+    if (!group) { _mobileGroupId = null; _mobileScreen = 'folders'; return _renderMobileAll(root); }
+    const prefs = getFolderPrefs();
+    const countById = new Map(folders.map(f => [f.id, filterRefsByFolder(refs, f.id).length]));
+    const kids = orderSidebarFolders(folderChildFolders(folders, group.id), { pinnedIds: prefs.pinned, sort: prefs.sort, countById });
+    const treeRefs = filterRefsByFolderTree(refs, folders, group.id);
+    host.innerHTML = `
+        <div class="uris-mobile-toolbar">
+            <button class="uris-mobile-back" title="Назад" aria-label="Назад">‹</button>
+            <span class="uris-folder-dot" style="background:${escapeHtml(group.color)}"></span>
+            <span class="uris-mobile-toolbar-title">${escapeHtml(group.name)}</span>
+            <span class="uris-mobile-folder-count">${treeRefs.length}</span>
+        </div>
+        <div class="uris-mobile-list" id="urisMobileGroupList"></div>`;
+    const listHost = host.querySelector('#urisMobileGroupList');
+    listHost.innerHTML = `
+        <button class="uris-mobile-folder-item" data-folder="${escapeHtml(group.id)}">
+            <span class="uris-mobile-folder-icon">◈</span>
+            <span class="uris-mobile-folder-name">Все из группы</span>
+            <span class="uris-mobile-folder-count">${treeRefs.length}</span>
+            <span class="uris-mobile-folder-previews">${mobileFolderCollageHtml(treeRefs)}</span>
+            <span class="uris-mobile-folder-arrow">›</span>
+        </button>
+        ${kids.map(f => {
+            const inFolder = filterRefsByFolder(refs, f.id);
+            return `<button class="uris-mobile-folder-item" data-folder="${escapeHtml(f.id)}">
+                <span class="uris-folder-dot" style="background:${escapeHtml(f.color)}"></span>
+                <span class="uris-mobile-folder-name">${escapeHtml(f.name)}</span>
+                <span class="uris-mobile-folder-count">${inFolder.length}</span>
+                <span class="uris-mobile-folder-previews">${mobileFolderCollageHtml(inFolder)}</span>
+                <span class="uris-mobile-folder-arrow">›</span>
+            </button>`;
+        }).join('')}`;
+    listHost.querySelectorAll('.uris-mobile-folder-item').forEach(btn => {
+        btn.addEventListener('click', () => {
+            _activeFolderFilter = btn.dataset.folder;
+            _mobileScreen = 'grid';
+            _renderMobileAll(root);
+        });
+        bindCardContextMenu(btn, ({ x, y }) => {
+            const folder = folders.find(f => f.id === btn.dataset.folder);
+            if (folder && folder.id !== group.id) _openFolderMenu({ root, folder, folders, x, y, mobile: true });
+        });
+    });
+    host.querySelector('.uris-mobile-back')?.addEventListener('click', () => {
+        _mobileGroupId = null;
+        _mobileScreen = 'folders';
+        _renderMobileAll(root);
+    });
+}
+
 async function _renderMobileGrid(root) {
     const host = root.querySelector('#urisMobileScreen');
     if (!host) return;
     const [folders, refs] = await Promise.all([listFolders(), listRefs()]);
     const foldersById = new Map(folders.map(f => [f.id, f]));
-    const filtered = filterRefsByFolder(refs, _activeFolderFilter);
+    const filtered = refsForActiveFilter(refs, folders);
     const searched = filterRefsBySearch(filtered, _mobileSearchQuery);
     const activeFolder = folders.find(f => f.id === _activeFolderFilter);
     const title = _activeFolderFilter === 'all' ? 'Все карточки'

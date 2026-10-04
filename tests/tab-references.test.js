@@ -119,30 +119,164 @@ test('render: sidebar contains All, Without folder, and existing folders', async
     root.removeChild(el);
 });
 
-test('render: desktop custom folders have sibling filters and pencils while pseudo folders do not', async () => {
+// Хелперы контекстного меню папок: ПКМ по строке открывает меню (тело document.body).
+async function openFolderMenuViaContextMenu(el, folderId) {
+    const item = [...el.querySelectorAll('.uris-folder-item')].find(b => b.dataset.folder === folderId);
+    assert.ok(item, 'строка папки найдена');
+    item.dispatchEvent({ type: 'contextmenu', clientX: 12, clientY: 20, preventDefault() {} });
+    await new Promise(resolve => setTimeout(resolve, 0));
+}
+
+function menuOverlay() {
+    return globalThis.document.body.children.find(n => n.querySelector?.('.uris-action-menu'));
+}
+
+function menuItem(id) {
+    return [...(menuOverlay()?.querySelectorAll('.uris-action-menu-item') || [])].find(b => b.dataset.id === id);
+}
+
+test('render: дерево папок — шеврон у группы, подпапка в kids, рекурсивный счётчик, кнопок в строках нет', async () => {
     const { document, root } = makeFakeDocument();
     globalThis.document = document;
     globalThis.document.body = root;
 
-    const { createFolder } = await import('../src/refs-library.js');
-    const folder = await createFolder('NPC');
+    const { createFolder, createRef } = await import('../src/refs-library.js');
+    const group = await createFolder('Лица');
+    const child = await createFolder('Мимика', { parentId: group.id });
+    await createRef({ name: 'Rada', imagePath: '/r.png', folders: [child.id] });
+
     const { render } = await import('../src/ui/tab-references.js');
     const el = makeTabEl(document, 600);
     root.appendChild(el);
 
     await render(el);
 
-    const filter = [...el.querySelectorAll('.uris-folder-item')].find(item => item.dataset.folder === folder.id);
-    const pencil = [...el.querySelectorAll('.uris-folder-edit')].find(button => button.dataset.folderId === folder.id);
-    assert.ok(filter, 'custom folder has a filter button');
-    assert.ok(pencil, 'custom folder has an edit button');
-    assert.equal(filter.parentNode, pencil.parentNode, 'filter and pencil are siblings');
-    assert.equal(el.querySelectorAll('.uris-folder-edit').length, 1, 'pseudo folders have no pencils');
+    assert.equal(el.querySelectorAll('.uris-folder-pin').length, 0, 'пин-кнопок в строках больше нет');
+    assert.equal(el.querySelectorAll('.uris-folder-edit').length, 0, 'кнопок правки в строках больше нет');
+    assert.ok(el.querySelector('.uris-folder-hint'), 'подсказка жеста внизу сайдбара');
+
+    const groupItem = [...el.querySelectorAll('.uris-folder-item')].find(b => b.dataset.folder === group.id);
+    const childItem = [...el.querySelectorAll('.uris-folder-item')].find(b => b.dataset.folder === child.id);
+    assert.ok(groupItem, 'группа отрисована');
+    assert.ok(childItem, 'подпапка отрисована');
+    const chev = el.querySelector('.uris-folder-chev');
+    assert.ok(chev, 'у группы есть шеврон свёртки');
+    assert.equal(chev.dataset.folderId, group.id, 'шеврон только у группы');
+    assert.ok(childItem.closest('.uris-folder-kids'), 'подпапка внутри kids-обёртки');
+    assert.ok(groupItem.querySelector('.uris-folder-name-group'), 'имя группы выделено');
+    assert.equal(groupItem.querySelector('.uris-folder-count').textContent, '1', 'рекурсивный счётчик группы');
+    assert.equal(childItem.querySelector('.uris-folder-count').textContent, '1', 'счётчик подпапки — свой');
+
+    // Тап по группе = рекурсивный фильтр: референс подпапки виден в сетке.
+    await groupItem.click();
+    assert.equal(el.querySelectorAll('.uris-pool-tile').length, 1, 'группа показывает поддерево');
 
     root.removeChild(el);
 });
 
-test('folder editor applies name and color, then cancel leaves saved values', async () => {
+test('sidebar: шеврон сворачивает группу в prefs.collapsed, тап по строке фильтрует', async () => {
+    const { document, root } = makeFakeDocument();
+    globalThis.document = document;
+    globalThis.document.body = root;
+
+    const { createFolder, getFolderPrefs } = await import('../src/refs-library.js');
+    const group = await createFolder('Лица');
+    await createFolder('Мимика', { parentId: group.id });
+
+    const { render } = await import('../src/ui/tab-references.js');
+    const el = makeTabEl(document, 600);
+    root.appendChild(el);
+    await render(el);
+
+    await el.querySelector('.uris-folder-chev').click();
+    assert.equal(el.querySelector('.uris-folder-kids'), null, 'дети скрыты после свёртки');
+    assert.deepEqual(getFolderPrefs().collapsed, [group.id], 'свёртка персистится');
+
+    await el.querySelector('.uris-folder-chev').click();
+    assert.ok(el.querySelector('.uris-folder-kids'), 'разворот возвращает детей');
+    assert.deepEqual(getFolderPrefs().collapsed, []);
+
+    root.removeChild(el);
+});
+
+test('sidebar: поиск уплощает дерево и подписывает «в группе …»', async () => {
+    const { document, root } = makeFakeDocument();
+    globalThis.document = document;
+    globalThis.document.body = root;
+
+    const { createFolder } = await import('../src/refs-library.js');
+    const group = await createFolder('Лица');
+    await createFolder('Мимика', { parentId: group.id });
+
+    const { render } = await import('../src/ui/tab-references.js');
+    const el = makeTabEl(document, 600);
+    root.appendChild(el);
+    await render(el);
+
+    const search = el.querySelector('.uris-folder-search-input');
+    search.value = 'мим';
+    await search.dispatchEvent({ type: 'input', target: search, currentTarget: search });
+    await new Promise(resolve => setTimeout(resolve, 0));
+
+    assert.equal(el.querySelector('.uris-folder-kids'), null, 'в поиске дерева нет');
+    const sub = el.querySelector('.uris-folder-sub');
+    assert.ok(sub, 'у подпапки в поиске есть подпись');
+    assert.match(sub.textContent, /в группе «Лица»/);
+
+    root.removeChild(el);
+});
+
+test('toolbar: крошки пути + «⋯» — disabled на «Все», меню действий на папке', async () => {
+    const { document, root } = makeFakeDocument();
+    globalThis.document = document;
+    globalThis.document.body = root;
+
+    const { createFolder, createRef } = await import('../src/refs-library.js');
+    const group = await createFolder('Лица');
+    const child = await createFolder('Мимика', { parentId: group.id });
+    await createRef({ name: 'Rada', imagePath: '/r.png', folders: [child.id] });
+
+    const { render } = await import('../src/ui/tab-references.js');
+    const el = makeTabEl(document, 600);
+    root.appendChild(el);
+    await render(el);
+
+    let menuBtn = el.querySelector('#urisRefsFolderMenu');
+    assert.ok(menuBtn.disabled, 'на «Все карточки» меню погашено');
+    let crumbs = [...el.querySelectorAll('.uris-crumb')].map(b => b.textContent);
+    assert.deepEqual(crumbs, ['Все карточки']);
+
+    // Активируем подпапку кликом по строке сайдбара.
+    await [...el.querySelectorAll('.uris-folder-item')].find(b => b.dataset.folder === child.id).click();
+    crumbs = [...el.querySelectorAll('.uris-crumb')].map(b => b.textContent);
+    assert.deepEqual(crumbs, ['Все карточки', 'Лица', 'Мимика'], 'крошки отражают путь');
+    const cur = el.querySelector('.uris-crumb-cur');
+    assert.equal(cur.textContent, 'Мимика', 'текущая папка — последняя крошка');
+    menuBtn = el.querySelector('#urisRefsFolderMenu');
+    assert.equal(menuBtn.disabled, false, 'на реальной папке меню доступно');
+
+    // Клик по «⋯» открывает меню действий активной папки.
+    await menuBtn.click();
+    assert.ok(menuOverlay(), 'меню открыто из тулбара');
+    assert.ok(menuItem('pin'), 'В избранное');
+    assert.ok(menuItem('edit'), 'Правка…');
+    assert.equal(menuItem('subfolder'), undefined, 'у подпапки пункта «Новая подпапка» нет');
+    assert.ok(menuItem('move'), 'Переместить в…');
+    menuOverlay().remove();
+
+    // У группы «Новая подпапка» есть.
+    await openFolderMenuViaContextMenu(el, group.id);
+    assert.ok(menuItem('subfolder'), 'у группы есть «Новая подпапка»');
+    menuOverlay().remove();
+
+    // Крошка-предок навигирует: рекурсивный фильтр показывает референс ребёнка.
+    await [...el.querySelectorAll('.uris-crumb')].find(b => b.textContent === 'Лица').click();
+    assert.ok([...el.querySelectorAll('.uris-pool-tile')].length >= 1, 'крошка группы = рекурсивный фильтр');
+
+    root.removeChild(el);
+});
+
+test('sidebar: ПКМ по строке открывает меню папки; «Правка…» открывает инлайн-редактор', async () => {
     const { document, root } = makeFakeDocument();
     globalThis.document = document;
     globalThis.document.body = root;
@@ -154,8 +288,14 @@ test('folder editor applies name and color, then cancel leaves saved values', as
     root.appendChild(el);
 
     await render(el);
-    await [...el.querySelectorAll('.uris-folder-edit')].find(button => button.dataset.folderId === folder.id)?.click();
+    await openFolderMenuViaContextMenu(el, folder.id);
+    assert.ok(menuOverlay(), 'ПКМ открывает меню');
+    await menuItem('edit').click();
+    await new Promise(resolve => setTimeout(resolve, 0));
+    assert.equal(menuOverlay(), undefined, 'пункт закрывает меню');
+
     const name = el.querySelector('.uris-folder-editor-name');
+    assert.ok(name, 'инлайн-редактор открыт через меню');
     name.value = 'Characters';
     await [...el.querySelectorAll('.uris-folder-editor-swatch')].find(button => button.dataset.color === FOLDER_COLOR_PALETTE[1])?.click();
     await el.querySelector('.uris-folder-editor-apply')?.click();
@@ -164,12 +304,91 @@ test('folder editor applies name and color, then cancel leaves saved values', as
     assert.equal(saved.name, 'Characters');
     assert.equal(saved.color, FOLDER_COLOR_PALETTE[1]);
 
-    await [...el.querySelectorAll('.uris-folder-edit')].find(button => button.dataset.folderId === folder.id)?.click();
+    await openFolderMenuViaContextMenu(el, folder.id);
+    await menuItem('edit').click();
+    await new Promise(resolve => setTimeout(resolve, 0));
     el.querySelector('.uris-folder-editor-name').value = 'Discarded';
     await el.querySelector('.uris-folder-editor-cancel')?.click();
     saved = (await listFolders()).find(item => item.id === folder.id);
     assert.equal(saved.name, 'Characters', 'cancel does not persist draft name');
-    assert.equal(saved.color, FOLDER_COLOR_PALETTE[1], 'cancel does not persist draft color');
+
+    root.removeChild(el);
+});
+
+test('sidebar: пин из меню — статус-звёздочка и секция «Избранное», кнопок нет', async () => {
+    const { document, root } = makeFakeDocument();
+    globalThis.document = document;
+    globalThis.document.body = root;
+
+    const { createFolder } = await import('../src/refs-library.js');
+    const folder = await createFolder('NPC');
+    const { render } = await import('../src/ui/tab-references.js');
+    const el = makeTabEl(document, 600);
+    root.appendChild(el);
+    await render(el);
+
+    await openFolderMenuViaContextMenu(el, folder.id);
+    await menuItem('pin').click();
+    await new Promise(resolve => setTimeout(resolve, 0));
+
+    const section = el.querySelector('.uris-folder-section-label');
+    assert.ok(section, 'секция «Избранное» появилась');
+    assert.equal(section.textContent, 'Избранное');
+    const row = [...el.querySelectorAll('.uris-folder-item')].find(b => b.dataset.folder === folder.id);
+    assert.ok(row.querySelector('.uris-folder-star'), 'статус-звёздочка в строке');
+
+    await openFolderMenuViaContextMenu(el, folder.id);
+    await menuItem('unpin').click();
+    await new Promise(resolve => setTimeout(resolve, 0));
+    assert.equal(el.querySelector('.uris-folder-section-label'), null, 'анпин убирает секцию');
+
+    root.removeChild(el);
+});
+
+test('sidebar: «Переместить в…» — шит целей, недопустимые disabled, выбор переносит', async () => {
+    const { document, root } = makeFakeDocument();
+    globalThis.document = document;
+    globalThis.document.body = root;
+
+    const { createFolder, listFolders } = await import('../src/refs-library.js');
+    const faces = await createFolder('Лица');
+    const scenes = await createFolder('Сцены');
+    const mimic = await createFolder('Мимика', { parentId: faces.id });
+    const bg = await createFolder('Фон');
+
+    const { render } = await import('../src/ui/tab-references.js');
+    const el = makeTabEl(document, 600);
+    root.appendChild(el);
+    await render(el);
+
+    // Фон (верхний лист) → в группу «Лица».
+    await openFolderMenuViaContextMenu(el, bg.id);
+    await menuItem('move').click();
+    let rows = [...document.body.querySelectorAll('.uris-fs-row')].filter(r => r.dataset.folderId);
+    const rootRow = rows.find(r => r.dataset.folderId === '__root__');
+    assert.ok(rootRow.disabled, 'верхний уровень недоступен папке, которая уже там');
+    const facesRow = rows.find(r => r.dataset.folderId === faces.id);
+    assert.equal(facesRow.disabled, false, 'группа — допустимая цель');
+    await facesRow.click();
+    await new Promise(resolve => setTimeout(resolve, 0));
+    assert.equal((await listFolders()).find(f => f.id === bg.id).parentId, faces.id, 'папка перемещена');
+
+    await render(el);
+    // Группа с детьми: любая группа как цель недоступна.
+    await openFolderMenuViaContextMenu(el, faces.id);
+    await menuItem('move').click();
+    rows = [...document.body.querySelectorAll('.uris-fs-row')].filter(r => r.dataset.folderId);
+    assert.equal(rows.find(r => r.dataset.folderId === scenes.id).disabled, true, 'группа с детьми не вкладывается');
+    await document.body.querySelector('.uris-folder-sheet-cancel').click();
+
+    // Подпапка переезжает в другую группу.
+    await render(el);
+    await openFolderMenuViaContextMenu(el, mimic.id);
+    await menuItem('move').click();
+    rows = [...document.body.querySelectorAll('.uris-fs-row')].filter(r => r.dataset.folderId);
+    await rows.find(r => r.dataset.folderId === scenes.id).click();
+    await new Promise(resolve => setTimeout(resolve, 0));
+    assert.equal((await listFolders()).find(f => f.id === mimic.id).parentId, scenes.id, 'подпапка сменила группу');
 
     root.removeChild(el);
 });
@@ -195,12 +414,49 @@ test('folder editor deletion clears active filter and exposes its reference', as
     await render(el);
     await [...el.querySelectorAll('.uris-folder-item')].find(item => item.dataset.folder === folder.id)?.click();
     assert.equal(el.querySelectorAll('.uris-pool-tile').length, 1, 'custom filter shows its reference');
-    await [...el.querySelectorAll('.uris-folder-edit')].find(button => button.dataset.folderId === folder.id)?.click();
-    await el.querySelector('.uris-folder-editor-delete')?.click();
+    await openFolderMenuViaContextMenu(el, folder.id);
+    await menuItem('delete').click();
+    await new Promise(resolve => setTimeout(resolve, 0));
 
     assert.ok(el.querySelector('.uris-folder-item-on').dataset.folder === 'none', 'deleted active filter resets to none');
     assert.equal(el.querySelectorAll('.uris-pool-tile').length, 1, 'reference is exposed under without-folder');
     assert.equal(el.querySelector('.uris-pool-tile').dataset.refId, ref.id);
+
+    root.removeChild(el);
+});
+
+test('sidebar: удаление группы поднимает подпапки (confirm с текстом lift)', async () => {
+    const { document, root } = makeFakeDocument();
+    globalThis.document = document;
+    globalThis.document.body = root;
+    const confirms = [];
+    globalThis.SillyTavern.getContext = () => ({
+        extensionSettings: {}, saveSettingsDebounced: () => {}, saveMetadata: () => {},
+        getRequestHeaders: () => ({}), chatMetadata: _chatMetadata,
+        callGenericPopup: async (text) => { confirms.push(text); return true; },
+        POPUP_TYPE: { CONFIRM: 'confirm' },
+    });
+
+    const { createFolder, listFolders } = await import('../src/refs-library.js');
+    const group = await createFolder('Лица');
+    const child = await createFolder('Мимика', { parentId: group.id });
+    const { render } = await import('../src/ui/tab-references.js');
+    const el = makeTabEl(document, 600);
+    root.appendChild(el);
+    await render(el);
+
+    await openFolderMenuViaContextMenu(el, group.id);
+    const del = menuItem('delete');
+    assert.equal(del.textContent.includes('Удалить группу…'), true, 'у группы пункт называется «Удалить группу…»');
+    await del.click();
+    await new Promise(resolve => setTimeout(resolve, 0));
+
+    const folders = await listFolders();
+    assert.equal(folders.some(f => f.id === group.id), false, 'группа удалена');
+    const lifted = folders.find(f => f.id === child.id);
+    assert.ok(lifted, 'подпапка осталась');
+    assert.equal(lifted.parentId, null, 'подпапка поднята на верхний уровень');
+    assert.match(confirms[0] || '', /поднимутся на верхний уровень/, 'confirm предупреждает о lift');
 
     root.removeChild(el);
 });
@@ -224,6 +480,74 @@ test('render: mobile folders screen contains All, Without folder, and existing f
     assert.ok(items.includes('none'), 'has "none" folder item (refs without folder must stay reachable on mobile)');
     const custom = items.filter(f => f !== 'all' && f !== 'none');
     assert.equal(custom.length, 1, 'one custom folder');
+
+    root.removeChild(el);
+});
+
+test('mobile: группа открывает подэкран «Все из группы» с подпапками; рекурсивный счётчик', async () => {
+    const { document, root } = makeFakeDocument();
+    globalThis.document = document;
+    globalThis.document.body = root;
+
+    const { createFolder, createRef } = await import('../src/refs-library.js');
+    const group = await createFolder('Лица');
+    const child = await createFolder('Мимика', { parentId: group.id });
+    const top = await createFolder('Фон');
+    await createRef({ name: 'R1', imagePath: '/1.png', folders: [child.id] });
+    await createRef({ name: 'R2', imagePath: '/2.png', folders: [group.id] });
+
+    const { render, __resetMobileNavForTests } = await import('../src/ui/tab-references.js');
+    __resetMobileNavForTests();
+    const el = makeTabEl(document, 380);
+    root.appendChild(el);
+    await render(el);
+
+    const groupRow = [...el.querySelectorAll('.uris-mobile-folder-item')].find(b => b.dataset.folder === group.id);
+    assert.equal(groupRow.dataset.group, '1', 'группа помечена data-group');
+    assert.equal(groupRow.querySelector('.uris-mobile-folder-count').textContent, '2', 'рекурсивный счётчик группы');
+    const topRow = [...el.querySelectorAll('.uris-mobile-folder-item')].find(b => b.dataset.folder === top.id);
+    assert.notEqual(topRow.dataset.group, '1', 'обычная папка ведёт в сетку как раньше');
+
+    await groupRow.click();
+    await new Promise(resolve => setTimeout(resolve, 0));
+    const labels = [...el.querySelectorAll('.uris-mobile-folder-item')].map(b => b.textContent);
+    assert.ok(labels.some(text => text.includes('Все из группы')), 'первая строка — вся группа');
+    assert.ok(labels.some(text => text.includes('Мимика')), 'подпапки перечислены');
+
+    await [...el.querySelectorAll('.uris-mobile-folder-item')].find(b => b.dataset.folder === child.id).click();
+    await new Promise(resolve => setTimeout(resolve, 0));
+    assert.equal(el.querySelectorAll('.uris-pool-tile').length, 1, 'тап по подпапке — её сетка');
+
+    root.removeChild(el);
+});
+
+test('mobile: долгий тап по строке папки — меню действий; «Правка…» на мобиле нет', async (t) => {
+    const { document, root } = makeFakeDocument();
+    globalThis.document = document;
+    globalThis.document.body = root;
+
+    const { createFolder } = await import('../src/refs-library.js');
+    const folder = await createFolder('NPC');
+    const { render, __resetMobileNavForTests } = await import('../src/ui/tab-references.js');
+    __resetMobileNavForTests();
+    const el = makeTabEl(document, 380);
+    root.appendChild(el);
+    await render(el);
+
+    t.mock.timers.enable({ apis: ['setTimeout'] });
+    const row = [...el.querySelectorAll('.uris-mobile-folder-item')].find(b => b.dataset.folder === folder.id);
+    row.dispatchEvent({ type: 'pointerdown', pointerType: 'touch', clientX: 10, clientY: 10 });
+    t.mock.timers.tick(500);
+    t.mock.timers.reset();
+    await new Promise(resolve => setTimeout(resolve, 0));
+
+    const overlay = document.body.children.find(n => n.querySelector?.('.uris-action-menu'));
+    assert.ok(overlay, 'нижний лист меню открыт');
+    const ids = [...overlay.querySelectorAll('.uris-action-menu-item')].map(b => b.dataset.id);
+    assert.ok(ids.includes('pin'), 'пин доступен с телефона (раньше звёздочки на мобиле не было)');
+    assert.equal(ids.includes('edit'), false, '«Правка…» без мобильного редактора не показывается');
+    assert.ok(ids.includes('move'), 'перемещение доступно');
+    assert.ok(ids.includes('delete'), 'удаление доступно');
 
     root.removeChild(el);
 });
