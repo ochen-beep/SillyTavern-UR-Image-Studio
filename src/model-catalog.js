@@ -155,4 +155,3 @@ export function normalizeModelCatalog(payload, options = {}) {
     return { shape, entries, modelIds: entries.map(entry => entry.modelId) };
 }
 
-export const MODEL_CATALOG_LIMIT = MAX_MODELS;

@@ -33,12 +33,6 @@ export function withVersionSuffix(value, version, keepPattern = /\/v1$/i) {
     return `${base}${version}`;
 }
 
-/** Открытый (незакешированный) helper: trim + strip, пустое → null. */
-export function normalizeBase(value) {
-    const base = stripTrailingSlashes(value);
-    return base || null;
-}
-
 /**
  * Канонический base endpoint'а по дескриптору. Бросает ошибку с кодом
  * INVALID_ENDPOINT и текстом дескриптора (error-формы старых нормализаторов
@@ -55,17 +49,6 @@ export function resolveEndpoint(descriptor, rawEndpoint) {
     const base = normalize(rawEndpoint);
     if (!base) throw invalidEndpoint(descriptor, 'Image provider endpoint is required.');
     return base;
-}
-
-/**
- * Канонический URL генерации: base + путь с интерполяцией параметров
- * (':model' → encodeURIComponent(model)).
- * @param {{endpoint: {normalize: Function, generationPath?: string, invalidMessage?: string}}} descriptor
- * @param {string|undefined} rawEndpoint
- * @param {Record<string, string>} [params]
- */
-export function buildGenerationUrl(descriptor, rawEndpoint, params = {}) {
-    return resolveEndpoint(descriptor, rawEndpoint) + interpolatePath(descriptor.endpoint.generationPath || '', params);
 }
 
 /** ':name' → encodeURIComponent(params[name]). */

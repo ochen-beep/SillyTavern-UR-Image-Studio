@@ -468,5 +468,3 @@ export function normalizeConnectionRecord(value = {}) {
     };
 }
 
-export const normalizeRoute = normalizeRouteContract;
-export const normalizeConnection = normalizeConnectionRecord;

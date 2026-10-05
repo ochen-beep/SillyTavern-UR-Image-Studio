@@ -113,7 +113,6 @@ function schedulePersist() {
 }
 
 export function getDiagnosticSessionId() { return sessionId; }
-export function isDiagnosticEventsLoaded() { return loaded; }
 
 export function recordDiagnosticEvent(event, details = {}) {
     const input = event && typeof event === 'object' ? event : { event, details };

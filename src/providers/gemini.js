@@ -25,7 +25,7 @@ function authHeaders(endpoint, apiKey) {
 }
 
 /**
- * @param {import('./base.js').TextProfile} p
+ * @param {import('../core.js').TextProfile} p
  * @param {string} systemPrompt
  * @param {string} userPrompt
  * @param {(s: string) => void} [onStatus]

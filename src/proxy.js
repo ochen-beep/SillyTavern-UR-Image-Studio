@@ -198,15 +198,6 @@ export function getHostStrategies() {
 }
 
 /**
- * Typed error for a paid (non-idempotent) request whose outcome is unknown:
- * a CORS-masked failure is indistinguishable from "the server processed the
- * request and the response was lost". The request is deliberately NOT re-sent
- * automatically; the host strategy is flipped to 'proxy' by autoFetch so the
- * caller's next attempt takes the safe path.
- */
-
-
-/**
  * Automatic fetch: tries direct request, falls back to proxy on CORS block.
  *
  * Strategy is cached by hostname:

@@ -295,6 +295,15 @@ export const DEFAULT_CHAT_CONFIG_ENVELOPE = Object.freeze({
     }),
 });
 
+/**
+ * @typedef {Object} TextProfile
+ * @property {'openai-like' | 'gemini'} provider
+ * @property {string} endpoint - Base URL of the provider API.
+ * @property {string} apiKey - API key used for authentication.
+ * @property {string} model - Model identifier.
+ * @property {number} [temperature] - Optional sampling temperature.
+ */
+
 // ── ST context ──
 export function getCtx() { return SillyTavern.getContext(); }
 

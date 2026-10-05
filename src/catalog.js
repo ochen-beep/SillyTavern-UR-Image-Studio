@@ -1,6 +1,6 @@
 // @ts-check
 import { isCorsOrNetworkError } from './proxy.js';
-import { tryGunzipIfMagic } from './decompress-body.js';
+import { tryGunzipIfMagic, readCloneBytes, decompressBytes } from './decompress-body.js';
 import { tunnelBypassHeaders } from './tunnel-bypass.js';
 import { trace, warn, decodeZstdBytes } from './core.js'
 
@@ -146,26 +146,14 @@ function explainCatalogBodyParseFailure(response, preview, cause) {
 async function readFailureText(response) {
     if (!response) return '';
     const clone = typeof response.clone === 'function' ? response.clone() : null;
-    if (clone && typeof clone.arrayBuffer === 'function') {
-        try {
-            const bytes = new Uint8Array(await clone.arrayBuffer());
+    if (clone) {
+        const { bytes } = await readCloneBytes(clone);
+        if (bytes) {
+            const recovered = await decompressBytes(bytes);
+            if (recovered) return recovered.text;
             const plain = new TextDecoder('utf-8', { fatal: false }).decode(bytes);
-            const compressed = bytes.length >= 2 && ((bytes[0] === 0x1f && bytes[1] === 0x8b)
-                || (bytes.length >= 4 && bytes[0] === 0x28 && bytes[1] === 0xb5 && bytes[2] === 0x2f && bytes[3] === 0xfd)
-                || (bytes[0] === 0x78 && bytes.length >= 2 && (bytes[0] * 256 + bytes[1]) % 31 === 0));
-            if (!compressed && plain) return plain;
-            let decoded = null;
-            if (bytes.length >= 4 && bytes[0] === 0x28 && bytes[1] === 0xb5 && bytes[2] === 0x2f && bytes[3] === 0xfd) {
-                const out = await decodeZstdBytes(bytes);
-                if (out) decoded = new TextDecoder('utf-8', { fatal: false }).decode(out);
-            } else if (typeof DecompressionStream === 'function') {
-                const codec = bytes[0] === 0x1f && bytes[1] === 0x8b ? 'gzip' : 'deflate';
-                const stream = new Blob([bytes]).stream().pipeThrough(new DecompressionStream(codec));
-                decoded = await new Response(stream).text();
-            }
-            if (decoded != null) return decoded;
             if (plain) return plain;
-        } catch { /* fallback to the live response stream */ }
+        }
     }
     try { return typeof response.text === 'function' ? await response.text() : ''; }
     catch { return ''; }
@@ -307,7 +295,6 @@ async function readBodyJson(response, timeoutMs, externalSignal) {
         if (streamError?.name === 'AbortError') {
             if (externalSignal?.aborted) throw new DOMException('Aborted', 'AbortError');
             const timeout = new Error(`Таймаут (${Math.round(timeoutMs / 1000)}с)`);
-            timeout.code = 'FETCH_TIMEOUT';
             timeout.code = 'CATALOG_TIMEOUT';
             throw timeout;
         }

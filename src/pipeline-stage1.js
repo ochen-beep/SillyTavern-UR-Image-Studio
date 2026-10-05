@@ -6,7 +6,7 @@
  * runFullPipelineForDraft orchestrates Stage 1 + Stage 2; it lives here
  * (entry point is Stage 1) and imports Stage 2 to avoid circular dependencies.
  */
-import { state } from './core.js';
+import { state, fnv1aHex } from './core.js';
 import { recordDiagnosticEvent, hashDiagnosticId } from './diagnostic-events.js';
 import { generatePromptText } from './text-api.js';
 import { getTemplate } from './prompt-templates.js';
@@ -215,7 +215,7 @@ export async function runStage1ForDraft(input, onStatus = () => {}, signal, opts
 export async function runFullPipelineForDraft(input, onStatus = () => {}, signal) {
     const chatConfig = input.chatConfig || createChatConfigSnapshot();
     const runInput = { ...input, chatConfig };
-    const flightKey = `${input.chatId}:${input.msgId}:${hashMessageForAuto(input.messageText)}`;
+    const flightKey = `${input.chatId}:${input.msgId}:${fnv1aHex(input.messageText)}`;
     const existing = autoFlights.get(flightKey);
     if (existing) return await raceFlightWithSignal(existing, signal);
     const flight = (async () => {
@@ -246,15 +246,6 @@ function raceFlightWithSignal(flight, signal) {
             error => { signal.removeEventListener('abort', onAbort); reject(error); },
         );
     });
-}
-
-function hashMessageForAuto(value) {
-    let hash = 2166136261;
-    for (const char of String(value || '')) {
-        hash ^= char.codePointAt(0);
-        hash = Math.imul(hash, 16777619);
-    }
-    return (hash >>> 0).toString(16);
 }
 
 /** Шов для node-тестов: семантика присоединения к чужому полёту. */

@@ -84,13 +84,6 @@ export function assertApiKeyForContract(contract, apiKey) {
   throw providerError('MISSING_API_KEY', 'An API key is required for the selected image connection.');
 }
 
-export function endpointBase(endpoint, suffix = '/v1') {
-  const value = String(endpoint || '').trim().replace(/\/+$/, '');
-  if (!value) throw providerError('INVALID_ENDPOINT', 'Image provider endpoint is required.');
-  if (/\/v1$/i.test(value)) return value;
-  return `${value}${suffix}`;
-}
-
 export function parseDataUrl(reference) {
   const value = typeof reference === 'string' ? reference : reference?.dataUrl;
   const match = DATA_URL.exec(value || '');
@@ -297,12 +290,4 @@ export function imageResultFromValue(value, mimeType = null) {
   const sniffed = detectImageMimeFromBase64(normalized);
   const type = typeof mimeType === 'string' && mimeType.startsWith('image/') ? mimeType : (sniffed || 'image/png');
   return { kind: 'dataUrl', value: `data:${type};base64,${normalized}`, mimeType: type, warnings: [] };
-}
-
-export function firstImageResult(payload, fields = []) {
-  for (const field of fields) {
-    const value = field(payload);
-    if (typeof value === 'string' && value) return imageResultFromValue(value, field.mimeType?.(payload) ?? null);
-  }
-  throw providerError('UPSTREAM_RESPONSE_INVALID', 'Image provider returned a successful response without an image.');
 }

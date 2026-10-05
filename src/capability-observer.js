@@ -30,15 +30,9 @@
  */
 import { log, warn } from './core.js';
 import { recordDiagnosticEvent } from './diagnostic-events.js';
+import { CONTRACTS } from './image-connection-schema.js';
 
-const CONTRACTS_SET = new Set([
-  'openai-images',
-  'gemini-native',
-  'chat-completions',
-  'openrouter-images',
-  'pollinations-images',
-  'naistera',
-]);
+const CONTRACTS_SET = new Set(Object.values(CONTRACTS));
 
 // ── Operation / reference-mode / delivery inference ────────────────────────
 //

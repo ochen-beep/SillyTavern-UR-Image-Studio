@@ -11,7 +11,7 @@ import { autoFetch, probeDeliveryStrategy } from '../proxy.js';
 /**
  * Generate a non-streaming text chat completion.
  *
- * @param {import('./base.js').TextProfile} p
+ * @param {import('../core.js').TextProfile} p
  * @param {string} systemPrompt
  * @param {string} userPrompt
  * @param {(s: string) => void} [onStatus]

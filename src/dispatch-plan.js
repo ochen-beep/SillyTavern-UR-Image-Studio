@@ -404,11 +404,6 @@ export function assertImageModelEligible(connection, modelId = connectionModelId
     return classification;
 }
 
-/** Whether a model id looks like an image-generation model. */
-export function isLikelyImageModel(modelId, metadata = undefined) {
-    return classifyModelCapability(modelId, metadata).kind === 'image';
-}
-
 /**
  * Split a model list into image candidates and everything else. The full
  * catalog is deliberately retained in `otherModels`; callers decide whether

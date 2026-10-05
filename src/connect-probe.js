@@ -101,7 +101,7 @@ function extractModels(payload, allowPollinations = false) {
         source: allowPollinations ? 'pollinations-image-models' : 'generic-models',
         provider: allowPollinations ? 'pollinations' : 'generic',
     });
-    return { shape: allowPollinations ? result.shape : result.shape, ids: result.modelIds, modelMetadata: result.entries };
+    return { shape: result.shape, ids: result.modelIds, modelMetadata: result.entries };
 }
 
 // Список из combo-входа ComfyUI: на 0.38+ это плоский ["a.safetensors", {...opts}],
