@@ -42,7 +42,6 @@ import {
     dataUrlMimeType,
     dataUrlToBlob,
     dataUrlToFile,
-    compressDataUrl,
     optimizeReferenceImage,
     normalizeReferenceDataUrl,
     __testOnly,
@@ -50,7 +49,6 @@ import {
     MAX_INPUT_BYTES,
     OPTIMIZATION_VERSION,
     uploadReferenceImage,
-    logRefsMeta,
     imageToDataUrl,
     loadReferenceImage,
     summarizeReference,
@@ -364,11 +362,6 @@ test('optimizeReferenceImage rejects malformed image data URLs', async () => {
     );
 });
 
-test('compressDataUrl remains a data URL wrapper', async () => {
-    assert.equal(typeof compressDataUrl, 'function');
-    await assert.rejects(async () => await compressDataUrl('invalid'));
-    await assert.rejects(async () => await compressDataUrl('data:text/plain;base64,abc'));
-});
 
 // ── Регрессия: imageToDataUrl возвращает null на 404 / не-картинке ──
 // Баг: fetch без проверки resp.ok → 404 возвращал blob (HTML-страница ошибки)
@@ -528,56 +521,3 @@ test('loadReferenceImage reads a canonical native path without the CORS proxy', 
     }
 });
 
-test('logRefsMeta logs metadata', async () => {
-    const originalLog = console.log;
-    const originalTable = console.table;
-    const logCalls = [];
-    const tableCalls = [];
-    console.log = (...args) => logCalls.push(args);
-    console.table = (...args) => tableCalls.push(args);
-    try {
-        const refs = [
-            { name: 'Alice', meta: { format: 'webp', width: 100, height: 200, originalBytes: 1000, compressedBytes: 500 } },
-            { name: 'Bob' },
-        ];
-        logRefsMeta(refs, 'test');
-        assert.equal(logCalls.length, 1);
-        assert.deepEqual(logCalls[0], ['[URIS]', 'test:', 2]);
-        assert.equal(tableCalls.length, 1);
-        assert.equal(tableCalls[0][0].length, 2);
-        assert.deepEqual(tableCalls[0][0][0], {
-            name: 'Alice',
-            format: 'webp',
-            dimensions: '100x200',
-            originalBytes: 1000,
-            compressedBytes: 500,
-        });
-        assert.deepEqual(tableCalls[0][0][1], {
-            name: 'Bob',
-            format: undefined,
-            dimensions: '',
-            originalBytes: undefined,
-            compressedBytes: undefined,
-        });
-    } finally {
-        console.log = originalLog;
-        console.table = originalTable;
-    }
-});
-
-test('logRefsMeta handles empty refs', async () => {
-    const originalLog = console.log;
-    const originalTable = console.table;
-    const logCalls = [];
-    const tableCalls = [];
-    console.log = (...args) => logCalls.push(args);
-    console.table = (...args) => tableCalls.push(args);
-    try {
-        logRefsMeta([], 'empty');
-        assert.deepEqual(logCalls, [['[URIS]', 'empty: none']]);
-        assert.equal(tableCalls.length, 0);
-    } finally {
-        console.log = originalLog;
-        console.table = originalTable;
-    }
-});

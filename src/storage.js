@@ -3,23 +3,12 @@
  * Gallery facade: shared native ST files plus the shared metadata card index.
  * localforage is read-only migration input for legacy chat entries.
  */
-import { LF_GALLERY_PREFIX, uid, log, getCtx } from './core.js';
+import { uid, log, getCtx } from './core.js';
 import { recordDiagnosticEvent, hashDiagnosticId } from './diagnostic-events.js';
-import { addCard, clearCards, countCardsByImagePath, listCards, removeCard, updateCard } from './gallery-index.js';
+import { addCard, countCardsByImagePath, listCards, removeCard, updateCard } from './gallery-index.js';
 import { listRefs } from './refs-library.js';
 import { materializeImageResult, uploadGeneratedImage } from './native-image-storage.js';
 import { canonicalizeNativeImagePath } from './native-image-path.js';
-
-function key(chatId) { return LF_GALLERY_PREFIX + chatId; }
-function lf() { return globalThis.SillyTavern?.libs?.localforage; }
-
-/** Read-only legacy migration input. Gallery writes never use localforage. */
-export async function getLegacyGalleryMigrationInput(chatId) {
-    const store = lf();
-    if (!store) return [];
-    const arr = await store.getItem(key(chatId));
-    return Array.isArray(arr) ? arr : [];
-}
 
 function isNativeGalleryPath(value) {
     return canonicalizeNativeImagePath(value) !== null;
@@ -46,9 +35,6 @@ export async function getGallery(chatId, { reconcile = false } = {}) {
         .filter(card => belongsToChat(card, chatId) && card.hidden !== true)
         .map(cardForGallery);
 }
-
-/** @deprecated Gallery state is shared and no longer writes browser-local caches. */
-export async function setGallery(_chatId, _arr) {}
 
 /**
  * Persist a generation card in the shared index. Data URLs, byte results, and
@@ -88,14 +74,6 @@ export async function addToGallery(chatId, entry) {
     const shared = cardForGallery(card);
     log('Added native gallery card', card.id);
     return shared;
-}
-
-export async function removeFromGallery(chatId, id) {
-    const card = (await listCards({ reconcile: false })).find(item => item.id === id);
-    if (!belongsToChat(card, chatId)) return false;
-    const removed = await removeCard(id);
-    if (removed) log('Removed gallery card', id);
-    return removed;
 }
 
 async function isReferencedByPool(imagePath) {
@@ -180,20 +158,6 @@ export async function updateGalleryEntry(chatId, id, patch) {
     return updated ? cardForGallery(updated) : null;
 }
 
-/** Save a data URL to the shared native gallery folder. */
-export async function saveImageToFile(dataUrl) {
-    try {
-        const imagePath = await uploadGeneratedImage(dataUrl, { filename: `uris_${new Date().toISOString().replace(/[:.]/g, '-')}` });
-        // A user-driven act on a paid result: its absence from the timeline
-        // made "the file appeared without a card" reports undiagnosable.
-        recordDiagnosticEvent({ event: 'gallery-manual-save', stage: 'gallery', outcome: 'ok', details: {} });
-        return imagePath;
-    } catch (e) {
-        recordDiagnosticEvent({ event: 'gallery-manual-save', stage: 'gallery', level: 'error', outcome: 'error', details: { errorName: e?.name || 'Error', message: String(e?.message || e) } });
-        throw e;
-    }
-}
-
 /** Clear shared metadata cards belonging to one chat. Native source files remain untouched. */
 export async function clearGallery(chatId, { deleteFiles = false } = {}) {
     const cards = await listCards({ reconcile: false });
@@ -213,10 +177,4 @@ export async function clearGallery(chatId, { deleteFiles = false } = {}) {
         outcome: 'ok', details: { count: mine.length, deleteFiles },
     });
     log('Gallery cleared for chat', chatId, deleteFiles ? '(files deleted)' : '(cards hidden)');
-}
-
-/** Explicitly clear every shared gallery metadata card. Native source files remain untouched. */
-export async function clearAllGalleryCards() {
-    await clearCards();
-    log('All gallery metadata cleared');
 }

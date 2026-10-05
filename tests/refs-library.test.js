@@ -507,44 +507,7 @@ test('saveChatRefs persists normalized referenceIds and preserves schema-v4 conf
     assert.equal(meta.config.imageProfileId, 'x');
 });
 
-import { isNameInText, getRefSync, refreshPoolCache } from '../src/refs-library.js';
-
-test('isNameInText matches one exact whole phrase', () => {
-    assert.ok(isNameInText('Aria', 'Aria walked in'));
-    assert.ok(!isNameInText('Aria', 'Arianna walked in'));
-    assert.ok(isNameInText('Aria Rose', 'Aria   Rose was there'));
-    assert.ok(!isNameInText('Aria Rose', 'Rose was there'));
-    assert.ok(!isNameInText('Cat', 'category'));
-});
-
-test('isNameInText ignores single-character tokens', () => {
-    assert.ok(!isNameInText('A', 'A walked in'));
-    assert.ok(!isNameInText('A', 'Some A text'));
-});
-
-import { collectRefsForCurrentChat, previewRefsForCurrentChat } from '../src/refs-library.js';
-
-test('collect uses only aliases from the unified whitelist', withFetchBlob(async () => {
-    const ref = await createRef({ name: 'Display only', aliases: ['Aria'], imagePath: '/a.png' });
-    await saveChatRefs({ referenceIds: [ref.id] });
-    assert.equal((await collectRefsForCurrentChat({ chatText: 'Display only enters' })).length, 0);
-    const refs = await collectRefsForCurrentChat({ chatText: 'Aria enters' });
-    assert.deepEqual(refs.map(item => item.id), [ref.id]);
-}));
-
-test('preview returns pool descriptors with stable ids', async () => {
-    const ref = await createRef({ name: 'Aria card', aliases: ['Aria'], imagePath: '/a.png' });
-    await saveChatRefs({ referenceIds: [ref.id] });
-    assert.deepEqual(previewRefsForCurrentChat({ chatText: 'Aria' }).map(item => item.id), [ref.id]);
-});
-
-test('legacy preview expands selected folder candidates when cache is ready', async () => {
-    const folder = await createFolder('Locations');
-    const ref = await createRef({ name: 'Forest', aliases: ['forest'], folders: [folder.id], imagePath: '/forest.png' });
-    await refreshPoolCache();
-    await saveChatRefs({ folderIds: [folder.id] });
-    assert.deepEqual(previewRefsForCurrentChat({ chatText: 'A forest scene' }).map(item => item.id), [ref.id]);
-});
+import { getRefSync, refreshPoolCache } from '../src/refs-library.js';
 
 // ── schema-v4 chat-scoped config integration (Task 1) ──
 

@@ -22,10 +22,8 @@ import {
     uid, log, warn, getCtx, getImageConnectionSettings, IMAGE_CONNECTION_SETTINGS_KEY, saveSettings,
     DEFAULT_CHAT_CONFIG_ENVELOPE, deepClone,
 } from './core.js';
-import { imageToDataUrl } from './references.js';
 import { normalizeAliases } from './scene-context.js';
 import { canonicalizeNativeImagePath } from './native-image-path.js';
-import { normalizeReferenceCap } from './reference-limits.js';
 import { createShardedFileStore } from './sharded-file-store.js';
 import { recordDiagnosticEvent } from './diagnostic-events.js';
 import { isStudioActive, getStudioBinding, saveStudioBinding } from './studio-scope.js';
@@ -226,9 +224,6 @@ function sharedStore() {
     if (!testStore) return collectionStore();
     return testStore;
 }
-
-/** @deprecated Use route capabilities or an explicit collector cap. */
-export const MAX_REFS = null;
 
 function uniqueStrings(values) {
     const seen = new Set();
@@ -765,18 +760,6 @@ function saveStudioChatRefs(patch) {
     return binding.refs;
 }
 
-// ── Smart-matching (§2.4) ──
-
-function escapeRegex(s) { return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); }
-
-export function isNameInText(name, text) {
-    const phrase = String(name || '').trim();
-    if (phrase.length < 2) return false;
-    const pattern = phrase.split(/\s+/).map(escapeRegex).join('\\s+');
-    const re = new RegExp(`(?<![\\p{L}\\p{N}])${pattern}(?![\\p{L}\\p{N}])`, 'iu');
-    return re.test(String(text || ''));
-}
-
 // ── Pool cache (§2.6) ──
 
 let _poolCache = null;
@@ -806,67 +789,3 @@ export function getRefSync(id) {
     }
     return _poolCache.find(r => r.id === id) || null;
 }
-
-// ── Collect: which references to send ──
-
-/** Optional per-generation reference override. */
-
-/**
- * Reference descriptor for sending (without fetch).
- * @typedef {Object} RefDescriptor
- * @property {string} name
- * @property {'auto'|'pinned'} [kind]
- * @property {string} [refId]
- * @property {string} [imagePath]
- */
-
-/**
- * Resolve which references are included for the current chat. Synchronous, no fetch.
- */
-function _resolveRefs(context, override, maxRefs = null) {
-    if (override?.enabled === false) return [];
-    const cap = normalizeReferenceCap(maxRefs ?? override?.maxRefs);
-    if (cap === 0) return [];
-    const chatRefs = getChatRefs();
-    const text = `${context.chatText || ''} ${context.instructionText || ''}`;
-    const out = [];
-    const seen = new Set();
-    const folderIds = chatRefs.folderIds || [];
-    const folderRecords = _poolCache && folderIds.length
-        ? filterRefsByFolders(_poolCache, folderIds)
-        : [];
-    const records = [
-        ...chatRefs.referenceIds.map(refId => getRefSync(refId)).filter(Boolean),
-        ...folderRecords,
-    ];
-    for (const ref of records) {
-        if (cap !== null && out.length >= cap) break;
-        if (!ref?.imagePath || seen.has(ref.id)) continue;
-        seen.add(ref.id);
-        if (!(ref.aliases || []).some(alias => isNameInText(alias, text))) continue;
-        out.push({ id: ref.id, refId: ref.id, name: ref.name, imagePath: ref.imagePath });
-    }
-    return out;
-}
-
-/**
- * Collect references for the current chat (with fetch dataUrl) — for pipeline.
- */
-export async function collectRefsForCurrentChat(context = {}, override = null, maxRefs = null) {
-    const cap = normalizeReferenceCap(maxRefs ?? override?.maxRefs);
-    const descriptors = _resolveRefs(context, override, cap);
-    if (!descriptors.length) { log('References collected: 0'); return []; }
-    const refs = [];
-    for (const d of descriptors) {
-        let dataUrl = null;
-        try { dataUrl = await imageToDataUrl(d.imagePath); } catch { /* ignore individual failures */ }
-        if (dataUrl) refs.push({ id: d.id || d.refId || '', image: dataUrl, name: d.name });
-    }
-    log(`References collected: ${refs.length}`);
-    return cap === null ? refs : refs.slice(0, cap);
-}
-
-export function previewRefsForCurrentChat(context = {}, override = null, maxRefs = null) {
-    return _resolveRefs(context, override, maxRefs);
-}
-

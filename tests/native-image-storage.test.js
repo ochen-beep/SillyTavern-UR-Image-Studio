@@ -225,13 +225,13 @@ test('gallery mutations cannot cross chat ownership boundaries', async () => {
     };
     globalThis.SillyTavern = { getContext: () => context };
     globalThis.fetch = async () => ({ ok: true, text: async () => '', json: async () => ['one.png'] });
-    const { addToGallery, getGallery, removeFromGallery, updateGalleryEntry } = await import('../src/storage.js');
+    const { addToGallery, getGallery, deleteGalleryCard, updateGalleryEntry } = await import('../src/storage.js');
 
     await addToGallery('chat-a', {
         id: 'owned-by-a', imagePath: 'user/images/UR%20Image%20Studio/one.png', prompt: 'original',
     });
 
-    assert.equal(await removeFromGallery('chat-b', 'owned-by-a'), false);
+    assert.equal(await deleteGalleryCard('chat-b', 'owned-by-a'), false, 'чужая карточка не удаляется (guard как у removeFromGallery)');
     assert.equal(await updateGalleryEntry('chat-b', 'owned-by-a', { prompt: 'forged' }), null);
     assert.deepEqual((await getGallery('chat-a')).map(card => card.prompt), ['original']);
 });
@@ -504,17 +504,13 @@ test('gallery actions land in the diagnostic journal', async () => {
         if (u.startsWith('/user/files/')) return { ok: false, status: 404, text: async () => '' };
         return { ok: true, status: 200, json: async () => [], text: async () => '' };
     };
-    const { addToGallery, deleteGalleryCard, clearGallery, saveImageToFile } = await import('../src/storage.js');
+    const { addToGallery, deleteGalleryCard, clearGallery } = await import('../src/storage.js');
 
     await addToGallery('chat-a', { id: 'a', imagePath: 'user/images/UR%20Image%20Studio/one.png', prompt: 'one' });
-    await saveImageToFile('data:image/png;base64,AAAA');
     await deleteGalleryCard('chat-a', 'a');
     await clearGallery('chat-b');
 
     const events = listDiagnosticEvents();
-    const save = events.find(e => e.event === 'gallery-manual-save');
-    assert.ok(save, 'manual save writes a journal event');
-    assert.equal(save.outcome, 'ok');
     const remove = events.find(e => e.event === 'gallery-card-remove');
     assert.ok(remove, 'card removal writes a journal event');
     assert.equal(remove.outcome, 'hidden');

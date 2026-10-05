@@ -15,7 +15,7 @@ export async function imageToDataUrl(url, options = {}) {
         // Protection against 404/HTML error pages: the ST proxy on a missing avatar
     // returns HTML (resp.ok=false or Content-Type: text/html), and without this
     // check FileReader would encode the body as data:text/html, producing a
-    // "broken" reference that later fails compressDataUrl ("not an image data URL").
+    // "broken" reference that later fails optimizeReferenceImage ("not an image data URL").
     // Degrade to null so the slot is silently skipped, as intended for a missing avatar.
         if (!resp.ok) return null;
         const contentLength = Number(resp.headers?.get?.('content-length'));
@@ -324,17 +324,6 @@ export async function optimizeReferenceImage(input, options = {}) {
     }
 }
 
-/** Compatibility wrapper for callers that currently expect old metadata. */
-export async function compressDataUrl(dataUrl) {
-    const result = await optimizeReferenceImage(dataUrl);
-    return {
-        ...result,
-        format: result.mime,
-        originalBytes: result.sourceBytes,
-        compressedBytes: result.optimizedBytes,
-    };
-}
-
 // ── Server upload ──
 
 export async function uploadReferenceImage(dataUrl, filename, subfolder = 'URIS_Refs') {
@@ -611,22 +600,4 @@ export async function localizeRemoteReference(remoteUrl, filename) {
     if (!dataUrl) throw new Error(`Reference image could not be downloaded: ${remoteUrl}`);
     const optimized = await optimizeReferenceImage(dataUrl);
     return uploadReferenceImage(optimized.dataUrl, filename);
-}
-
-// ── Logging ──
-
-export function logRefsMeta(refs, label = 'refs') {
-    if (!refs.length) {
-        log(`${label}: none`);
-        return;
-    }
-    const rows = refs.map(r => ({
-        name: r.name,
-        format: r.meta?.format,
-        dimensions: r.meta ? `${r.meta.width}x${r.meta.height}` : '',
-        originalBytes: r.meta?.originalBytes,
-        compressedBytes: r.meta?.compressedBytes,
-    }));
-    log(`${label}:`, refs.length);
-    console.table(rows);
 }
