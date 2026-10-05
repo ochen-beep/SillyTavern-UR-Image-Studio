@@ -204,7 +204,6 @@ export function applyChatConfigToState(cfg) {
     // state.settings: that object is persisted globally by ST, so the last
     // visited chat's mode leaked into settings.json and came back as the next
     // session's startup default for every other chat.
-    state.chatAutomationMode = config.automationMode ?? defaultSettings.automationMode;
-    state.chatGenerationFlow = config.generationFlow ?? defaultSettings.generationFlow;
-    setFilter(state.chatGenerationFlow || POST_FILTER.AI_ONLY);
+    state.chatAutomationMode = config.automationMode ?? 'manual';
+    setFilter(config.generationFlow ?? POST_FILTER.AI_ONLY);
 }

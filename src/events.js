@@ -11,7 +11,7 @@ import { state, getCtx, log, warn, error } from './core.js';
 import { recordDiagnosticEvent, hashDiagnosticId } from './diagnostic-events.js';
 import { loadChatConfig, applyChatConfigToState } from './chat-binding.js';
 import { cancelForeignQueueItems } from './pipeline-queue.js';
-import { POST_FILTER, setFilter, getLastPostIndex, setCurrentMsgId, isGenerationEligible } from './post-navigator.js';
+import { POST_FILTER, setFilter, getFilter, getLastPostIndex, setCurrentMsgId, isGenerationEligible } from './post-navigator.js';
 
 let _bound = false;
 let _onAutomation = null;      // callback: ({chatId,msgId,messageText,templateId,requestedAction}) => Promise<void>
@@ -36,15 +36,12 @@ export function bindEvents(handlers) {
 
     _onAutomation = handlers?.onAutomation || null;
 
-    // Sync the post-navigator filter with the chat config projection loaded at init.
-    setFilter(state.chatGenerationFlow || POST_FILTER.AI_ONLY);
-
     const et = ctx.event_types;
 
     const triggerIfMatches = (msgId) => {
         if (!_chatConfigReady) return;
         if (msgId == null || msgId === -1) return;
-        const filter = state.generationFlow || POST_FILTER.AI_ONLY;
+        const filter = getFilter();
         if (filter === POST_FILTER.MANUAL) return;
         const msg = ctx.chat?.[msgId];
         if (!msg) return;
@@ -97,7 +94,7 @@ export function bindEvents(handlers) {
         if (!state.settings.enabled) return;
         const automationMode = state.chatAutomationMode || 'manual';
         if (automationMode === 'manual') return;
-        const filter = state.generationFlow || POST_FILTER.AI_ONLY;
+        const filter = getFilter();
         if (filter === POST_FILTER.USER_ONLY || filter === POST_FILTER.MANUAL) return;
         const i = getLastPostIndex();
         if (i != null) triggerIfMatches(i);
@@ -109,7 +106,7 @@ export function bindEvents(handlers) {
         if (!state.settings.enabled) return;
         const automationMode = state.chatAutomationMode || 'manual';
         if (automationMode === 'manual') return;
-        const filter = state.generationFlow || POST_FILTER.AI_ONLY;
+        const filter = getFilter();
         if (filter === POST_FILTER.AI_ONLY || filter === POST_FILTER.MANUAL) return;
         const i = (typeof msgId === 'number' && msgId >= 0) ? msgId : getLastPostIndex();
         if (i != null) triggerIfMatches(i);
@@ -157,7 +154,6 @@ export function bindEvents(handlers) {
             msgId: state.currentMsgId,
             details: { lastPost: state.currentMsgId },
         });
-        state.lastSentRefs = null;
         (async () => {
             try {
                 const cfg = await loadChatConfig();
@@ -220,7 +216,3 @@ export function unbindEvents() {
  * Notify UI that Stage 1 produced a prompt. No automatic Stage 2 is started here —
  * the automation flow uses the captured message identity in index.js.
  */
-export function notifyStage1Ready(instruction) {
-    window.dispatchEvent(new CustomEvent('uris:stage1-ready', { detail: instruction }));
-}
-

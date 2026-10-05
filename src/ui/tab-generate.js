@@ -5,8 +5,7 @@
  * compact aspect/size/quality controls, references panel, Advanced (template/automation/queue).
  */
 import { state, getCtx, escapeHtml, error, warn, VALID_ASPECT_RATIOS, VALID_IMAGE_SIZES, abortGeneration } from '../core.js';
-import { notifyStage1Ready } from '../events.js';
-import { POST_FILTER, navigatePosts, getPostInfo, setFilter, setCurrentMsgId, getLastPostIndex } from '../post-navigator.js';
+import { POST_FILTER, navigatePosts, getPostInfo, setFilter, getFilter, setCurrentMsgId, getLastPostIndex } from '../post-navigator.js';
 import { runStage1ForDraft, enqueueGeneration, createQueueItem, buildCandidates } from '../pipeline.js';
 import { getGenerationDraft, updateGenerationDraft, hashMessage, normalizeTemplateSelection, resolveDraftTemplateId, noteLiveGenerationParams, getLiveGenerationParams } from '../generation-drafts.js';
 import { listTemplates, getTemplate } from '../prompt-templates.js';
@@ -189,10 +188,10 @@ export function renderGenerateMarkup(vm) {
                     </select></span>
                 <span class="uris-param"><span class="uris-param-label">Флоу генерации</span>
                     <select class="text_pole" id="urisGenerationFlow">
-                        <option value="${POST_FILTER.AI_ONLY}" ${state.chatGenerationFlow === POST_FILTER.AI_ONLY ? 'selected' : ''}>Только AI</option>
-                        <option value="${POST_FILTER.USER_ONLY}" ${state.chatGenerationFlow === POST_FILTER.USER_ONLY ? 'selected' : ''}>Только пользователь</option>
-                        <option value="${POST_FILTER.ALL}" ${state.chatGenerationFlow === POST_FILTER.ALL ? 'selected' : ''}>Все сообщения</option>
-                        <option value="${POST_FILTER.MANUAL}" ${state.chatGenerationFlow === POST_FILTER.MANUAL ? 'selected' : ''}>Ручной выбор</option>
+                        <option value="${POST_FILTER.AI_ONLY}" ${getFilter() === POST_FILTER.AI_ONLY ? 'selected' : ''}>Только AI</option>
+                        <option value="${POST_FILTER.USER_ONLY}" ${getFilter() === POST_FILTER.USER_ONLY ? 'selected' : ''}>Только пользователь</option>
+                        <option value="${POST_FILTER.ALL}" ${getFilter() === POST_FILTER.ALL ? 'selected' : ''}>Все сообщения</option>
+                        <option value="${POST_FILTER.MANUAL}" ${getFilter() === POST_FILTER.MANUAL ? 'selected' : ''}>Ручной выбор</option>
                     </select></span>`;
 
     return `
@@ -749,7 +748,6 @@ export function bindGenerate(root) {
             if (!input) return;
             const run = await runStage1ForDraft(input);
             if (run.applied) {
-                notifyStage1Ready(run.draft.prompt);
                 toastr?.success('Промпт построен');
             }
         } catch (e) {
@@ -809,7 +807,6 @@ export function bindGenerate(root) {
     // next session's startup default for every other chat.
     root.querySelector('#urisGenerationFlow')?.addEventListener('change', async e => {
         const flow = e.target.value;
-        state.chatGenerationFlow = flow;
         setFilter(flow);
         await patchChatConfig({ generationFlow: flow });
     });

@@ -109,8 +109,6 @@ async function init() {
     await loadDiagnosticEvents();
     recordDiagnosticEvent({ event: 'session-start', details: { initialized: true } });
 
-    if (state.settings.collapsed === undefined) state.settings.collapsed = true;
-
     // Resolve the file-backed stores before the first render: their contents
     // live on the server now, and the first read must see the migrated/persisted
     // data rather than an empty mirror. This is also what performs the one-time

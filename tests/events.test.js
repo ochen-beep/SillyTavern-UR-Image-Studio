@@ -2,6 +2,7 @@
 // Unit-тесты для src/events.js
 import { test, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
+import { setFilter } from '../src/post-navigator.js';
 
 // EventSource mock: real ST EventEmitter supports many subscribers per event,
 // so we keep a Set of listeners per event (not a single fn). `listeners[evt]`
@@ -98,10 +99,9 @@ beforeEach(() => {
     // runtime fields events.js reads. Never in state.settings: that object is
     // persisted globally and must not leak a per-chat mode across sessions.
     state.chatAutomationMode = 'build-prompt';
-    state.chatGenerationFlow = POST_FILTER.AI_ONLY;
+    setFilter(POST_FILTER.AI_ONLY);
     state.currentMsgId = null;
     state.currentChatId = null;
-    state.generationFlow = POST_FILTER.AI_ONLY;
     testCtx.chatId = 'test-chat';
     unbindEvents();
 });
@@ -124,7 +124,7 @@ test('ai-only flow: GENERATION_ENDED triggers, MESSAGE_SENT does not', () => {
 });
 
 test('user-only flow: MESSAGE_SENT triggers, GENERATION_ENDED does not', () => {
-    state.chatGenerationFlow = POST_FILTER.USER_ONLY;
+    setFilter(POST_FILTER.USER_ONLY);
     state.generationFlow = POST_FILTER.USER_ONLY;
     let called = null;
     bindEvents({ onAutomation: ({ msgId }) => { called = msgId; } });
@@ -136,7 +136,7 @@ test('user-only flow: MESSAGE_SENT triggers, GENERATION_ENDED does not', () => {
 });
 
 test('all flow: both events trigger', () => {
-    state.chatGenerationFlow = POST_FILTER.ALL;
+    setFilter(POST_FILTER.ALL);
     state.generationFlow = POST_FILTER.ALL;
     testCtx.chat = [
         { mes: 'a1', is_user: false },
@@ -153,7 +153,7 @@ test('all flow: both events trigger', () => {
 });
 
 test('MESSAGE_SENT uses provided msgId when available', () => {
-    state.chatGenerationFlow = POST_FILTER.ALL;
+    setFilter(POST_FILTER.ALL);
     state.generationFlow = POST_FILTER.ALL;
     let called = null;
     bindEvents({ onAutomation: ({ msgId }) => { called = msgId; } });
@@ -182,7 +182,7 @@ test('GENERATION_ENDED triggers onAutomation for last AI post in ai-only flow', 
 });
 
 test('GENERATION_ENDED triggers onAutomation for last AI post in all flow', () => {
-    state.chatGenerationFlow = POST_FILTER.ALL;
+    setFilter(POST_FILTER.ALL);
     state.generationFlow = POST_FILTER.ALL;
     let called = null;
     bindEvents({ onAutomation: ({ msgId }) => { called = msgId; } });
@@ -192,7 +192,7 @@ test('GENERATION_ENDED triggers onAutomation for last AI post in all flow', () =
 });
 
 test('MESSAGE_SENT triggers onAutomation for last user post in user-only flow', () => {
-    state.chatGenerationFlow = POST_FILTER.USER_ONLY;
+    setFilter(POST_FILTER.USER_ONLY);
     state.generationFlow = POST_FILTER.USER_ONLY;
     let called = null;
     bindEvents({ onAutomation: ({ msgId }) => { called = msgId; } });
@@ -236,7 +236,7 @@ test('onAutomation receives captured chatId, msgId, messageText, and requestedAc
 });
 
 test('unbindEvents removes all listeners', () => {
-    state.chatGenerationFlow = POST_FILTER.ALL;
+    setFilter(POST_FILTER.ALL);
     state.generationFlow = POST_FILTER.ALL;
     bindEvents({ onAutomation: () => {} });
     unbindEvents();
@@ -600,7 +600,7 @@ test('system and hidden posts do not trigger automation', () => {
 });
 
 test('user-only flow: empty user post does not trigger automation', () => {
-    state.chatGenerationFlow = POST_FILTER.USER_ONLY;
+    setFilter(POST_FILTER.USER_ONLY);
     state.generationFlow = POST_FILTER.USER_ONLY;
     testCtx.chat = [{ mes: '   ', is_user: true }];
     let called = null;

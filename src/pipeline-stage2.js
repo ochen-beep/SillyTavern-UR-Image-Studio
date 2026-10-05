@@ -266,7 +266,6 @@ export async function runStage2ForDraft(input, onStatus = () => {}, signal, opts
         });
 
         // UI mirror of sent refs.
-        state.lastSentRefs = refs;
         try { opts.onRefsSent?.(refs); } catch (e) { warn('pipeline: onRefsSent threw', e.message); }
 
         const referenceEntries = [

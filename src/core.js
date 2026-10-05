@@ -146,8 +146,7 @@ export const state = {
     queue: [],                 // batch generation queue: [{msgId, resolve, reject}]
     queueRunning: false,
     queueAbort: null,          // separate AbortController for the entire queue
-    runningQueueRequestId: null, // requestId of the currently-running queue item (for «Пропустить»)
-    abortController: null,     // DEPRECATED: replaced by activeGenerations Map; kept for migration safety
+    runningQueueRequestId: null, // активная очередь-задача; читает diagnostic-dump
     activeGenerations: new Map(), // Map<requestId, AbortController> - per-request cancellation
     // Per-msgId FIFO chain for manual Stage 2 (Promise-chain). Each manual
     // click (tab-generate #urisGenImg, gallery [data-act="regen"]) enters
@@ -166,14 +165,10 @@ export const state = {
     // leaked the last visited chat's mode into the globally persisted
     // settings.json, and it came back as the next session's startup default.
     chatAutomationMode: 'manual',  // 'manual' | 'build-prompt' | 'full-pipeline'
-    chatGenerationFlow: 'ai-only', // 'ai-only' | 'user-only' | 'all' | 'manual'
-    lastInstruction: null,     // last built Stage 1 instruction
-    styleOverride: '',         // runtime style override from UI (overrides pinned/random/llm-pick)
     // pendingSourceMsgId / pendingSourceMesHash are set in runStage1
     // for race-safe post checking before anchor injection (pipeline.js).
 
     // Snapshot of references actually sent by the last generation (for inline preview on the Generate tab).
-    lastSentRefs: null,
 };
 
 /**
@@ -221,14 +216,9 @@ export const defaultSettings = Object.freeze({
     collapsed: true,           // window hidden until first open
     launcherMode: 'bar',       // 'bar' | 'floating' | 'both' — кнопка(и) запуска
     activeTab: 'generate',     // last selected floating window tab
-    automationMode: 'manual',   // DEPRECATED runtime shadow of the chat config; kept for
-                                // settings-shape compatibility — the authoritative value lives
-                                // in the per-chat schema-v5 config (state.chatAutomationMode)
     bridgeEnabled: true,       // external bridge (globalThis.URIS) accepts generations from other extensions
     bridgeTab: false,          // show the experimental "Мост" lab tab in the floating window
     experimentalTemplateFromDescription: false,
-    generationFlow: 'ai-only', // DEPRECATED: authoritative value lives in the per-chat
-                               // schema-v5 config (state.chatGenerationFlow)
     followLastPost: true,      // Generation tab navigator follows the last post
     maxRetries: 0,
     retryDelay: 1000,

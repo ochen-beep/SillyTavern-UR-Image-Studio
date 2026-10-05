@@ -1,6 +1,7 @@
 // @ts-check
 import { test, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
+import { getFilter } from '../src/post-navigator.js';
 
 function makeInMemoryLFA() {
     const store = new Map();
@@ -274,7 +275,7 @@ test('applyChatConfigToState projects schema-v5 config onto runtime state', asyn
     // Runtime projection lives on dedicated chat-scoped fields: state.settings
     // is persisted globally and must not absorb the last visited chat's mode.
     assert.equal(core.state.chatAutomationMode, 'full-pipeline');
-    assert.equal(core.state.chatGenerationFlow, 'user-only');
+    assert.equal(getFilter(), 'user-only');
     assert.equal(Object.hasOwn(core.state.settings, 'automationMode'), false);
     assert.equal(Object.hasOwn(core.state.settings, 'generationFlow'), false);
 });
