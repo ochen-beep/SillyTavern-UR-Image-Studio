@@ -6,7 +6,7 @@
  *
  * processQueue orchestrates both stages, so it imports Stage 1 and Stage 2.
  */
-import { state, getCtx, log, error } from './core.js';
+import { state, getCtx, log, error, fnv1a32 } from './core.js';
 import { recordDiagnosticEvent, hashDiagnosticId } from './diagnostic-events.js';
 import { hashMessage, deepFreezeSnapshot } from './generation-drafts.js';
 import { resolveChatConfigSnapshot } from './pipeline-config.js';
@@ -131,6 +131,10 @@ function queueLabel(item) {
     return item?.chatId === STUDIO_CHAT_ID ? 'Студия' : `Пост #${Number(item?.msgId) + 1}`;
 }
 
+// Элемент, который прямо сейчас исполняется очередью (уже вынут из
+// state.queue) — участвует в guard'е двойного запуска (пункт 3.2).
+let runningQueueItem = null;
+
 async function processQueue() {
     if (state.queueRunning) return;
     state.queueRunning = true;
@@ -139,6 +143,7 @@ async function processQueue() {
     try {
         while (state.queue.length && !state.queueAbort.signal.aborted) {
             const { item, resolve, reject, queueId } = state.queue.shift();
+            runningQueueItem = item;
             try {
                 const ctx = getCtx();
                 // Studio items keep the text captured at enqueue time: there is
@@ -218,6 +223,7 @@ async function processQueue() {
             }
         }
     } finally {
+        runningQueueItem = null;
         state.queueRunning = false;
         state.queueAbort = null;
         // Reject remaining tasks
@@ -227,6 +233,38 @@ async function processQueue() {
         }
         state.queue = [];
     }
+}
+
+/**
+ * Отпечаток генерации для guard'а двойного запуска (пункт 3.2 плана
+ * 2026-10-05): (connId, modelId, промпт, стороны, размер, quality).
+ * fnv1a32 — не крипто: нужно только, чтобы два одинаковых клика совпали.
+ * @param {object} item — очередь-элемент из createQueueItem
+ * @returns {number}
+ */
+export function queueItemFingerprint(item) {
+    const config = item?.chatConfig || {};
+    const sub = item?.submission || {};
+    return fnv1a32([
+        config.imageProfileId ?? '',
+        config.imageRoute?.modelId ?? config.generationDefaults?.modelId ?? '',
+        String(sub.prompt || ''),
+        sub.aspectRatio ?? '', sub.imageSize ?? '', sub.quality ?? '',
+    ].join(' '));
+}
+
+/**
+ * Guard двойного запуска: та же генерация уже стоит в очереди или исполняется?
+ * Возвращает найденный элемент-дубликат или null. Ручной явный повтор остаётся
+ * возможным — решение за пользователем в подтверждении.
+ * @param {object} item
+ * @returns {object|null}
+ */
+export function findQueuedDuplicate(item) {
+    if (!item) return null;
+    const fingerprint = queueItemFingerprint(item);
+    const candidates = [runningQueueItem, ...state.queue.map(entry => entry.item)].filter(Boolean);
+    return candidates.find(other => other !== item && queueItemFingerprint(other) === fingerprint) || null;
 }
 
 /**

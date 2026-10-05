@@ -4,9 +4,10 @@
  * Layout: post-navigator, excerpt/stale badge, prompt editor, actions Stage 1 / Stage 2,
  * compact aspect/size/quality controls, references panel, Advanced (template/automation/queue).
  */
-import { state, getCtx, escapeHtml, error, warn, VALID_ASPECT_RATIOS, VALID_IMAGE_SIZES, abortGeneration } from '../core.js';
+import { state, getCtx, escapeHtml, error, warn, showConfirmModal, VALID_ASPECT_RATIOS, VALID_IMAGE_SIZES, abortGeneration } from '../core.js';
+import { recordDiagnosticEvent, hashDiagnosticId } from '../diagnostic-events.js';
 import { POST_FILTER, navigatePosts, getPostInfo, setFilter, getFilter, setCurrentMsgId, getLastPostIndex } from '../post-navigator.js';
-import { runStage1ForDraft, enqueueGeneration, createQueueItem, buildCandidates } from '../pipeline.js';
+import { runStage1ForDraft, enqueueGeneration, createQueueItem, findQueuedDuplicate, buildCandidates } from '../pipeline.js';
 import { getGenerationDraft, updateGenerationDraft, hashMessage, normalizeTemplateSelection, resolveDraftTemplateId, noteLiveGenerationParams, getLiveGenerationParams } from '../generation-drafts.js';
 import { listTemplates, getTemplate } from '../prompt-templates.js';
 import { resolveSTMacros } from '../template-runtime.js';
@@ -931,6 +932,19 @@ export async function submitCurrentGeneration(root, deps = {}) {
             templateId: input.templateId,
             submission: input.submission,
         });
+        // Guard двойного запуска (пункт 3.2): та же генерация уже в очереди
+        // или исполняется — повторный запуск означает повторную оплату. Явный
+        // обход остаётся у пользователя в подтверждении.
+        const duplicate = findQueuedDuplicate(item);
+        if (duplicate) {
+            const confirmDuplicate = deps.confirmDuplicate || showConfirmModal;
+            const proceed = await confirmDuplicate('Такая генерация уже в очереди или выполняется. Запустить всё равно?');
+            if (!proceed) {
+                recordDiagnosticEvent({ event: 'queue-duplicate-blocked', stage: 'queue', chatHash: hashDiagnosticId(input.chatId), msgId: input.msgId });
+                toastr?.info('Генерация не добавлена — дубликат уже в очереди');
+                return;
+            }
+        }
         // Read after the await so the busy check reflects the queue state at
         // enqueue time, not before the submission snapshot was resolved.
         const wasBusy = state.queueRunning || state.queue.length > 0;

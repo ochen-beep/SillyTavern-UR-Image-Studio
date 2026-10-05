@@ -550,3 +550,47 @@ test('retry-снапшоты завершённых элементов очер�
         restore();
     }
 });
+
+// ── Guard двойного запуска (пункт 3.2) ──
+
+test('queueItemFingerprint: одинаковые сабмишены совпадают, разные промпты/модели — нет', async () => {
+    const { createQueueItem, queueItemFingerprint } = await import('../src/pipeline-queue.js');
+    const mk = (prompt) => createQueueItem({
+        chatId: 'test-chat', msgId: 0, messageText: 'A cat.',
+        requestedAction: 'current-prompt-stage2', templateId: null,
+        submission: { prompt, aspectRatio: '2:3', imageSize: '1K', quality: 'high',
+            references: { includedIds: [], excludedIds: [], revision: 0 } },
+    });
+    const a = await mk('один промпт');
+    const b = await mk('один промпт');
+    const c = await mk('другой промпт');
+    assert.equal(queueItemFingerprint(a), queueItemFingerprint(b), 'двойной клик → один отпечаток');
+    assert.notEqual(queueItemFingerprint(a), queueItemFingerprint(c), 'другой промпт — другой отпечаток');
+});
+
+test('findQueuedDuplicate: дубликат в очереди находится, чужой промпт — нет', async () => {
+    const { createQueueItem, findQueuedDuplicate } = await import('../src/pipeline-queue.js');
+    const existing = await createQueueItem({
+        chatId: 'test-chat', msgId: 0, messageText: 'A cat.',
+        requestedAction: 'current-prompt-stage2', templateId: null,
+        submission: { prompt: 'PT', aspectRatio: '1:1', imageSize: '1K', quality: 'auto',
+            references: { includedIds: [], excludedIds: [], revision: 0 } },
+    });
+    // Ручной push имитирует элемент, стоящий в очереди (без запуска обработки).
+    coreState.queue.push({ item: existing, queueId: 'qx' });
+    const same = await createQueueItem({
+        chatId: 'test-chat', msgId: 0, messageText: 'A cat.',
+        requestedAction: 'current-prompt-stage2', templateId: null,
+        submission: { prompt: 'PT', aspectRatio: '1:1', imageSize: '1K', quality: 'auto',
+            references: { includedIds: [], excludedIds: [], revision: 0 } },
+    });
+    const other = await createQueueItem({
+        chatId: 'test-chat', msgId: 0, messageText: 'A cat.',
+        requestedAction: 'current-prompt-stage2', templateId: null,
+        submission: { prompt: 'Другой промпт', aspectRatio: '1:1', imageSize: '1K', quality: 'auto',
+            references: { includedIds: [], excludedIds: [], revision: 0 } },
+    });
+    assert.equal(findQueuedDuplicate(same), existing, 'дубликат найден');
+    assert.equal(findQueuedDuplicate(other), null, 'другой промпт не блокируется');
+    assert.equal(findQueuedDuplicate(null), null);
+});

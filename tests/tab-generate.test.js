@@ -1403,3 +1403,52 @@ test('composeEffectiveParams: chat-дефолты важнее черновик�
         { aspectRatio: '2:3', imageSize: '1K', quality: 'auto' },
     );
 });
+
+// ── Guard двойного запуска (пункт 3.2) ──
+
+function submitGuardContext() {
+    return {
+        chatId: 'c1',
+        chat: [{ mes: 'hello' }],
+        chatMetadata: {},
+        extensionSettings: {},
+        saveSettingsDebounced: () => {},
+        getRequestHeaders: () => ({}),
+    };
+}
+
+test('guard двойного запуска: дубликат с отказом не ставится в очередь', async () => {
+    const originalCtx = globalThis.SillyTavern.getContext;
+    const infos = [];
+    globalThis.toastr = { info: m => infos.push(m), success: () => {}, error: () => {}, warning: () => {} };
+    globalThis.SillyTavern.getContext = submitGuardContext;
+    state.currentMsgId = 0;
+    state.queue = [];
+    const captured = [];
+    const promptEl = { value: 'draw a cat' };
+    const fakeRoot = { querySelector: sel => (sel === '#urisPrompt' ? promptEl : null) };
+    try {
+        // Первый клик — ставится в очередь обычным enqueue.
+        await tabGenerate.submitCurrentGeneration(fakeRoot, {
+            enqueue: item => { captured.push(item); state.queue.push({ item, queueId: 'qx1' }); return Promise.resolve(null); },
+        });
+        assert.equal(captured.length, 1);
+        // Второй клик с тем же промптом: пользователь отказывается.
+        await tabGenerate.submitCurrentGeneration(fakeRoot, {
+            enqueue: item => { captured.push(item); return Promise.resolve(null); },
+            confirmDuplicate: async () => false,
+        });
+        assert.equal(captured.length, 1, 'дубликат не поставлен');
+        assert.match(infos.join(' '), /дубликат уже в очереди/);
+        // Третий клик: «Запустить всё равно» — ставится.
+        await tabGenerate.submitCurrentGeneration(fakeRoot, {
+            enqueue: item => { captured.push(item); return Promise.resolve(null); },
+            confirmDuplicate: async () => true,
+        });
+        assert.equal(captured.length, 2, 'явный обход подтверждением работает');
+    } finally {
+        globalThis.SillyTavern.getContext = originalCtx;
+        globalThis.toastr = undefined;
+        state.queue = [];
+    }
+});

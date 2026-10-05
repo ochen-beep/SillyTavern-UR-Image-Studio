@@ -14,4 +14,4 @@
 export { createChatConfigSnapshot, resolveActivePresets, buildCandidates } from './pipeline-config.js';
 export { runStage1ForDraft, runFullPipelineForDraft } from './pipeline-stage1.js';
 export { runStage2ForDraft, runStage2 } from './pipeline-stage2.js';
-export { createQueueItem, enqueueGeneration, stopQueue, cancelQueuedItem, cancelForeignQueueItems, resubmitQueueRow } from './pipeline-queue.js';
+export { createQueueItem, enqueueGeneration, stopQueue, cancelQueuedItem, cancelForeignQueueItems, resubmitQueueRow, queueItemFingerprint, findQueuedDuplicate } from './pipeline-queue.js';
