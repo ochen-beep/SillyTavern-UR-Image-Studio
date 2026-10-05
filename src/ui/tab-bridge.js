@@ -98,9 +98,9 @@ export function render(root) {
                 <label class="checkbox_label"><input type="checkbox" id="urisLabAutoRefs" ${_lab.autoRefs ? 'checked' : ''}><span>Авто-подбор референсов по промпту (резолвер Stage 2)</span></label>
                 <div class="uris-field">
                     <label>Референсы из пула URIS</label>
-                    <div id="urisLabRefs" style="max-height:160px;overflow:auto;border:1px solid var(--SmartThemeBorderColor,#444);border-radius:6px;padding:4px">
+                    <div id="urisLabRefs" class="uris-lab-box uris-lab-refs">
                         ${(_lab.refs || []).map(ref => `
-                            <label class="checkbox_label" style="margin:2px 0"><input type="checkbox" data-ref-id="${escapeHtml(ref.id)}" ${_lab.refIds.has(ref.id) ? 'checked' : ''}><span>${escapeHtml(ref.name)}</span></label>`).join('') || '<small class="uris-hint">Пул пуст.</small>'}
+                            <label class="checkbox_label"><input type="checkbox" data-ref-id="${escapeHtml(ref.id)}" ${_lab.refIds.has(ref.id) ? 'checked' : ''}><span>${escapeHtml(ref.name)}</span></label>`).join('') || '<small class="uris-hint">Пул пуст.</small>'}
                     </div>
                     <small class="uris-hint">Отмеченные уйдут как references [{refId}] — мост сам возьмёт картинку из пула.</small>
                 </div>
@@ -133,7 +133,7 @@ export function render(root) {
                 <div class="uris-settings-actions">
                     <button type="button" class="uris-btn uris-btn-ghost" id="urisLabCaps"><i class="fa-solid fa-list-check"></i> Показать возможности</button>
                 </div>
-                <small class="uris-hint" id="urisLabCapsOut" style="white-space:pre-wrap">${escapeHtml(_lab.capsText)}</small>
+                <small class="uris-hint uris-pre" id="urisLabCapsOut">${escapeHtml(_lab.capsText)}</small>
             </section>
 
             <section class="uris-settings-section">
@@ -145,7 +145,7 @@ export function render(root) {
                 <h3>Галерея caller'а <small class="uris-hint">(listGallery + removeCard)</small></h3>
                 <small class="uris-hint">Карточки с provenance.requestId = ext_&lt;caller&gt;_…. Удаление скоупнуто: чужие и ручные карточки мост удалить не даст (CARD_NOT_OWNED); файл на диске остаётся.</small>
                 <small class="uris-hint" id="urisLabGalleryOut">${escapeHtml(_lab.galleryText)}</small>
-                <div id="urisLabGallery" style="display:flex;flex-wrap:wrap;gap:6px">${_labGalleryHtml()}</div>
+                <div id="urisLabGallery" class="uris-flex-wrap">${_labGalleryHtml()}</div>
             </section>
 
             <section class="uris-settings-section">
@@ -159,7 +159,7 @@ export function render(root) {
 }
 
 function _labTriggerChip(t) {
-    return `<span style="display:inline-block;border:1px solid var(--SmartThemeBorderColor,#444);border-radius:10px;padding:1px 8px;margin:2px" title="${escapeHtml(t.aliases.join(', '))}">${escapeHtml(t.id)} · ${escapeHtml(t.aspect)}${t.refsPolicy === 'off' ? ' · refs off' : ''}</span>`;
+    return `<span class="uris-tpl-chip" title="${escapeHtml(t.aliases.join(', '))}">${escapeHtml(t.id)} · ${escapeHtml(t.aspect)}${t.refsPolicy === 'off' ? ' · refs off' : ''}</span>`;
 }
 
 function _labTriggersHtml() {
@@ -172,9 +172,9 @@ function _labGalleryHtml() {
     if (!_lab.gallery) return '<small class="uris-hint">Не загружено.</small>';
     if (!_lab.gallery.length) return '<small class="uris-hint">Карточек этого caller пока нет.</small>';
     return _lab.gallery.map(card => `
-        <div style="position:relative;border:1px solid var(--SmartThemeBorderColor,#444);border-radius:6px;padding:2px">
-            <img src="/${escapeHtml(card.thumbPath || card.imagePath || '')}" alt="" title="${escapeHtml(card.prompt.slice(0, 200))}" style="display:block;width:72px;height:72px;object-fit:cover;border-radius:4px${card.status === 'missing' ? ';opacity:.4' : ''}">
-            <button type="button" class="uris-btn uris-btn-ghost" data-card-id="${escapeHtml(card.id)}" title="removeCard (только свои карточки)" style="position:absolute;top:2px;right:2px;padding:0 5px;line-height:1.2">×</button>
+        <div class="uris-lab-card">
+            <img class="uris-lab-card-img${card.status === 'missing' ? ' uris-is-missing' : ''}" src="/${escapeHtml(card.thumbPath || card.imagePath || '')}" alt="" title="${escapeHtml(card.prompt.slice(0, 200))}">
+            <button type="button" class="uris-btn uris-btn-ghost uris-lab-card-del" data-card-id="${escapeHtml(card.id)}" title="removeCard (только свои карточки)">×</button>
         </div>`).join('');
 }
 
@@ -182,7 +182,7 @@ function _labPendingHtml() {
     if (!_lab.pending) return '<small class="uris-hint">Не загружено.</small>';
     if (!_lab.pending.length) return '<small class="uris-hint">Неподтверждённых платных запросов нет.</small>';
     return _lab.pending.map(rec => `
-        <div style="border:1px solid var(--SmartThemeBorderColor,#444);border-radius:6px;padding:4px;margin:4px 0">
+        <div class="uris-lab-box">
             <small><code>${escapeHtml(rec.requestId)}</code> — ${escapeHtml(rec.status)}${rec.error ? ` · ${escapeHtml(rec.error)}` : ''}</small><br>
             <small class="uris-hint">${escapeHtml(rec.createdAt || '')} · ${escapeHtml(rec.aspectRatio || '?')} · refs: ${rec.referenceCount}</small><br>
             <small class="uris-hint">${escapeHtml(rec.prompt.slice(0, 160))}${rec.prompt.length > 160 ? '…' : ''}</small>
@@ -344,7 +344,7 @@ function bindLab(root) {
                 },
                 { caller: _lab.caller.trim() || 'bridge-test', signal: ctl.signal, onStatus: s => labOut(root, s) },
             );
-            const img = `<img src="/${escapeHtml(res.imagePath || '')}" alt="" style="max-width:100%;max-height:240px;border-radius:8px;border:1px solid var(--SmartThemeBorderColor,#444)">`;
+            const img = `<img class="uris-media-img" src="/${escapeHtml(res.imagePath || '')}" alt="">`;
             _lab.resultHtml = img;
             if (preview) preview.innerHTML = img;
             labOut(root, `Готово [${res.requestId}]: ${res.width ?? '?'}×${res.height ?? '?'} · ${res.imagePath}`);
@@ -398,7 +398,7 @@ async function refreshLabData(root) {
             const box = root?.querySelector?.('#urisLabRefs');
             if (box) {
                 box.innerHTML = refs.map(ref => `
-                    <label class="checkbox_label" style="margin:2px 0"><input type="checkbox" data-ref-id="${escapeHtml(ref.id)}" ${_lab.refIds.has(ref.id) ? 'checked' : ''}><span>${escapeHtml(ref.name)}</span></label>`).join('')
+                    <label class="checkbox_label"><input type="checkbox" data-ref-id="${escapeHtml(ref.id)}" ${_lab.refIds.has(ref.id) ? 'checked' : ''}><span>${escapeHtml(ref.name)}</span></label>`).join('')
                     || '<small class="uris-hint">Пул пуст.</small>';
             }
         }

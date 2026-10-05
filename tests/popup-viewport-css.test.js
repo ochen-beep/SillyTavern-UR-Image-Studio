@@ -101,6 +101,25 @@ test('мобильная ERR-панель: top-привязка, без bottom (
     assert.match(block, /bottom:\s*auto/, 'bottom должен быть явно отключён (auto)');
 });
 
+test('панель бейджа выше sticky-тулбара галереи (мобильная регрессия наложения)', () => {
+    // Регрессия 2026-10-04: на мобиле .uris-gallery-toolbar — sticky с z-index: 5,
+    // а панель бейджа была z-index: 3. Оба живут в stacking-контексте .uris-window,
+    // поэтому тулбар рисовался поверх открытой QUEUE/INFO-панели и перехватывал
+    // её тапы. Панель — транзиентный оверлей: обязана быть выше ЛЮБОГО содержимого
+    // вкладок, каким бы оно ни было позиционированным.
+    const panelBlock = ruleBlock('.uris-error-panel {');
+    const panelZ = Number(panelBlock.match(/z-index:\s*(\d+)/)?.[1]);
+    assert.ok(panelZ > 0, 'у панели должен быть явный положительный z-index');
+    const stickyToolbars = [...css.matchAll(/\.uris-gallery-toolbar\s*\{([^}]*)\}/g)]
+        .map(m => m[1])
+        .filter(body => /position:\s*sticky/.test(body));
+    assert.ok(stickyToolbars.length > 0, 'мобильный sticky-тулбар галереи не найден');
+    for (const body of stickyToolbars) {
+        const toolbarZ = Number(body.match(/z-index:\s*(\d+)/)?.[1] ?? 0);
+        assert.ok(panelZ > toolbarZ, `панель (z=${panelZ}) обязана быть выше sticky-тулбара галереи (z=${toolbarZ})`);
+    }
+});
+
 test('uris-drag-ghost: слой --uris-z-ghost (выше окна — см. тест слоёв)', () => {
     const block = ruleBlock('.uris-drag-ghost {');
     assert.match(block, /z-index:\s*var\(--uris-z-ghost\)/, 'призрак должен жить на слое --uris-z-ghost');

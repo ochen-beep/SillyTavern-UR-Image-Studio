@@ -211,7 +211,10 @@ function shellFor(msgId, entry) {
     if (entry.status === 'pending') {
         const profile = profileFor(entry.type);
         const frame = document.createElement('div');
-        frame.setAttribute('style', 'aspect-ratio:' + aspectRatioCss(profile?.aspect || '1:1') + ';max-width:100%;border:1px dashed var(--SmartThemeBorderColor,#666);border-radius:10px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:6px;padding:12px;color:var(--SmartThemeEmColor,inherit);font-size:small;line-height:1.4');
+        frame.classList.add('uris-inl-pending');
+        // Аспект динамический (зависит от профиля) — единственный inline-стиль,
+        // остальная геометрия заглушки живёт в .uris-inl-pending (style.css).
+        frame.setAttribute('style', 'aspect-ratio:' + aspectRatioCss(profile?.aspect || '1:1'));
         const spin = document.createElement('i');
         spin.classList.add('fa-solid');
         spin.classList.add('fa-spinner');
@@ -224,7 +227,6 @@ function shellFor(msgId, entry) {
         cancel.classList.add('uris-inl-cancel');
         cancel.setAttribute('data-uris-cancel', '1');
         cancel.setAttribute('title', 'Отменить генерацию');
-        cancel.setAttribute('style', 'margin-top:2px;padding:2px 10px;border-radius:8px;border:1px solid var(--SmartThemeBorderColor,#666);background:transparent;color:inherit;cursor:pointer;font-size:small');
         cancel.textContent = '✕';
         cancel.addEventListener('click', (ev) => {
             try { ev?.stopPropagation?.(); } catch { /* fake-dom */ }
@@ -238,7 +240,6 @@ function shellFor(msgId, entry) {
     // button / changed / error — кликабельная строка
     const btn = document.createElement('button');
     btn.classList.add('uris-inl-btn');
-    btn.setAttribute('style', 'display:inline-flex;align-items:center;gap:6px;margin:4px 0;padding:4px 10px;border-radius:8px;border:1px solid var(--SmartThemeBorderColor,#666);background:transparent;color:inherit;cursor:pointer;font-size:small;line-height:1.4');
     if (entry.status === 'changed') {
         btn.textContent = 'Описание изменилось — клик: перерисовать';
     } else if (entry.status === 'error') {

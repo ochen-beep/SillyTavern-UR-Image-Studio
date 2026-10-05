@@ -214,7 +214,7 @@ async function runBench(root) {
     try {
         const res = await queueInlineJob({ msgId: -1, idx: 0, type, desc });
         if (out) {
-            out.innerHTML = `<img src="/${escapeHtml(res?.imagePath || '')}" alt="" style="max-width:100%;max-height:240px;border-radius:8px;border:1px solid var(--SmartThemeBorderColor,#444)">`
+            out.innerHTML = `<img class="uris-media-img" src="/${escapeHtml(res?.imagePath || '')}" alt="">`
                 + '<small class="uris-hint">Готово — ровно та оболочка, что появится в чате.</small>';
         }
     } catch (e) {
@@ -249,7 +249,7 @@ function renderFeed(root) {
         box.innerHTML = '<small class="uris-hint">Пока пусто: готовые инлайн-картинки этого чата появятся здесь.</small>';
         return;
     }
-    box.innerHTML = `<div class="uris-media-feed">${items.map((it, i) => `<img class="uris-media-feed-item" src="/${escapeHtml(it.imagePath)}" data-feed-idx="${i}" alt="" title="${escapeHtml(`${it.type || 'img'} · ${new Date(it.createdAt || Date.now()).toLocaleString()}`)}" style="max-height:96px;max-width:96px;border-radius:8px;border:1px solid var(--SmartThemeBorderColor,#444);cursor:pointer">`).join('')}</div>`;
+    box.innerHTML = `<div class="uris-media-feed">${items.map((it, i) => `<img class="uris-media-feed-item" src="/${escapeHtml(it.imagePath)}" data-feed-idx="${i}" alt="" title="${escapeHtml(`${it.type || 'img'} · ${new Date(it.createdAt || Date.now()).toLocaleString()}`)}">`).join('')}</div>`;
     for (const img of Array.from(box.querySelectorAll('img'))) {
         img.addEventListener('click', () => {
             const it = items[Number(img.getAttribute('data-feed-idx')) || 0];

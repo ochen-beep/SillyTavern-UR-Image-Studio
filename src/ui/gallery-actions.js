@@ -247,7 +247,7 @@ async function confirmDeleteModal(ctx) {
     }
     const result = await ctx.callGenericPopup(
         'Удалить картинку из галереи расширения?' +
-        '<label class="checkbox_label" style="margin-top:10px;display:block;">' +
+        '<label class="checkbox_label uris-label-block">' +
         '<input type="checkbox" id="urisDeleteFile">' +
         '<span>Также стереть файл и убрать из галереи чата (Show Gallery)</span>' +
         '</label>',
