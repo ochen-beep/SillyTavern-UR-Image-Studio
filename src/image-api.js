@@ -11,7 +11,7 @@ import { addCard, updateCard } from './gallery-index.js';
 import { providerError } from './providers/image-base.js';
 import { summarizeReference } from './references.js';
 import { aspectDeviates } from './aspect-ratio.js';
-import { getDiagnosticSessionId, hashDiagnosticId, recordDiagnosticEvent, listDiagnosticEvents } from './diagnostic-events.js';
+import { getDiagnosticSessionId, hashDiagnosticId, recordDiagnosticEvent, listDiagnosticEvents, flushDiagnosticEvents } from './diagnostic-events.js';
 import { savePendingBrowserRequest, updatePendingBrowserRequest, discardPendingBrowserRequest, dispatchErrorKnown } from './browser-image-recovery.js';
 
 const REQUEST_ID = /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/;
@@ -266,6 +266,10 @@ export async function generateImageRequest(imageConnId, request, onStatus, signa
         const fellBackToProxy = listDiagnosticEvents().some(event =>
             event?.requestId === request.requestId && event?.event === 'dispatch-fallback' && event?.delivery === 'proxy');
         if (fellBackToProxy) request.delivery = 'proxy';
+        // Исход диспетча известен — события (включая dispatch-start, который
+        // мог быть записан уже в фоновой вкладке) обязаны дойти до
+        // персистенции немедленно, а не по throttle-таймеру.
+        flushDiagnosticEvents();
     }
 
     await updatePendingBrowserRequest(request.requestId, { status: 'resultReceived', error: null });
@@ -343,6 +347,7 @@ export async function generateImageRequest(imageConnId, request, onStatus, signa
         });
         await updatePendingBrowserRequest(request.requestId, { status: 'ready', error: null, cardId: galleryEntry.id, imagePath });
         recordDiagnosticEvent({ event: 'gallery-write', stage: 'stage2', requestId: request.requestId, outcome: 'ready', details: { galleryId: galleryEntry.id } });
+        flushDiagnosticEvents();
         // Grid thumbnail, best-effort and fire-and-forget: a failure leaves the
         // card rendering the full image (the grid falls back), it never blocks
         // or fails the paid generation result. Success is logged too — without
@@ -362,6 +367,7 @@ export async function generateImageRequest(imageConnId, request, onStatus, signa
         return { ...result, galleryEntry };
     } catch (error) {
         recordDiagnosticEvent({ event: 'materialize-error', level: 'error', stage: 'stage2', requestId: request.requestId, outcome: 'error', details: { errorName: error?.name || null, errorCode: error?.code || null } });
+        flushDiagnosticEvents();
         await updatePendingBrowserRequest(request.requestId, { status: 'resultReceived', error: error?.message || String(error) });
         throw error;
     }

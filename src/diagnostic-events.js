@@ -11,11 +11,20 @@ export const LF_DIAGNOSTIC_EVENTS = 'uris_event_log';
 export const MAX_DIAGNOSTIC_EVENTS = 1000;
 const MAX_EVENT_CHARS = 1200;
 const PERSIST_DELAY_MS = 500;
+// Потолок возраста несохранённых событий. Дебаунс ниже сбрасывается каждой
+// новой записью и поэтому голодает при непрерывном потоке, а в фоновой вкладке
+// Chrome троттлит таймеры до секунд и хуже — события генерации, записанные
+// уже после ухода со вкладки, могли ждать персистенции минутами (инцидент
+// 2026-10-05: лаг журнала 1–2 мин, три повторных запуска). Throttle-таймер
+// взводится один раз на первое «грязное» событие и НЕ сбрасывается
+// последующими — 5 с это гарантированный максимум.
+const PERSIST_MAX_AGE_MS = 5000;
 
 let events = [];
 let loaded = false;
 let sessionId = createSessionId();
 let timer = null;
+let throttleTimer = null;
 let inFlight = Promise.resolve();
 let suppressWrites = false;
 
@@ -73,19 +82,34 @@ async function readPersisted() {
     } catch { return []; }
 }
 
+function persistSnapshot() {
+    const snapshot = events.slice();
+    inFlight = inFlight.then(async () => {
+        if (suppressWrites) return;
+        const lf = localforage();
+        if (!lf) return;
+        try { await lf.setItem(LF_DIAGNOSTIC_EVENTS, snapshot); } catch { /* non-critical */ }
+    });
+}
+
+function firePersist() {
+    if (timer !== null) { clearTimeout(timer); timer = null; }
+    if (throttleTimer !== null) { clearTimeout(throttleTimer); throttleTimer = null; }
+    persistSnapshot();
+}
+
 function schedulePersist() {
     if (!loaded || suppressWrites) return;
-    clearTimeout(timer);
-    timer = setTimeout(() => {
-        timer = null;
-        const snapshot = events.slice();
-        inFlight = inFlight.then(async () => {
-            if (suppressWrites) return;
-            const lf = localforage();
-            if (!lf) return;
-            try { await lf.setItem(LF_DIAGNOSTIC_EVENTS, snapshot); } catch { /* non-critical */ }
-        });
-    }, PERSIST_DELAY_MS);
+    // Быстрый путь: затишье после записи пишется дебаунсом 500 мс (он
+    // сбрасывается следующей записью — так батчится спокойный трафик).
+    if (timer === null && throttleTimer === null) {
+        timer = setTimeout(firePersist, PERSIST_DELAY_MS);
+    }
+    // Потолок: не сбрасывается — при любом потоке запись случится ≤ 5 с
+    // после первого ещё не сохранённого события.
+    if (throttleTimer === null) {
+        throttleTimer = setTimeout(firePersist, PERSIST_MAX_AGE_MS);
+    }
 }
 
 export function getDiagnosticSessionId() { return sessionId; }
@@ -146,23 +170,19 @@ export async function loadDiagnosticEvents() {
 export function listDiagnosticEvents() { return events.map(item => structuredClone(item)); }
 
 export function flushDiagnosticEvents() {
-    if (timer) {
-        clearTimeout(timer);
-        timer = null;
-        const snapshot = events.slice();
-        inFlight = inFlight.then(async () => {
-            if (suppressWrites) return;
-            const lf = localforage();
-            if (!lf) return;
-            try { await lf.setItem(LF_DIAGNOSTIC_EVENTS, snapshot); } catch { /* non-critical */ }
-        });
-    }
+    if (timer !== null) { clearTimeout(timer); timer = null; }
+    if (throttleTimer !== null) { clearTimeout(throttleTimer); throttleTimer = null; }
+    if (!loaded) return inFlight;
+    // Принудительная запись текущего снапшота (stage2-end/error, скрытие
+    // вкладки): идемпотентна — повторный setItem того же массива безопасен.
+    persistSnapshot();
     return inFlight;
 }
 
 export async function clearDiagnosticEvents() {
     suppressWrites = true;
-    if (timer) { clearTimeout(timer); timer = null; }
+    if (timer !== null) { clearTimeout(timer); timer = null; }
+    if (throttleTimer !== null) { clearTimeout(throttleTimer); throttleTimer = null; }
     // Start from an empty in-memory journal before waiting on the previous
     // write. Events created while the clear is in flight are retained and
     // persisted after the empty store is established.
@@ -180,6 +200,8 @@ export async function clearDiagnosticEvents() {
 export function resetDiagnosticEventsForTests() {
     if (timer) clearTimeout(timer);
     timer = null;
+    if (throttleTimer) clearTimeout(throttleTimer);
+    throttleTimer = null;
     events = [];
     loaded = false;
     sessionId = createSessionId();

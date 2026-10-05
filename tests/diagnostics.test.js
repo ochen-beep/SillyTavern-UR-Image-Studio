@@ -171,3 +171,32 @@ test('journal eviction prefers log-level entries; warn/error outlive FIFO', () =
     assert.ok(events.some(e => e.event === 'warn-last'), 'a fresh warn is present');
     assert.equal(events.some(e => e.event === 'log-0'), false, 'the oldest log is evicted first');
 });
+
+test('flushDiagnosticEvents writes even before any timer fired (исход генерации)', async () => {
+    await journal.loadDiagnosticEvents();
+    journal.recordDiagnosticEvent({ event: 'dispatch-start', requestId: 'req-flush-1' });
+    // Принудительный флаш из image-api.js (stage2-end/error): не ждём ни
+    // дебаунса 500 мс, ни throttle-потолка.
+    await journal.flushDiagnosticEvents();
+    const persisted = debugStore.get(journal.LF_DIAGNOSTIC_EVENTS);
+    assert.ok(Array.isArray(persisted));
+    assert.ok(persisted.some(e => e.event === 'dispatch-start' && e.requestId === 'req-flush-1'));
+});
+
+test('diagnostic journal: throttle 5с гарантирует запись при непрерывном потоке (дебаунс голодает)', async (t) => {
+    await journal.loadDiagnosticEvents();
+    t.mock.timers.enable({ apis: ['setTimeout'] });
+    journal.recordDiagnosticEvent({ event: 'dispatch-start', requestId: 'req-throttle' });
+    for (let i = 0; i < 10; i++) {
+        journal.recordDiagnosticEvent({ event: 'dispatch-stream', requestId: 'req-throttle' });
+        // 400 мс < 500 мс дебаунса: каждая запись сбрасывает быстрый путь —
+        // именно так выглядел «вечный» лаг журнала при потоке событий.
+        t.mock.timers.tick(400);
+    }
+    assert.equal(debugStore.has(journal.LF_DIAGNOSTIC_EVENTS), false, 'младше 5 с запись не обязательна');
+    t.mock.timers.tick(1000); // суммарно 5 с от первого «грязного» события — потолок
+    await journal.flushDiagnosticEvents();
+    const persisted = debugStore.get(journal.LF_DIAGNOSTIC_EVENTS);
+    assert.ok(persisted.some(e => e.event === 'dispatch-start'));
+    assert.ok(persisted.some(e => e.event === 'dispatch-stream'));
+});
