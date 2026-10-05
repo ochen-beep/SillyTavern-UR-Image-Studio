@@ -20,9 +20,21 @@
  *                                                                  → cleared + directOkAt
  *   - preflight oracle proved the POST never left the browser
  *     (image-transport.js safe proxy rescue)                       → directBrokenAt
+ *   - бесплатная проба доставки («Проверить», GET /models до первого
+ *     платного POST)                                                → probe {at, verdict}
  * A proxy-delivered success writes nothing: the direct path was not exercised,
  * and the broken TTL must keep expiring so «Авто» self-heals back to the fast
  * path when the network recovers.
+ *
+ * Priority of the «Авто» ladder (deliveryHintFor): POST experience wins
+ * (broken → proxy, ok → direct), a fresh probe verdict is the fallback, then
+ * null (ladder goes direct). Probe — факт GET-пробы, слабее опыта платного
+ * POST; окно свежести — те же 24 часа, что у прямого успеха, чтобы древний
+ * вердикт не держал лестницу на прокси вечно (самолечение по TTL).
+ *
+ * Единственный источник для платных POST и лестницы «Авто» (пункт 2.1 плана
+ * 2026-10-05): browserDeliveryRoute читает только этот модуль — больше не
+ * смотрит на detected.delivery и не имеет третьей памяти в proxy.js.
  *
  * Every persisted field has a live reader — the dispatch ladder and the card
  * facts line. An earlier persisted-but-unread observation store was removed
@@ -111,14 +123,17 @@ function fresh(iso, ttlMs, now) {
 }
 
 /**
- * Delivery hint from the connection's POST experience, for the «Авто» ladder.
+ * Delivery hint from the connection's delivery experience, for the «Авто» ladder.
  * Pure and synchronous: reads the already-loaded record, never touches storage.
+ * Priority: свежий провал прямой → proxy; свежий прямой успех → direct;
+ * свежий вердикт пробы («Проверить» / GET до первого POST) → по вердикту;
+ * иначе null (лестница идёт direct).
  *
- * @param {{endpoint?: string, deliveryEvidence?: {host?: string, directBrokenAt?: string|null, directOkAt?: string|null}|null}|null|undefined} conn
+ * @param {{endpoint?: string, deliveryEvidence?: {host?: string, directBrokenAt?: string|null, directOkAt?: string|null, probe?: {at?: string|null, verdict?: 'direct'|'proxy'}|null}|null}|null|undefined} conn
  * @param {number} [nowMs]
  * @returns {'proxy'|'direct'|null} 'proxy' — route «Авто» through the ST proxy;
  *   'direct' — a recent direct success overrides even a probe verdict;
- *   null — no usable experience (ladder falls through to detected.delivery).
+ *   null — no usable experience (ladder falls through to direct).
  */
 export function deliveryHintFor(conn, nowMs = Date.now()) {
     const evidence = memory.get(conn?.id);
@@ -126,6 +141,9 @@ export function deliveryHintFor(conn, nowMs = Date.now()) {
     if (hostOfEndpoint(conn?.endpoint) !== evidence.host) return null;
     if (fresh(evidence.directBrokenAt, DIRECT_BROKEN_TTL_MS, nowMs)) return 'proxy';
     if (fresh(evidence.directOkAt, DIRECT_OK_TTL_MS, nowMs)) return 'direct';
+    if (evidence.probe?.verdict === 'proxy' || evidence.probe?.verdict === 'direct') {
+        if (fresh(evidence.probe.at, DIRECT_OK_TTL_MS, nowMs)) return evidence.probe.verdict;
+    }
     return null;
 }
 
@@ -139,6 +157,7 @@ async function writeEvidence(connId, endpoint, mutate, now) {
             host,
             directBrokenAt: previous.host === host ? (previous.directBrokenAt || null) : null,
             directOkAt: previous.host === host ? (previous.directOkAt || null) : null,
+            probe: previous.host === host ? (previous.probe || null) : null,
         }, now);
         memory.set(connId, next);
         persistStore(DELIVERY_STORE_KEY, memory, connId);
@@ -181,6 +200,26 @@ export function notePreflightOracleDead(connId, endpoint, { now = Date.now() } =
         connId,
         endpoint,
         evidence => ({ ...evidence, directBrokenAt: new Date(now).toISOString(), ts: new Date(now).toISOString() }),
+        now,
+    );
+}
+
+/**
+ * Записать вердикт бесплатной пробы доставки (пункт 2.1): «Проверить»
+ * (connect-probe.js) или GET /models до первого платного POST
+ * (image-api.probeDeliveryBeforeFirstPost). Проба — факт GET-ноги, слабее
+ * опыта платного POST: POST-факты перекрывают её в deliveryHintFor.
+ * Best-effort.
+ *
+ * @param {{connId?: string|null, endpoint?: string, verdict: 'direct'|'proxy', now?: number}} input
+ * @returns {Promise<object|null>}
+ */
+export function noteProbe({ connId, endpoint, verdict, now = Date.now() }) {
+    if (verdict !== 'direct' && verdict !== 'proxy') return Promise.resolve(null);
+    return writeEvidence(
+        connId,
+        endpoint,
+        evidence => ({ ...evidence, probe: { at: new Date(now).toISOString(), verdict }, ts: new Date(now).toISOString() }),
         now,
     );
 }

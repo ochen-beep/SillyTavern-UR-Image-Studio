@@ -91,6 +91,29 @@ function attemptId() {
     catch { return `attempt-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`; }
 }
 
+/**
+ * Пункт 2.2 плана 2026-10-05: транспорт возвращает факт доставки. Каждый
+ * успешный возврат Response помечается несчётным свойством __urisAttempt —
+ * обёртка реестра (image-provider-registry.js) переносит finalDelivery на
+ * invocation.request.delivery, и image-api.js читает штамп в finally. Журнал
+ * диагностики с этого момента никем не читается (write-only). defineProperty
+ * с try/catch: тестовые двойники Response могут не переживать определение
+ * свойства — тогда штампа просто нет (finalDelivery 'unknown' недопустим
+ * молча ускользнуть: отсутствие штампа = поведение «как было»).
+ */
+function stampAttempt(response, info) {
+    if (!response || typeof response !== 'object') return response;
+    try {
+        Object.defineProperty(response, '__urisAttempt', {
+            value: Object.freeze({ ...info }),
+            enumerable: false,
+            configurable: true,
+            writable: false,
+        });
+    } catch { /* свойство не поставилось — управление идёт через штампы адаптеров */ }
+    return response;
+}
+
 function withDiagnostic(options, diagnostic, role = 'generation', bodyKind = null) {
     if (!diagnostic && !role && !bodyKind) return options;
     return {
@@ -158,7 +181,7 @@ export async function fetchImageRoute(url, options = {}, route, timeoutMs = 1200
         try {
             const response = await proxiedFetch(url, proxyOptions(wireOptions), timeoutMs);
             if (method === 'POST') recordDiagnosticEvent({ event: 'dispatch-response', stage: diagnostic?.stage || 'stage2', requestId: diagnostic?.requestId || null, attemptId: rootAttemptId, attemptIndex: attemptDiagnostic.attemptIndex, delivery: 'proxy', bodyKind: transport.bodyKind, status: response?.status ?? null, outcome: 'response', durationMs: Date.now() - attemptStartedAt });
-            return response;
+            return stampAttempt(response, { initialDelivery: 'proxy', finalDelivery: 'proxy', rescuedBy: null, attempts: 1 });
         } catch (error) {
             if (method === 'POST') recordDiagnosticEvent({ event: 'dispatch-error', level: 'error', stage: diagnostic?.stage || 'stage2', requestId: diagnostic?.requestId || null, attemptId: rootAttemptId, attemptIndex: attemptDiagnostic.attemptIndex, delivery: 'proxy', bodyKind: transport.bodyKind, outcome: error?.name === 'AbortError' ? 'abort' : 'network-unknown', durationMs: Date.now() - attemptStartedAt, details: { code: error?.code || null } });
             throw error;
@@ -175,7 +198,7 @@ export async function fetchImageRoute(url, options = {}, route, timeoutMs = 1200
         if (method === 'POST' && transport.bodyKind === 'json' && transport.initialDelivery !== 'proxy') {
             noteDeliveryPostOutcome({ connId: diagnostic?.connId, endpoint: url, delivery: 'direct', ok: true }).catch(() => {});
         }
-        return response;
+        return stampAttempt(response, { initialDelivery: 'direct', finalDelivery: 'direct', rescuedBy: null, attempts: 1 });
     } catch (error) {
         if (isAbortOrTimeout(error, options.signal)) {
             if (method === 'POST') recordDiagnosticEvent({ event: 'dispatch-error', level: 'error', stage: diagnostic?.stage || 'stage2', requestId: diagnostic?.requestId || null, attemptId: rootAttemptId, attemptIndex: attemptDiagnostic.attemptIndex, delivery: 'direct', bodyKind: transport.bodyKind, outcome: error?.name === 'AbortError' ? 'abort' : 'timeout', durationMs: Date.now() - attemptStartedAt, details: { code: error?.code || null } });
@@ -239,7 +262,7 @@ export async function fetchImageRoute(url, options = {}, route, timeoutMs = 1200
                     const fallbackStartedAt = Date.now();
                     const response = await proxiedFetch(url, proxyOptions(withDiagnostic({ ...options }, fallbackDiagnostic, diagnostic?.role || 'generation', 'json')), timeoutMs);
                     if (method === 'POST') recordDiagnosticEvent({ event: 'dispatch-response', stage: diagnostic?.stage || 'stage2', requestId: diagnostic?.requestId || null, attemptId: fallbackDiagnostic.attemptId, attemptIndex: fallbackDiagnostic.attemptIndex, parentAttemptId: fallbackDiagnostic.parentAttemptId, delivery: 'proxy', bodyKind: 'json', status: response?.status ?? null, outcome: 'response', durationMs: Date.now() - fallbackStartedAt, details: { reason: 'preflight-oracle' } });
-                    return response;
+                    return stampAttempt(response, { initialDelivery: 'direct', finalDelivery: 'proxy', rescuedBy: 'preflight-oracle', attempts: 2 });
                 } catch (fallbackError) {
                     if (method === 'POST') recordDiagnosticEvent({ event: 'dispatch-error', level: 'error', stage: diagnostic?.stage || 'stage2', requestId: diagnostic?.requestId || null, attemptId: fallbackDiagnostic.attemptId, attemptIndex: fallbackDiagnostic.attemptIndex, parentAttemptId: fallbackDiagnostic.parentAttemptId, delivery: 'proxy', bodyKind: 'json', outcome: fallbackError?.name === 'AbortError' ? 'abort' : 'network-unknown', details: { code: fallbackError?.code || null, reason: 'preflight-oracle' } });
                     throw fallbackError;

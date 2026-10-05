@@ -521,3 +521,41 @@ test('oracle: a known-disabled ST proxy skips the rescue and stays ambiguous', a
         _resetCache();
     }
 });
+
+// ── Штамп __urisAttempt (пункт 2.2) ──
+
+test('attempt stamp: прямой путь ставит finalDelivery direct на Response', async () => {
+    const restore = mockFetch(() => ({ ok: true, status: 200 }));
+    try {
+        const response = await requestJson('https://images.example/v1/generations', {
+            method: 'POST', headers: { Authorization: 'Bearer image-key' }, body: '{}',
+        }, route());
+        assert.deepEqual(response.__urisAttempt, { initialDelivery: 'direct', finalDelivery: 'direct', rescuedBy: null, attempts: 1 });
+        assert.equal(Object.propertyIsEnumerable.call(response, '__urisAttempt'), false, 'штамп несчётный — не ломает сериализацию/логи');
+    } finally { restore(); }
+});
+
+test('attempt stamp: proxy-first ставит finalDelivery proxy', async () => {
+    const restore = mockFetch((url, options, viaProxy) => viaProxy ? { ok: true, status: 200 } : { ok: false, status: 599 });
+    try {
+        const response = await fetchImageRoute('https://no-cors.example/v1/generations', {
+            method: 'POST', headers: { Authorization: 'Bearer k' }, body: '{}',
+        }, route({ initialDelivery: 'proxy' }));
+        assert.deepEqual(response.__urisAttempt, { initialDelivery: 'proxy', finalDelivery: 'proxy', rescuedBy: null, attempts: 1 });
+    } finally { restore(); }
+});
+
+test('attempt stamp: спасение оракулом — initialDelivery direct, finalDelivery proxy, rescuedBy', async () => {
+    const restore = mockFetch((url, options, viaProxy) => {
+        if (viaProxy && url === 'https://example.com') return { ok: true, status: 200, text: async () => '' };
+        if (options.method === 'OPTIONS') throw new TypeError('Failed to fetch');
+        if (!viaProxy) throw new TypeError('Failed to fetch');
+        return { ok: true, status: 200, json: async () => ({}) };
+    });
+    try {
+        const response = await fetchImageRoute('https://no-cors.example/v1/generations', {
+            method: 'POST', headers: { Authorization: 'Bearer k' }, body: '{}',
+        }, ORACLE_ROUTE(), 45_000);
+        assert.deepEqual(response.__urisAttempt, { initialDelivery: 'direct', finalDelivery: 'proxy', rescuedBy: 'preflight-oracle', attempts: 2 });
+    } finally { restore(); }
+});

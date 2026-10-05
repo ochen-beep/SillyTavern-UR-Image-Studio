@@ -21,6 +21,7 @@ import { validatePollinationsToken } from './providers/image-pollinations.js';
 import { validateNaisteraToken } from './providers/image-naistera.js';
 import { normalizeModelCatalog } from './model-catalog.js';
 import { recordDiagnosticEvent } from './diagnostic-events.js';
+import { noteProbe } from './delivery-evidence.js';
 import { CONTRACTS } from './image-connection-schema.js';
 
 function nativeModelsUrl(endpoint) {
@@ -332,6 +333,12 @@ export async function probeConnection(input = {}) {
     const endpointHost = endpointHostname(input?.endpoint);
     try {
         const result = await runProbeConnection(input);
+        // Пункт 2.1: вердикт доставки пробы — в единый delivery-evidence.
+        // Лестница «Авто» читает его как fallback после опыта платных POST;
+        // detected.delivery остаётся только отображением на карточке.
+        if (connId && (result?.delivery === 'direct' || result?.delivery === 'proxy')) {
+            noteProbe({ connId, endpoint: input?.endpoint, verdict: result.delivery }).catch(() => {});
+        }
         recordDiagnosticEvent({
             event: 'connection-probe', stage: 'probe', connId,
             outcome: 'ok', durationMs: Date.now() - startedAt,

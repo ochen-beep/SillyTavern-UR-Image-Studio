@@ -143,3 +143,34 @@ test('schema: legacy evidence fields are scrubbed from connection records', () =
     assert.equal('deliveryEvidence' in kept, false, 'легаси-поле вырезается при нормализации');
     assert.equal('editDialectEvidence' in kept, false, 'легаси-поле вырезается при нормализации');
 });
+
+// ── Проба доставки (пункт 2.1: единая память) ──
+
+test('noteProbe: вердикт пробы читается лестницей, когда опыта POST нет', async () => {
+    await evidence.noteProbe({ connId: 'c1', endpoint: 'https://gw.test/v1', verdict: 'proxy', now: NOW });
+    assert.equal(evidence.deliveryHintFor(conn(), NOW), 'proxy');
+    assert.equal(evidence._peekEvidenceForTests('c1').delivery.probe.verdict, 'proxy');
+});
+
+test('noteProbe: опыт платных POST сильнее вердикта пробы', async () => {
+    await evidence.noteProbe({ connId: 'c1', endpoint: 'https://gw.test/v1', verdict: 'direct', now: NOW });
+    // Прямой POST провалился неоднозначно → proxy перекрывает probe direct.
+    await evidence.noteDeliveryPostOutcome({ connId: 'c1', endpoint: 'https://gw.test/v1', delivery: 'direct', ok: false, now: NOW + MINUTE });
+    assert.equal(evidence.deliveryHintFor(conn(), NOW + 2 * MINUTE), 'proxy');
+    // Проба говорила proxy, но прямой POST ответил → direct перекрывает probe.
+    await evidence.noteProbe({ connId: 'c1', endpoint: 'https://gw.test/v1', verdict: 'proxy', now: NOW + 3 * MINUTE });
+    await evidence.noteDeliveryPostOutcome({ connId: 'c1', endpoint: 'https://gw.test/v1', delivery: 'direct', ok: true, now: NOW + 4 * MINUTE });
+    assert.equal(evidence.deliveryHintFor(conn(), NOW + 5 * MINUTE), 'direct');
+});
+
+test('noteProbe: устаревшая проба (старше 24ч) не держит лестницу', async () => {
+    await evidence.noteProbe({ connId: 'c1', endpoint: 'https://gw.test/v1', verdict: 'proxy', now: NOW });
+    assert.equal(evidence.deliveryHintFor(conn(), NOW + 25 * 60 * MINUTE), null, 'TTL пробы — те же 24 часа');
+});
+
+test('noteProbe: смена хоста инвалидирует вердикт; мусорный вердикт не пишется', async () => {
+    await evidence.noteProbe({ connId: 'c1', endpoint: 'https://gw.test/v1', verdict: 'proxy', now: NOW });
+    assert.equal(evidence.deliveryHintFor({ id: 'c1', endpoint: 'https://other.test/v1' }, NOW), null);
+    await evidence.noteProbe({ connId: 'c1', endpoint: 'https://gw.test/v1', verdict: 'sideways', now: NOW });
+    assert.equal(evidence._peekEvidenceForTests('c1').delivery.probe.verdict, 'proxy', 'невалидный вердикт игнорируется');
+});

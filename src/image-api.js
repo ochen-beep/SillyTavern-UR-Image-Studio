@@ -5,14 +5,14 @@ import { resolveConnection } from './connections.js';
 import { resolveDispatchPlan } from './dispatch-plan.js';
 import { invokeImageProvider, validateImageProviderInvocation } from './image-provider-registry.js';
 import { isCorsProxyAvailable, isCorsOrNetworkError } from './proxy.js';
-import { deliveryHintFor, noteDeliveryPostOutcome } from './delivery-evidence.js';
+import { deliveryHintFor, noteProbe } from './delivery-evidence.js';
 import { materializeImageResult, getCharacterImageFolder, makeThumbnailForPath } from './native-image-storage.js';
 import { addCard, updateCard } from './gallery-index.js';
 import { providerError } from './providers/image-base.js';
 import { summarizeReference } from './references.js';
 import { aspectDeviates } from './aspect-ratio.js';
 import { resolutionShortfall } from './image-dimensions.js';
-import { getDiagnosticSessionId, hashDiagnosticId, recordDiagnosticEvent, listDiagnosticEvents, flushDiagnosticEvents } from './diagnostic-events.js';
+import { getDiagnosticSessionId, hashDiagnosticId, recordDiagnosticEvent, flushDiagnosticEvents } from './diagnostic-events.js';
 import { savePendingBrowserRequest, updatePendingBrowserRequest, discardPendingBrowserRequest, dispatchErrorKnown } from './browser-image-recovery.js';
 
 const REQUEST_ID = /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/;
@@ -76,16 +76,17 @@ function browserDeliveryRoute(route, conn, hasReferences = false) {
     const policy = conn?.overrides?.delivery === 'proxy' || conn?.overrides?.delivery === 'direct'
         ? conn.overrides.delivery
         : '';
-    // «Авто» ladder (2026-09-28): learned POST experience first, then the
-    // probe's delivery fact, then the direct fast path. A fresh direct success
-    // outranks a stale probe verdict so «Авто» self-heals back to direct; a
-    // fresh ambiguous failure outranks everything short of an explicit order.
-    // A known-disabled ST proxy keeps «Авто» on direct — a guaranteed proxy
-    // error helps nobody, and the ambiguous error at least matches what the
-    // user would see without the learning layer.
+    // «Авто» ladder (2026-09-28, единый источник — пункт 2.1 плана 2026-10-05):
+    // только delivery-evidence (опыт платных POST + вердикт пробы). A fresh
+    // direct success outranks a stale probe verdict so «Авто» self-heals back
+    // to direct; a fresh ambiguous failure outranks everything short of an
+    // explicit order. detected.delivery больше не читается диспетчем — он
+    // остаётся только отображением на карточке. A known-disabled ST proxy
+    // keeps «Авто» on direct — a guaranteed proxy error helps nobody, and the
+    // ambiguous error at least matches what the user would see without the
+    // learning layer.
     const hint = deliveryHintFor(conn);
-    const autoProxyHint = hint ? hint === 'proxy' : conn?.detected?.delivery === 'proxy';
-    const autoWantsProxy = autoProxyHint && isCorsProxyAvailable() !== false;
+    const autoWantsProxy = hint === 'proxy' && isCorsProxyAvailable() !== false;
     const useProxy = (policy === 'proxy' || (policy === '' && autoWantsProxy))
         && route?.transport?.bodyKind === 'json'
         && !multipartEdit;
@@ -109,11 +110,13 @@ const DELIVERY_PROBE_CONTRACTS = new Set(['openai-images', 'chat-completions', '
 /**
  * Дешёвая разведка доставки до первого платного POST (перенос паттерна
  * providers/openai.js на картинный путь, 2026-09-28): один GET /models с теми
- * же заголовками. Читаемый ответ → прямая дорога подтверждена (directOkAt);
- * CORS/сетевой TypeError → «прямая сломана» (directBrokenAt) — лестница «Авто»
- * сразу поведёт POST через прокси. Запускается только когда знаний нет вовсе:
- * ни факта пробы («Проверить»), ни опыта POST. Best-effort: неудача разведки
- * (кроме отмены) не блокирует генерацию.
+ * же заголовками. Читаемый ответ → вердикт пробы 'direct'; CORS/сетевой
+ * TypeError → 'proxy' — лестница «Авто» сразу поведёт POST через прокси.
+ * Пункт 2.1: проба пишет в единый delivery-evidence (noteProbe) — тот же
+ * факт, что пишет «Проверить», а не в отдельную память. Запускается только
+ * когда знаний нет вовсе: ни факта пробы, ни опыта POST (deliveryHintFor
+ * теперь покрывает оба). Best-effort: неудача разведки (кроме отмены) не
+ * блокирует генерацию.
  */
 async function probeDeliveryBeforeFirstPost(conn, apiKey, route, signal) {
     try {
@@ -126,11 +129,11 @@ async function probeDeliveryBeforeFirstPost(conn, apiKey, route, signal) {
             headers: { Authorization: `Bearer ${apiKey}` },
             ...(signal ? { signal } : {}),
         }, 15000);
-        noteDeliveryPostOutcome({ connId: conn.id, endpoint: conn.endpoint, delivery: 'direct', ok: true }).catch(() => {});
+        noteProbe({ connId: conn.id, endpoint: conn.endpoint, verdict: 'direct' }).catch(() => {});
     } catch (error) {
         if (signal?.aborted || error?.name === 'AbortError') return;
         if (isCorsOrNetworkError(error)) {
-            noteDeliveryPostOutcome({ connId: conn.id, endpoint: conn.endpoint, delivery: 'direct', ok: false }).catch(() => {});
+            noteProbe({ connId: conn.id, endpoint: conn.endpoint, verdict: 'proxy' }).catch(() => {});
         }
     }
 }
@@ -260,13 +263,10 @@ export async function generateImageRequest(imageConnId, request, onStatus, signa
         // of the pre-dispatch plan (edit-multipart / direct).
         if (invocation.request?.editDialect !== undefined) request.editDialect = invocation.request.editDialect;
         if (invocation.request?.delivery) request.delivery = invocation.request.delivery;
-        // The delivery oracle rescues INSIDE the transport, where the adapter
-        // cannot stamp anything. The journal is the single source of truth for
-        // that path: a dispatch-fallback event of THIS attempt means the paid
-        // POST actually went through /proxy/.
-        const fellBackToProxy = listDiagnosticEvents().some(event =>
-            event?.requestId === request.requestId && event?.event === 'dispatch-fallback' && event?.delivery === 'proxy');
-        if (fellBackToProxy) request.delivery = 'proxy';
+        // Пункт 2.2: фактическая доставка удачной ноги приходит штампом
+        // __urisAttempt — обёртка транспорта в реестре ставит её на
+        // invocation.request.delivery (выше). Поиск по журналу диагностики
+        // удалён: журнал снова write-only.
         // Исход диспетча известен — события (включая dispatch-start, который
         // мог быть записан уже в фоновой вкладке) обязаны дойти до
         // персистенции немедленно, а не по throttle-таймеру.

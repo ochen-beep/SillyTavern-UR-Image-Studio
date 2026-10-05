@@ -36,10 +36,39 @@ export function validateImageProviderInvocation(input) {
 }
 
 /**
+ * Пункт 2.2 плана 2026-10-05: транспорт возвращает факт доставки. Обёртка
+ * дефолтного транспорта читает response.__urisAttempt (ставит
+ * image-transport.js) и переносит finalDelivery на invocation.request.delivery
+ * — image-api.js зеркалит штамп в finally. Адаптеры, шлющие несколько ног
+ * (диалектная цепочка), штампуются каждой удавшейся ногой: побеждает
+ * фактическая доставка той ноги, чей ответ вернулся наверх. Инжектированный
+ * (тестовый) транспорт не оборачивается — его контракт не меняется.
+ */
+function transportWithAttemptStamping(transport, invocation) {
+    const stampFrom = response => {
+        const attempt = response?.__urisAttempt;
+        if (attempt && invocation?.request && typeof invocation.request === 'object'
+            && (attempt.finalDelivery === 'proxy' || attempt.finalDelivery === 'direct')) {
+            invocation.request.delivery = attempt.finalDelivery;
+        }
+        return response;
+    };
+    const wrap = fn => (...args) => Promise.resolve(fn(...args)).then(stampFrom);
+    return {
+        ...transport,
+        requestJson: wrap(transport.requestJson),
+        requestMultipart: wrap(transport.requestMultipart),
+    };
+}
+
+export { transportWithAttemptStamping };
+
+/**
  * Invoke exactly the persisted route contract. This registry never chooses an
  * adapter from the endpoint, provider name, or model ID.
  */
 export async function invokeImageProvider(input) {
   const adapter = validateImageProviderInvocation(input);
-  return adapter({ ...input, transport: input.transport || defaultTransport, diagnostic: input.diagnostic || null });
+  const transport = input.transport || transportWithAttemptStamping(defaultTransport, input);
+  return adapter({ ...input, transport, diagnostic: input.diagnostic || null });
 }
