@@ -43,11 +43,12 @@ import { sweepStaleRunningDrafts } from './src/generation-drafts.js';
 import { reportFailure, URIS_SCOPES } from './src/error-pool.js';
 import { exportDiagnosticDump, clearAllDiagnostics } from './src/diagnostic-dump.js';
 import { loadDiagnosticEvents, flushDiagnosticEvents, recordDiagnosticEvent } from './src/diagnostic-events.js';
-import { flushTemplateWrites, flushTemplateWritesOnUnload } from './src/template-file-store.js';
-import { ensureGalleryStoreReady, flushGalleryWrites, flushGalleryWritesOnUnload } from './src/gallery-index.js';
-import { ensureRefsStoreReady, flushRefsWrites, flushRefsWritesOnUnload } from './src/refs-library.js';
-import { ensureParamPresetStoreReady, flushParamPresetWrites, flushParamPresetWritesOnUnload } from './src/param-presets.js';
-import { ensureStudioStoreReady, flushStudioWrites, flushStudioWritesOnUnload } from './src/studio-scope.js';
+import { flushAllFileStores, flushAllFileStoresOnUnload } from './src/file-store.js';
+import { flushTemplateWrites } from './src/template-file-store.js';
+import { ensureGalleryStoreReady, flushGalleryWrites } from './src/gallery-index.js';
+import { ensureRefsStoreReady, flushRefsWrites } from './src/refs-library.js';
+import { ensureParamPresetStoreReady, flushParamPresetWrites } from './src/param-presets.js';
+import { ensureStudioStoreReady, flushStudioWrites } from './src/studio-scope.js';
 import { exportNetDump } from './src/netdump.js';
 import { activateBridge, deactivateBridge, markBridgeReady, markBridgeFailed } from './src/bridge.js';
 
@@ -256,22 +257,16 @@ async function init() {
     _visibilityHandler = () => {
         if (document.visibilityState === 'hidden') {
             flushSettings();
-            flushTemplateWritesOnUnload();
-            flushGalleryWritesOnUnload();
-            flushRefsWritesOnUnload();
-            flushParamPresetWritesOnUnload();
-            flushStudioWritesOnUnload();
+            // Реестр file-store накрывает все сторы, включая refs-meta сателлит,
+            // который ручные пер-модульные обёртки не флашевали (ponytail K3).
+            flushAllFileStoresOnUnload();
             flushDiagnosticEvents();
             try { getCtx().saveMetadata?.(); } catch {}
         }
     };
     document.addEventListener('visibilitychange', _visibilityHandler);
     _pageHideHandler = () => {
-        flushTemplateWritesOnUnload();
-        flushGalleryWritesOnUnload();
-        flushRefsWritesOnUnload();
-        flushParamPresetWritesOnUnload();
-        flushStudioWritesOnUnload();
+        flushAllFileStoresOnUnload();
     };
     window.addEventListener('pagehide', _pageHideHandler);
 
@@ -479,11 +474,7 @@ function cleanup() {
     if (state.queueAbort) state.queueAbort.abort();
     // Land any in-flight card/template/pool writes before teardown; a disable
     // must not drop a queued mutation.
-    void flushGalleryWrites();
-    void flushTemplateWrites();
-    void flushRefsWrites();
-    void flushParamPresetWrites();
-    void flushStudioWrites();
+    void flushAllFileStores();
     unbindEvents();
     unbindScanner();
     shutdownRender();

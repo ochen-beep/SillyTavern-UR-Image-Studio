@@ -128,10 +128,6 @@ export async function releaseRefImage(oldPath) {
 }
 
 /** Drop the settings copy only once the file is authoritative (migration path). */
-export function flushRefsWritesOnUnload() {
-    refsStore.flushOnUnload();
-}
-
 /**
  * Live pool + folders for the backup exporter. Null in legacy mode, where the
  * settings copy already carries them and the exporter reads it directly.

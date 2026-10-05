@@ -97,10 +97,6 @@ export function flushGalleryWrites() {
  * normal serialized write having landed — `addCard`/`updateCard` are awaited by
  * their callers before the generation is reported complete.
  */
-export function flushGalleryWritesOnUnload() {
-    galleryStore.flushOnUnload();
-}
-
 /**
  * Synchronous read of the loaded cards. Requires a resolved store — every async
  * entry point below awaits `ready()` first, and `init()` warms it before the UI

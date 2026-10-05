@@ -68,10 +68,6 @@ export function flushStudioWrites() {
     return studioStore.flush();
 }
 
-export function flushStudioWritesOnUnload() {
-    studioStore.flushOnUnload();
-}
-
 /**
  * Raw schema-v5 envelope read for the routing in chat-binding.js and
  * refs-library.js. Null before the first save (callers then apply defaults);

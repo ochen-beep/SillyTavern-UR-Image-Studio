@@ -37,10 +37,6 @@ export function flushParamPresetWrites() {
     return presetsStore.flush();
 }
 
-export function flushParamPresetWritesOnUnload() {
-    presetsStore.flushOnUnload();
-}
-
 /**
  * Live presets for the backup exporter. Null in legacy mode, where the settings
  * copy already carries them and the exporter reads it directly.
