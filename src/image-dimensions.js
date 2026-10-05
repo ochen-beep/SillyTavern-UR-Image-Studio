@@ -29,6 +29,41 @@ export function cardDimensions(item) {
     return null;
 }
 
+// ── Resolution shortfall (пункт 1.2 плана 2026-10-05) ──────────────────────
+//
+// Провайдеры молча уронили тир разрешения: запрос 4K вернул 1024×1024
+// (nano-gpt nano-banana-pro, 2026-10-05 01:01 UTC) — пользователь платит за
+// 4K, получает 1K, и ни один пост-чек этого не видел (проверялись только
+// пропорции). Пороги — эмпирика фактических выдач той сессии; 4K взят
+// консервативно (реальные 4K-слоты ≈ 16 МП), чтобы не плодить ложных
+// срабатываний на нестандартных выдачах.
+
+const RESOLUTION_TIER_MIN_MP = new Map([
+    ['1K', 0.80], // фактические 1K-выдачи: 1024×1536=1.57, 1280×720=0.92
+    ['2K', 2.0],  // фактические 2K-выдачи: 2752×1536=4.23
+    ['4K', 6.0],  // реальные 4K-слоты ≈ 16 МП; консервативный порог
+]);
+
+/**
+ * Detect a silent resolution downgrade: the returned pixel count is below the
+ * requested tier's expected minimum. Pure; null when there is nothing to
+ * judge (unknown dimensions, unknown/absent tier) or the area is in range.
+ *
+ * @param {number|null|undefined} width
+ * @param {number|null|undefined} height
+ * @param {string|null|undefined} imageSize requested tier ('1K'|'2K'|'4K')
+ * @returns {{tier:string, megapixels:number, minMegapixels:number}|null}
+ */
+export function resolutionShortfall(width, height, imageSize) {
+    if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) return null;
+    const tier = String(imageSize ?? '').trim().toUpperCase();
+    const minMegapixels = RESOLUTION_TIER_MIN_MP.get(tier);
+    if (!minMegapixels) return null;
+    const megapixels = (width * height) / 1_000_000;
+    if (megapixels >= minMegapixels) return null;
+    return { tier, megapixels, minMegapixels };
+}
+
 async function decodeImageDimensions(url, signal) {
     const response = await fetch(url, { signal });
     if (!response.ok) throw new Error(`HTTP ${response.status}`);

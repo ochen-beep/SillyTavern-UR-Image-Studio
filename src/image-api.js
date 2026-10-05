@@ -11,6 +11,7 @@ import { addCard, updateCard } from './gallery-index.js';
 import { providerError } from './providers/image-base.js';
 import { summarizeReference } from './references.js';
 import { aspectDeviates } from './aspect-ratio.js';
+import { resolutionShortfall } from './image-dimensions.js';
 import { getDiagnosticSessionId, hashDiagnosticId, recordDiagnosticEvent, listDiagnosticEvents, flushDiagnosticEvents } from './diagnostic-events.js';
 import { savePendingBrowserRequest, updatePendingBrowserRequest, discardPendingBrowserRequest, dispatchErrorKnown } from './browser-image-recovery.js';
 
@@ -324,6 +325,24 @@ export async function generateImageRequest(imageConnId, request, onStatus, signa
                 event: 'aspect-mismatch', stage: 'stage2', requestId: request.requestId,
                 connId: imageConnId, routeId: route.id, modelId: route.modelId,
                 details: { requested: snapshot.aspectRatio, width: outWidth, height: outHeight, outputAspect, deviation: aspectDeviation },
+            });
+        }
+        // Post-hoc truth check #2 (пункт 1.2): молчаливый даунгрейд разрешения —
+        // пропорции в норме, но пикселей меньше, чем обещает запрошенный тир.
+        // Если адаптер уже предупредил, что тир не поддержан и не ушёл на провод
+        // (provider-warning с feature: 'Размер'), факт «параметра не было»
+        // озвучен — дублировать факт «параметр проигнорирован» не нужно.
+        const sizeShortfall = resolutionShortfall(outWidth, outHeight, snapshot.imageSize);
+        const alreadyWarnedAboutSize = Array.isArray(result?.warnings) && result.warnings.some(item => item?.feature === 'Размер');
+        if (sizeShortfall && !alreadyWarnedAboutSize) {
+            result.warnings = [...(Array.isArray(result?.warnings) ? result.warnings : []), {
+                feature: 'Размер',
+                details: `запрошен тир ${sizeShortfall.tier}, модель вернула ${outWidth}×${outHeight} (${sizeShortfall.megapixels.toFixed(2)} МП) — меньше ожидаемого минимума ${sizeShortfall.minMegapixels} МП; разрешение уронено шлюзом или моделью.`,
+            }];
+            recordDiagnosticEvent({
+                event: 'resolution-shortfall', stage: 'stage2', requestId: request.requestId,
+                connId: imageConnId, routeId: route.id, modelId: route.modelId,
+                details: { requested: snapshot.imageSize, width: outWidth, height: outHeight, megapixels: sizeShortfall.megapixels, minMegapixels: sizeShortfall.minMegapixels },
             });
         }
         recordDiagnosticEvent({ event: 'materialize-result', stage: 'stage2', requestId: request.requestId, outcome: 'uploaded', details: { imagePathClass: typeof imagePath === 'string' ? imagePath.split('/').slice(0, 2).join('/') : null, bytes: outputMeta.bytes ?? null, mimeType: outputMeta.mimeType ?? null, width: outWidth, height: outHeight, aspectRatio: outputAspect, requestedAspectRatio: snapshot.aspectRatio } });

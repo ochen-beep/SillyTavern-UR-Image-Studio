@@ -126,6 +126,78 @@ test('materialize-result records decoded image dimensions and derived aspect rat
     assert.equal(event.details.requestedAspectRatio, '16:9');
 });
 
+test('resolution shortfall (пункт 1.2): 4K запрос → 1 МП выдача даёт варнинг «Размер» и событие', async () => {
+    resetDiagnosticEventsForTests();
+    const originalCreateImageBitmap = globalThis.createImageBitmap;
+    globalThis.createImageBitmap = async () => ({ width: 1024, height: 1024, close() {} });
+    try {
+        const result = await generateImageRequest('browser-image', request({ requestId: 'req_shortfall_4k_0001', imageSize: '4K' }));
+        const warning = (result.warnings || []).find(item => item?.feature === 'Размер');
+        assert.ok(warning, 'варнинг «Размер» отсутствует');
+        assert.match(warning.details, /4K/);
+        assert.match(warning.details, /1024×1024/);
+        const event = listDiagnosticEvents().find(item => item.event === 'resolution-shortfall');
+        assert.ok(event, 'resolution-shortfall event missing');
+        assert.equal(event.details.requested, '4K');
+        assert.equal(event.details.width, 1024);
+        assert.equal(event.details.height, 1024);
+    } finally {
+        if (originalCreateImageBitmap) globalThis.createImageBitmap = originalCreateImageBitmap;
+        else delete globalThis.createImageBitmap;
+    }
+});
+
+test('resolution shortfall: 2K запрос → 4.23 МП выдача без варнинга', async () => {
+    resetDiagnosticEventsForTests();
+    const originalCreateImageBitmap = globalThis.createImageBitmap;
+    globalThis.createImageBitmap = async () => ({ width: 2752, height: 1536, close() {} });
+    try {
+        const result = await generateImageRequest('browser-image', request({ requestId: 'req_shortfall_ok_0001', imageSize: '2K', aspectRatio: '16:9' }));
+        assert.equal((result.warnings || []).some(item => item?.feature === 'Размер'), false);
+        assert.equal(listDiagnosticEvents().some(item => item.event === 'resolution-shortfall'), false);
+    } finally {
+        if (originalCreateImageBitmap) globalThis.createImageBitmap = originalCreateImageBitmap;
+        else delete globalThis.createImageBitmap;
+    }
+});
+
+test('resolution shortfall: провайдер уже предупредил о тире — дублирования нет', async () => {
+    resetDiagnosticEventsForTests();
+    // gemini-native, lite-модель (только 1K): адаптер сам предупреждает
+    // feature 'Размер' (4K опущен), выдача 1024×1024 — пост-чек не дублирует.
+    const geminiConnection = connection();
+    geminiConnection.selectedRoute = {
+        id: 'route-gemini', source: 'test', modelId: 'gemini-3.1-flash-lite-image', generationContract: 'gemini-native',
+        contractVersion: 1, capabilities: { generate: 'supported', references: 'unknown' },
+        bodyKind: 'json', directCors: 'preferred',
+    };
+    // dispatch-plan выводит диалект из (endpoint × family) — на OpenAI-шейпе
+    // gemini-image уходит в chat-completions; пин заставляет говорить native.
+    geminiConnection.overrides = { dialect: 'gemini-native' };
+    const geminiUrl = 'https://images.example/v1beta/models/gemini-3.1-flash-lite-image:generateContent';
+    const standardFetch = globalThis.fetch;
+    globalThis.fetch = async (url, options = {}) => {
+        fetchCalls.push({ url: String(url), options });
+        if (url === geminiUrl) return jsonResponse({ candidates: [{ content: { parts: [{ inlineData: { mimeType: 'image/png', data: 'cmVhZHk=' } }] } }] });
+        return standardFetch(url, options);
+    };
+    const originalCreateImageBitmap = globalThis.createImageBitmap;
+    globalThis.createImageBitmap = async () => ({ width: 1024, height: 1024, close() {} });
+    try {
+        await createConnection(geminiConnection);
+        await setConnectionApiKey('browser-image', 'local-key-only');
+        const result = await generateImageRequest('browser-image', request({ requestId: 'req_shortfall_dup_001', imageSize: '4K' }));
+        const sizeWarnings = (result.warnings || []).filter(item => item?.feature === 'Размер');
+        assert.equal(sizeWarnings.length, 1, 'ровно одно предупреждение о размере — от адаптера');
+        assert.match(sizeWarnings[0].details, /опущен/);
+        assert.equal(listDiagnosticEvents().some(item => item.event === 'resolution-shortfall'), false);
+    } finally {
+        if (originalCreateImageBitmap) globalThis.createImageBitmap = originalCreateImageBitmap;
+        else delete globalThis.createImageBitmap;
+        globalThis.fetch = standardFetch;
+    }
+});
+
 test('browser generation passes the resolved connection timeout to result materialization', async () => {
     const resolved = connection();
     resolved.timeoutMs = 16789;

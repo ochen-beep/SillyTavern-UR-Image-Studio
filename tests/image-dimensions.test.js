@@ -73,3 +73,30 @@ test('ensureCardDimensions rethrows AbortError instead of masking it', async () 
         (e) => e === abort,
     );
 });
+
+test('resolutionShortfall: таблица порогов тиров (пункт 1.2, эмпирика 2026-10-05)', async () => {
+    const { resolutionShortfall } = await import('../src/image-dimensions.js');
+    // 4K запрос → 1 МП выдача → недобор (инцидент nano-banana-pro 2026-10-05).
+    assert.deepEqual(
+        resolutionShortfall(1024, 1024, '4K'),
+        { tier: '4K', megapixels: 1024 * 1024 / 1e6, minMegapixels: 6.0 },
+    );
+    // 2K запрос → 4.23 МП → нет.
+    assert.equal(resolutionShortfall(2752, 1536, '2K'), null);
+    // 1K запрос → 0.92 МП → нет (порог 0.80).
+    assert.equal(resolutionShortfall(1280, 720, '1K'), null);
+    // 1K запрос → 1.57 МП → нет.
+    assert.equal(resolutionShortfall(1024, 1536, '1K'), null);
+    // Граница включена: ровно 0.80 МП — не недобор.
+    assert.equal(resolutionShortfall(1250, 640, '1K'), null);
+    // Ниже границы 1K → недобор.
+    assert.deepEqual(resolutionShortfall(800, 600, '1K'), { tier: '1K', megapixels: 0.48, minMegapixels: 0.8 });
+    // Регистр тира нормализуется.
+    assert.ok(resolutionShortfall(1024, 1024, '4k'));
+    // Неизвестный/пустой тир и неизвестные размеры — проверки нет.
+    assert.equal(resolutionShortfall(1024, 1024, 'auto'), null);
+    assert.equal(resolutionShortfall(1024, 1024, ''), null);
+    assert.equal(resolutionShortfall(1024, 1024, null), null);
+    assert.equal(resolutionShortfall(null, null, '4K'), null);
+    assert.equal(resolutionShortfall(0, 100, '4K'), null);
+});
