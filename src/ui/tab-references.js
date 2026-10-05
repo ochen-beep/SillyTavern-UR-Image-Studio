@@ -47,8 +47,7 @@ let _folderSearchQuery = '';
 // container's LAYOUT px (clientWidth reads visual/zoom), so scale >100% reaches
 // this breakpoint earlier and <100% later — identically on desktop and in the
 // mobile fullscreen mode. Deliberate single semantics: dense scale → compact
-// layout. Visual-px math, if ever needed, goes through visualWidth()
-// (src/ui/zoom.js), not by dividing by the state value.
+// layout.
 const REFS_MOBILE_BREAK = 480;
 
 export function render(root) {

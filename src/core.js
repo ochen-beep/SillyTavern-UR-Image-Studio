@@ -230,12 +230,10 @@ export const defaultSettings = Object.freeze({
     generationFlow: 'ai-only', // DEPRECATED: authoritative value lives in the per-chat
                                // schema-v5 config (state.chatGenerationFlow)
     followLastPost: true,      // Generation tab navigator follows the last post
-    historyRich: true,         // store objects instead of strings in history
     maxRetries: 0,
     retryDelay: 1000,
     // Опыт доставки/диалекта — delivery-evidence.js; авто-повтор — pipeline-queue.js.
     autoRetryAmbiguous: false, // одна автоматическая переотправка очеред-задачи при IMAGE_DELIVERY_AMBIGUOUS
-    historyLimit: 20,
     galleryLimit: 0,           // 0 = no limit
     windowGeometry: null,      // {left,top,width,height}
     uiScale: 1,                // content zoom multiplier for the floating window (Settings tab)
