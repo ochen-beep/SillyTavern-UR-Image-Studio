@@ -308,3 +308,53 @@ test('sweepStaleRunningDrafts is a no-op when localforage has no keys()', async 
     globalThis.SillyTavern.libs.localforage = { getItem: async () => null, setItem: async () => {} };
     await assert.doesNotReject(drafts.sweepStaleRunningDrafts());
 });
+
+// ── Живой оверлей параметров (пункт 1.1) ──
+
+test('live params overlay: getGenerationDraft возвращает UI-значение до записи на диск', async () => {
+    installGlobals();
+    const TEXT = 'пост сцены';
+    await drafts.getGenerationDraft('chat-live', 1, TEXT);
+    drafts.noteLiveGenerationParams('chat-live', 1, TEXT, { aspectRatio: '2:3' });
+    const draft = await drafts.getGenerationDraft('chat-live', 1, TEXT);
+    assert.equal(draft.aspectRatio, '2:3', 'перерендер в окне записи видит значение из UI');
+});
+
+test('live params overlay: хэш-гейт не переносит значения на другой текст поста', async () => {
+    installGlobals();
+    await drafts.getGenerationDraft('chat-live', 2, 'первый текст');
+    drafts.noteLiveGenerationParams('chat-live', 2, 'первый текст', { aspectRatio: '2:3' });
+    const other = await drafts.getGenerationDraft('chat-live', 2, 'пост перегенерирован');
+    assert.equal(other.aspectRatio, '1:1', 'чужой черновик не получает чужой выбор');
+    const same = await drafts.getGenerationDraft('chat-live', 2, 'первый текст');
+    assert.equal(same.aspectRatio, '2:3');
+});
+
+test('live params overlay: студия не зависит от хэша текста сцены', async () => {
+    installGlobals();
+    const studioId = (await import('../src/studio-scope.js')).STUDIO_CHAT_ID;
+    await drafts.getGenerationDraft(studioId, 0, '');
+    drafts.noteLiveGenerationParams(studioId, 0, 'старый текст сцены', { quality: 'high' });
+    const draft = await drafts.getGenerationDraft(studioId, 0, 'текст изменили');
+    assert.equal(draft.quality, 'high');
+});
+
+test('live params overlay: успешная запись стирает совпавшие поля, свежие остаются', async () => {
+    installGlobals();
+    const TEXT = 'текст';
+    await drafts.getGenerationDraft('chat-live', 3, TEXT);
+    drafts.noteLiveGenerationParams('chat-live', 3, TEXT, { aspectRatio: '2:3' });
+    // Запись в полёте подтверждает 2:3; в этот момент пользователь выбрал 16:9.
+    const first = drafts.updateGenerationDraft('chat-live', 3, TEXT, d => ({ ...d, aspectRatio: '2:3' }));
+    drafts.noteLiveGenerationParams('chat-live', 3, TEXT, { aspectRatio: '16:9' });
+    await first;
+    // Оверлей пережил очистку первой записи (значения не совпали)…
+    const mid = await drafts.getGenerationDraft('chat-live', 3, TEXT);
+    assert.equal(mid.aspectRatio, '16:9');
+    // …и вторая запись подтверждает 16:9 на диске, очищая оверлей.
+    await drafts.updateGenerationDraft('chat-live', 3, TEXT, d => ({ ...d }));
+    const persisted = lfMock._store.get('uris_generation_draft:' + encodeURIComponent('chat-live') + ':3');
+    assert.equal(persisted.aspectRatio, '16:9');
+    const after = await drafts.getGenerationDraft('chat-live', 3, TEXT);
+    assert.equal(after.aspectRatio, '16:9', 'диск догнал UI — источник правды черновик');
+});

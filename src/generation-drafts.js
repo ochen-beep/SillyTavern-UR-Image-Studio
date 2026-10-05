@@ -191,13 +191,13 @@ export async function getGenerationDraft(chatId, msgId, messageText) {
     const textStable = chatId === STUDIO_CHAT_ID
         || (existing && existing.messageHash === hashMessage(messageText));
     if (existing && textStable && hasCurrentTemplateSelection) {
-        return deepFreezeSnapshot(existing);
+        return deepFreezeSnapshot(withLiveParams(chatId, msgId, messageText, existing));
     }
     const draft = createGenerationDraft(chatId, msgId, messageText);
     if (!existing || hasCurrentTemplateSelection) {
         await lf.setItem(key, draft);
     }
-    return deepFreezeSnapshot(draft);
+    return deepFreezeSnapshot(withLiveParams(chatId, msgId, messageText, draft));
 }
 
 /**
@@ -347,6 +347,66 @@ export function createStage2Snapshot({ draft, contextSnapshot, refs, effectivePr
 }
 
 
+// ── Живой оверлей параметров (пункт 1.1 плана 2026-10-05) ──────────────────
+//
+// Изменение селектов (Стороны/Размер/Quality) доезжает до черновика
+// асинхронно: сначала chat-конфиг на сервер (сетевой раунд-трип в
+// saveGenerationDefault), затем черновик в localforage. В этом окне любой
+// перерендер (смена активной карточки на «API», автосейв Stage 1) читал
+// старую запись — селекты «слетали», платные прогоны уходили с чужими
+// параметрами. Оверлей хранит последнее значение, ВИДЕННОЕ В UI:
+// getGenerationDraft вмерживает его в возвращаемый черновик, а рендер в
+// tab-generate отдаёт ему приоритет над перечитанным chat-конфигом. Поля
+// стираются после успешной персистенции того же значения — когда диск
+// догнал UI, оверлей больше не нужен. Быстрое следующее изменение
+// перезаписывает поле оверлея и потому не теряется при очистке.
+
+const LIVE_PARAM_FIELDS = ['aspectRatio', 'imageSize', 'quality'];
+const liveParamsOverlay = new Map();
+
+/**
+ * Запомнить параметры, выставленные пользователем в UI, синхронно ДО любой
+ * асинхронной записи. Вызывается из обработчика change в tab-generate.js.
+ *
+ * @param {string} chatId
+ * @param {number} msgId
+ * @param {string} messageText
+ * @param {{aspectRatio?: string, imageSize?: string, quality?: string}} params
+ */
+export function noteLiveGenerationParams(chatId, msgId, messageText, params) {
+    const key = generationDraftKey(chatId, msgId);
+    const next = { ...liveParamsOverlay.get(key) };
+    for (const field of LIVE_PARAM_FIELDS) {
+        if (params && typeof params[field] === 'string' && params[field]) next[field] = params[field];
+    }
+    // Хэш-гейт не даёт значения утечь на пересозданный черновик другого поста
+    // с тем же (chat, msgId); текст студии редактируемый и не хэшируется — там
+    // черновик к тексту не привязан.
+    next.messageHash = chatId === STUDIO_CHAT_ID ? null : hashMessage(messageText);
+    liveParamsOverlay.set(key, next);
+}
+
+function liveParamsFor(chatId, msgId, messageText) {
+    const overlay = liveParamsOverlay.get(generationDraftKey(chatId, msgId));
+    if (!overlay) return null;
+    if (chatId !== STUDIO_CHAT_ID && overlay.messageHash !== hashMessage(messageText)) return null;
+    const params = {};
+    for (const field of LIVE_PARAM_FIELDS) {
+        if (typeof overlay[field] === 'string' && overlay[field]) params[field] = overlay[field];
+    }
+    return Object.keys(params).length ? params : null;
+}
+
+/** Последние параметры, виденные в UI и ещё не догнавшие диск (для рендера). */
+export function getLiveGenerationParams(chatId, msgId, messageText) {
+    return liveParamsFor(chatId, msgId, messageText);
+}
+
+function withLiveParams(chatId, msgId, messageText, draft) {
+    const params = liveParamsFor(chatId, msgId, messageText);
+    return params ? { ...draft, ...params } : draft;
+}
+
 /**
  * Persist a generation draft. Rejects invalid identities.
  *
@@ -361,6 +421,17 @@ export async function saveGenerationDraft(draft) {
     // fields only, so an extra timestamp never invalidates a draft.
     serialized.updatedAt = new Date().toISOString();
     await SillyTavern.libs.localforage.setItem(key, serialized);
+    // Параметры, доехавшие до диск, из оверлея стираются; более свежие
+    // (быстрое следующее изменение) остаются — очистка только по совпадению.
+    const overlay = liveParamsOverlay.get(key);
+    if (overlay) {
+        for (const field of LIVE_PARAM_FIELDS) {
+            if (overlay[field] !== undefined && serialized[field] === overlay[field]) delete overlay[field];
+        }
+        if (LIVE_PARAM_FIELDS.every(field => overlay[field] === undefined)) {
+            liveParamsOverlay.delete(key);
+        }
+    }
 }
 
 // A draft is written for every post the Generation tab is opened on, and

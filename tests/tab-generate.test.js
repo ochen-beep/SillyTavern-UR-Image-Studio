@@ -47,7 +47,7 @@ const { POST_FILTER } = await import('../src/post-navigator.js');
 const { hashMessage } = await import('../src/generation-drafts.js');
 const { MAX_REFS } = await import('../src/refs-library.js');
 const tabGenerate = await import('../src/ui/tab-generate.js');
-const { decidePromptActions, buildGenerateViewModel, renderGenerateMarkup, readGenerationParams, submitCurrentGeneration, composeInsertedPrompt, updateReferenceCorrections, refreshReferencePanel, buildReferencePanelState, resolveConnectionReferencePolicy, getSnapshotReferencePolicy } = tabGenerate;
+const { decidePromptActions, buildGenerateViewModel, renderGenerateMarkup, readGenerationParams, submitCurrentGeneration, composeInsertedPrompt, updateReferenceCorrections, refreshReferencePanel, buildReferencePanelState, resolveConnectionReferencePolicy, getSnapshotReferencePolicy, composeEffectiveParams } = tabGenerate;
 
 beforeEach(() => {
     state.settings = {
@@ -1384,4 +1384,22 @@ test('insert-template button warns and keeps the prompt when no template is sele
         resetTemplateStoreForTests();
         tab?.restore();
     }
+});
+
+// ── composeEffectiveParams: приоритеты параметров (пункт 1.1) ──
+
+test('composeEffectiveParams: chat-дефолты важнее черновика, живой выбор UI — важнее дефолтов', () => {
+    const draft = { aspectRatio: '1:1', imageSize: '1K', quality: 'auto' };
+    // Нет дефолтов и нет живого выбора — значения черновика.
+    assert.deepEqual(composeEffectiveParams(draft, {}, null), { aspectRatio: '1:1', imageSize: '1K', quality: 'auto' });
+    // Chat-дефолт (перечитанный с сервера) перекрывает черновик — прежнее правило.
+    assert.deepEqual(
+        composeEffectiveParams(draft, { aspectRatio: '16:9', imageSize: null, quality: 'high' }, null),
+        { aspectRatio: '16:9', imageSize: '1K', quality: 'high' },
+    );
+    // Живой выбор UI (patchChatConfig в полёте) важнее старого дефолта — фикс 1.1.
+    assert.deepEqual(
+        composeEffectiveParams(draft, { aspectRatio: '16:9' }, { aspectRatio: '2:3' }),
+        { aspectRatio: '2:3', imageSize: '1K', quality: 'auto' },
+    );
 });

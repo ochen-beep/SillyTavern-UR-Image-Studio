@@ -8,7 +8,7 @@ import { state, getCtx, escapeHtml, error, warn, VALID_ASPECT_RATIOS, VALID_IMAG
 import { notifyStage1Ready } from '../events.js';
 import { POST_FILTER, navigatePosts, getPostInfo, setFilter, setCurrentMsgId, getLastPostIndex } from '../post-navigator.js';
 import { runStage1ForDraft, enqueueGeneration, createQueueItem, buildCandidates } from '../pipeline.js';
-import { getGenerationDraft, updateGenerationDraft, hashMessage, normalizeTemplateSelection, resolveDraftTemplateId } from '../generation-drafts.js';
+import { getGenerationDraft, updateGenerationDraft, hashMessage, normalizeTemplateSelection, resolveDraftTemplateId, noteLiveGenerationParams, getLiveGenerationParams } from '../generation-drafts.js';
 import { listTemplates, getTemplate } from '../prompt-templates.js';
 import { resolveSTMacros } from '../template-runtime.js';
 import { patchChatConfig, loadChatConfig } from '../chat-binding.js';
@@ -459,9 +459,10 @@ export async function render(root) {
         : (chatBinding.config.generationDefaults || {});
     const effectiveDraft = {
         ...draft,
-        aspectRatio: defaults.aspectRatio || draft.aspectRatio,
-        imageSize: defaults.imageSize || draft.imageSize,
-        quality: defaults.quality || draft.quality,
+        // Свежий выбор пользователя важнее перечитанного chat-конфига (пункт
+        // 1.1): patchChatConfig ещё в полёте, и старый дефолт с сервера не
+        // должен перебить то, что пользователь выставил секунду назад.
+        ...composeEffectiveParams(draft, defaults, getLiveGenerationParams(chatId, msgId, messageText)),
     };
     const snapshot = effectiveDraft.stage1?.contextSnapshot || null;
     const referenceResolution = await resolveDraftPromptReferences(chatId, effectiveDraft);
@@ -500,6 +501,25 @@ export async function render(root) {
 }
 
 // ── Bindings ──
+
+/**
+ * Итоговые параметры панели: черновик → chat-дефолты → живой выбор UI.
+ * Живой оверлей (пункт 1.1) имеет высший приоритет: свежее действие
+ * пользователя старше перечитанного chat-конфига, чей patchChatConfig ещё
+ * может быть в полёте.
+ * @param {{aspectRatio:string,imageSize:string,quality:string}} draft
+ * @param {{aspectRatio?:string|null,imageSize?:string|null,quality?:string|null}|null} defaults
+ * @param {{aspectRatio?:string,imageSize?:string,quality?:string}|null} liveParams
+ * @returns {{aspectRatio:string,imageSize:string,quality:string}}
+ */
+export function composeEffectiveParams(draft, defaults, liveParams) {
+    return {
+        aspectRatio: defaults?.aspectRatio || draft.aspectRatio,
+        imageSize: defaults?.imageSize || draft.imageSize,
+        quality: defaults?.quality || draft.quality,
+        ...(liveParams || {}),
+    };
+}
 
 /**
  * Read the generation parameters currently visible in the Generate tab.
@@ -770,6 +790,13 @@ export function bindGenerate(root) {
     for (const [selector, key] of [['#urisAspect', 'aspectRatio'], ['#urisImgSize', 'imageSize'], ['#urisQuality', 'quality']]) {
         root.querySelector(selector)?.addEventListener('change', async e => {
             try {
+                // В живой оверлей ДО любого await (пункт 1.1): перерендер в окне
+                // записи должен увидеть ровно это значение, а не перечитанный
+                // старый черновик.
+                const scope = activeScope(root);
+                if (scope.studio || (scope.msgId != null && getCtx().chat?.[scope.msgId])) {
+                    noteLiveGenerationParams(scope.chatId, scope.msgId, scope.messageText, { [key]: e.target.value });
+                }
                 await saveGenerationDefault(key, e.target.value);
             } catch (e) {
                 reportFailure({ scope: URIS_SCOPES.params, message: `Не удалось сохранить ${key}: ${e?.message || e}`, toast: true, toastText: `Не удалось сохранить параметр: ${e?.message || e}` });
