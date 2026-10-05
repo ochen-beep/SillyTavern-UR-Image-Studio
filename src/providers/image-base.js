@@ -282,6 +282,13 @@ function safeJsonParse(text) {
 function extractErrorDetail(payload) {
     if (typeof payload?.error?.message === 'string') return payload.error.message;
     if (typeof payload?.error === 'string') return payload.error;
+    // OpenAI-совместимые шлюзы отвечают и не под `error`: семейство new-api /
+    // one-api кладёт причину в top-level `message` ({"success":false,"message":…}),
+    // FastAPI-образные — в `detail` / `error.details`. Всё читается только на
+    // не-2xx пути, где success-тел с посторонним `message` не бывает.
+    if (typeof payload?.message === 'string') return payload.message;
+    if (typeof payload?.detail === 'string') return payload.detail;
+    if (typeof payload?.error?.details === 'string') return payload.error.details;
     return '';
 }
 

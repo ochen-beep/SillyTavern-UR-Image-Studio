@@ -61,6 +61,67 @@ test('readJsonResponse surfaces HTTP errors with upstream detail', async () => {
     );
 });
 
+// Матрица извлечения причины из не-2xx тел (2026-10-05, пункт 1.4): гейтвеи
+// кладут причину в разные места — вложенный error.message (OpenAI), строку
+// error, top-level message (семейство new-api: {"success":false,"message":…}),
+// detail (FastAPI-образные, включая naistera). Порядок: error.message →
+// error → message → detail → error.details; не-строки игнорируются.
+function errorResponse(status, bodyText) {
+    return { status, async text() { return bodyText; } };
+}
+
+async function detailOf(status, bodyText) {
+    let message = '';
+    try {
+        await readJsonResponse(errorResponse(status, bodyText), 'Gateway');
+    } catch (error) {
+        message = error?.message || '';
+    }
+    const match = /: (.*)\.$/s.exec(message);
+    return match ? match[1] : '';
+}
+
+test('extractErrorDetail: вложенный error.message (OpenAI) — как раньше', async () => {
+    assert.equal(await detailOf(400, JSON.stringify({ error: { message: 'size not allowed' } })), 'size not allowed');
+});
+
+test('extractErrorDetail: error строкой — как раньше', async () => {
+    assert.equal(await detailOf(400, JSON.stringify({ error: 'bad request shape' })), 'bad request shape');
+});
+
+test('extractErrorDetail: top-level message (new-api / nano-gpt) — новая ветка', async () => {
+    assert.equal(
+        await detailOf(400, JSON.stringify({ message: 'Invalid request parameters. Please check your input and try again.', code: 'request_error' })),
+        'Invalid request parameters. Please check your input and try again.',
+    );
+});
+
+test('extractErrorDetail: detail (FastAPI / naistera)', async () => {
+    assert.equal(
+        await detailOf(503, JSON.stringify({ error: true, status_code: 503, detail: 'Произошла неизвестная ошибка. Попробуйте повторить запрос позже.' })),
+        'Произошла неизвестная ошибка. Попробуйте повторить запрос позже.',
+    );
+});
+
+test('extractErrorDetail: error.details как строка', async () => {
+    assert.equal(await detailOf(400, JSON.stringify({ error: { details: 'field model is required' } })), 'field model is required');
+});
+
+test('extractErrorDetail: объект в message игнорируется, вложенный error.message приоритетнее', async () => {
+    // {"message":{…}} — не строка, ветка не срабатывает.
+    assert.equal(await detailOf(400, JSON.stringify({ message: { text: 'not a string' } })), '');
+    // Приоритет: вложенный error.message старше top-level message.
+    assert.equal(
+        await detailOf(400, JSON.stringify({ error: { message: 'nested wins' }, message: 'top-level loses' })),
+        'nested wins',
+    );
+});
+
+test('extractErrorDetail: HTML-тело даёт пустую причину', async () => {
+    const detail = await detailOf(502, '<!doctype html><html><body>Bad Gateway</body></html>');
+    assert.equal(detail, '');
+});
+
 test('readJsonResponse clones before a disturbed response body can reject clone()', async () => {
     const body = new TextEncoder().encode('{"data":[]}');
     let bodyUsed = false;
