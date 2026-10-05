@@ -61,8 +61,6 @@ export function ensureStudioStoreReady() {
     return studioStore.ready();
 }
 
-export function studioStoreMode() { return studioStore.mode(); }
-
 /** Await durability of queued studio writes. */
 export function flushStudioWrites() {
     return studioStore.flush();

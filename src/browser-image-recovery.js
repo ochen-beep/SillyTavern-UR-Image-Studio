@@ -14,14 +14,11 @@ const ACTIVE_PENDING_STATUSES = new Set(['notStarted', 'dispatchingUnknown', 're
 function lf() { return SillyTavern.libs.localforage; }
 
 function clone(value) {
-    if (value === null || typeof value !== 'object') return value;
-    return Array.isArray(value) ? value.map(clone) : Object.fromEntries(Object.entries(value).map(([key, item]) => [key, clone(item)]));
+    return structuredClone(value);
 }
 
 function cloneFreeze(value) {
-    if (value === null || typeof value !== 'object') return value;
-    const copy = Array.isArray(value) ? value.map(cloneFreeze) : Object.fromEntries(Object.entries(value).map(([key, item]) => [key, cloneFreeze(item)]));
-    return Object.freeze(copy);
+    return Object.freeze(structuredClone(value));
 }
 
 async function readRecords() {

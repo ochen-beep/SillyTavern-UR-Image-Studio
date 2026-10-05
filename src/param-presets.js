@@ -30,8 +30,6 @@ export function ensureParamPresetStoreReady() {
     return presetsStore.ready();
 }
 
-export function paramPresetStoreMode() { return presetsStore.mode(); }
-
 /** Await durability of queued preset writes. */
 export function flushParamPresetWrites() {
     return presetsStore.flush();

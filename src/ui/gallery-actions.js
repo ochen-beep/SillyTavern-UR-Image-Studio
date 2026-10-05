@@ -132,7 +132,7 @@ export async function saveAsReference(item) {
             void releaseRefImage(oldImage);
             toastr?.success('Изображение обновлено');
         }
-        refreshActive();
+        saveSettings();
     } catch (err) {
         log('saveRef error:', err.message);
         reportFailure({ scope: URIS_SCOPES.gallery, message: `Не удалось сохранить: ${err?.message || err}`, toast: true, toastText: 'Не удалось сохранить: ' + err.message });
@@ -421,12 +421,6 @@ async function rebuildRefsFromSnapshot(snapshot) {
         } catch { /* ignore individual failures */ }
     }
     return out;
-}
-
-function refreshActive() {
-    // Re-dispatch a refresh of whichever view is active. saveSettings triggers
-    // ST's settings redraw; the gallery tab re-renders on its own render() call.
-    saveSettings();
 }
 
 function refreshRoot(root) {

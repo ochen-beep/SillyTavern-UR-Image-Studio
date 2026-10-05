@@ -8,7 +8,7 @@
  * are also listed as aliases.
  */
 
-import { hashMessage } from './generation-drafts.js';
+import { hashMessage, deepFreezeSnapshot } from './generation-drafts.js';
 
 /**
  * @typedef {object} SceneEntity
@@ -124,18 +124,6 @@ export function normalizeAliases(value) {
  * @param {any} value
  * @returns {any}
  */
-function deepFreeze(value) {
-    if (value == null) return value;
-    if (Array.isArray(value)) {
-        for (let i = 0; i < value.length; i++) deepFreeze(value[i]);
-    } else if (Object.getPrototypeOf(value) === Object.prototype) {
-        for (const key of Object.keys(value)) deepFreeze(value[key]);
-    } else {
-        return value;
-    }
-    return Object.freeze(value);
-}
-
 /**
  * Shared entity resolver for scene text and prompt text.
  *
@@ -302,7 +290,7 @@ export async function buildSceneContextSnapshot(input) {
         matchedReferences,
     };
 
-    return deepFreeze(snapshot);
+    return deepFreezeSnapshot(snapshot);
 }
 
 /**
@@ -333,7 +321,7 @@ export async function resolvePromptReferenceContext({ prompt, candidates, correc
             ...(e.bindingMode === 'description' ? { matchedLabel: matchedReferences.find(ref => ref.id === e.id)?.matchedPhrases?.[0] || e.name || `reference ${index + 1}` } : {}),
         }));
 
-    return deepFreeze({
+    return deepFreezeSnapshot({
         promptHash: hashMessage(prompt),
         referencesRevision: corrections?.revision ?? 0,
         entities: orderedEntities,

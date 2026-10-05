@@ -160,7 +160,6 @@ function makeDraggable(icon) {
         const rawY = e.clientY - offsetY;
         if (!dragging && Math.hypot(rawX - startX, rawY - startY) > DRAG_THRESHOLD_PX) {
             dragging = true;
-            icon.classList.add('uris_fab_dragging');
         }
         const pos = clampFabPosition({ left: rawX, top: rawY }, dragViewport, FAB_SIZE, dragTopInset);
         icon.style.left = `${pos.left}px`;
@@ -171,7 +170,6 @@ function makeDraggable(icon) {
         if (icon.hasPointerCapture(e.pointerId)) icon.releasePointerCapture(e.pointerId);
         const wasDragging = dragging;
         dragging = false;
-        icon.classList.remove('uris_fab_dragging');
         if (wasDragging) persistPosition(icon);
         else if (_onToggle) _onToggle();
     });
@@ -179,7 +177,6 @@ function makeDraggable(icon) {
     icon.addEventListener('pointercancel', (e) => {
         if (icon.hasPointerCapture(e.pointerId)) icon.releasePointerCapture(e.pointerId);
         dragging = false;
-        icon.classList.remove('uris_fab_dragging');
     });
 
     icon.style.touchAction = 'none';

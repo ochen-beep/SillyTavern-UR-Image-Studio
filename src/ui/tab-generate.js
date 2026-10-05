@@ -999,11 +999,6 @@ export {
     updateReferenceCorrections,
     buildReferencePanelState,
     resolveConnectionReferencePolicy,
-    renderReferencePreviewMarkup,
-    renderPromptAmbiguities,
-    renderAmbiguitiesMarkup,
-    renderMatchedKeywords,
-    renderLivePreview,
     refreshReferencePanel,
     getSnapshotReferencePolicy,
 } from './tab-generate-refs.js';

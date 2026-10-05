@@ -1,6 +1,6 @@
 // @ts-check
 /** Templates tab: instruction templates only. */
-import { state, escapeHtml, showConfirmModal, showInputModal, debounceSave, error } from '../core.js';
+import { state, escapeHtml, showConfirmModal, showInputModal, error } from '../core.js';
 import { listTemplates, saveTemplate, deleteTemplate, createInstructionTemplate } from '../prompt-templates.js';
 import { patchChatConfig } from '../chat-binding.js';
 import { refreshActive } from './tabs.js';
@@ -112,7 +112,11 @@ function bindCards(host) {
             await save();
         });
         card.addEventListener('change', save);
-        card.addEventListener('input', debounceSave(saveTemplate, id, collect));
+        let saveTimer;
+        card.addEventListener('input', () => {
+            clearTimeout(saveTimer);
+            saveTimer = setTimeout(async () => { await saveTemplate({ id, ...collect() }); }, 400);
+        });
         card.querySelector('.uris-preset-card-header')?.addEventListener('click', event => {
             if (event.target.closest('input, button, select, textarea')) return;
             const body = card.querySelector('.uris-preset-card-body');

@@ -8,7 +8,7 @@
  */
 import { state, getCtx, log, error } from './core.js';
 import { recordDiagnosticEvent, hashDiagnosticId } from './diagnostic-events.js';
-import { hashMessage } from './generation-drafts.js';
+import { hashMessage, deepFreezeSnapshot } from './generation-drafts.js';
 import { resolveChatConfigSnapshot } from './pipeline-config.js';
 import { runStage2ForDraft } from './pipeline-stage2.js';
 import { STUDIO_CHAT_ID } from './studio-scope.js';
@@ -37,7 +37,7 @@ export async function createQueueItem({ chatId, msgId, messageText, requestedAct
     }
     // Explicit field copy: the snapshot must not alias (or freeze) the caller's
     // object, and its shape is validated here rather than at paid-dispatch time.
-    const submissionSnapshot = submission == null ? null : deepFreeze({
+    const submissionSnapshot = submission == null ? null : deepFreezeSnapshot({
         prompt: submission.prompt,
         aspectRatio: submission.aspectRatio ?? null,
         imageSize: submission.imageSize ?? null,
@@ -50,7 +50,7 @@ export async function createQueueItem({ chatId, msgId, messageText, requestedAct
     });
     // Resolve schema-v5 binding and route together at enqueue time. The route is
     // deep-cloned so later connection edits cannot change a queued Stage 2 call.
-    const chatConfig = deepFreeze(await resolveChatConfigSnapshot());
+    const chatConfig = deepFreezeSnapshot(await resolveChatConfigSnapshot());
     // Studio items carry their scene text: there is no chat message to re-read
     // at execution time, and the studio scope survives chat switches.
     // Submission items deliberately do NOT: per the deferred-queue contract they
@@ -72,12 +72,6 @@ export async function createQueueItem({ chatId, msgId, messageText, requestedAct
         details: { requestedAction, submission: submissionSnapshot != null },
     });
     return item;
-}
-
-function deepFreeze(value) {
-    if (!value || typeof value !== 'object' || Object.isFrozen(value)) return value;
-    for (const child of Object.values(value)) deepFreeze(child);
-    return Object.freeze(value);
 }
 
 /**

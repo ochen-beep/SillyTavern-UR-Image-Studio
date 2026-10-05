@@ -49,9 +49,7 @@ const FAILURE_TOAST_INTERVAL = 5000;
 const PROBE_RETRY_MS = 10 * 1000;
 
 function clone(value) {
-    if (value === null || value === undefined) return value;
-    if (typeof structuredClone === 'function') return structuredClone(value);
-    return JSON.parse(JSON.stringify(value));
+    return structuredClone(value);
 }
 
 /** Plain-data equality for diffing mirror records against the pre-mutate snapshot. */

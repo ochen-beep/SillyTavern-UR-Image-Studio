@@ -178,11 +178,11 @@ export const URIS_SCOPES = Object.freeze({
  */
 export function reportFailure({
     scope = 'URIS', message, context = null, level = 'error', quiet = false,
-    toast = false, toastText = null, toastKind = 'error', toastTitle = null,
+    toast = false, toastText = null, toastTitle = null,
 } = {}) {
     const entry = recordUrisError({ scope, message, context, level, quiet });
     if (toast) {
-        try { globalThis.toastr?.[toastKind]?.(toastText ?? entry.message, toastTitle || undefined); } catch { /* no toastr in tests */ }
+        try { globalThis.toastr?.error(toastText ?? entry.message, toastTitle || undefined); } catch { /* no toastr in tests */ }
     }
     return entry;
 }

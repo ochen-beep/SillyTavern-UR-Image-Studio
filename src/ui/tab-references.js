@@ -725,9 +725,6 @@ async function _renderMobileAll(root) {
         <div class="uris-references uris-refs-mobile-stack">
             <div class="uris-mobile-screen" id="urisMobileScreen"></div>
         </div>`;
-    // Остаточное состояние «карточка без refId» (смена чата/ре-рендер посреди
-    // правки) иначе молча оставляет вкладку пустой — откатываемся в сетку.
-    if (_mobileScreen === 'card' && !_editingRefId) _mobileScreen = 'grid';
     // Неизвестное/остаточное состояние (null после десктопного ресайза, «карточка
     // без refId» посреди правки) иначе молча оставляет вкладку пустой —
     // откатываемся: неизвестное — в список папок, битую карточку — в сетку.

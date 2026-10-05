@@ -86,11 +86,6 @@ export async function replaceTemplateRecords(records) {
  * Fresh records for export paths. Null in legacy mode — the caller then keeps
  * reading templates from settings, as before.
  */
-export async function getTemplateRecordsSnapshot() {
-    if (await store.ready() !== 'file') return null;
-    return store.snapshot();
-}
-
 // ── Test-only surface ──
 
 export function resetTemplateFileStoreForTests() {

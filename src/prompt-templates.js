@@ -5,7 +5,6 @@ import { recordDiagnosticEvent } from './diagnostic-events.js';
 import {
     applyTemplateMutation,
     ensureTemplateStoreReady,
-    getTemplateRecordsSnapshot,
     listTemplateRecords,
     replaceTemplateRecords,
 } from './template-file-store.js';
@@ -163,5 +162,5 @@ export async function replaceTemplateStoreRecords(records) {
  * reading templates from settings, as before.
  */
 export async function getTemplateRecordsForExport() {
-    return getTemplateRecordsSnapshot();
+    return listTemplateRecords();
 }

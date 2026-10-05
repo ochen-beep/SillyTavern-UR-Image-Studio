@@ -153,13 +153,6 @@ export function renderAmbiguitiesMarkup(ambiguities, entities) {
  * @param {HTMLElement} root
  * @param {import('../scene-context.js').SceneContextSnapshot|null} referenceResolution
  */
-
-/**
- * Rebuild only the ambiguity list after a prompt edit, preserving focus.
- *
- * @param {HTMLElement} root
- * @param {import('../scene-context.js').SceneContextSnapshot|null} referenceResolution
- */
 export function renderPromptAmbiguities(root, referenceResolution) {
     const host = root.querySelector('.uris-scene-context');
     if (!host) return;

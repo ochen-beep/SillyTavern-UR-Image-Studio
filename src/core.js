@@ -562,20 +562,6 @@ export function debounce(fn, ms) {
     let t; return (...a) => { clearTimeout(t); t = setTimeout(() => fn(...a), ms); };
 }
 
-/**
- * Debounced save for CRUD cards: saver({id, ...collect()}).
- * @param {Function} saver — async (patch) => void
- * @param {string} id
- * @param {Function} collect — () => object
- * @param {number} [ms=400]
- */
-export function debounceSave(saver, id, collect, ms = 400) {
-    let t;
-    return () => {
-        clearTimeout(t);
-        t = setTimeout(async () => { await saver({ id, ...collect() }); }, ms);
-    };
-}
 export function uid() { return Date.now().toString(36) + Math.random().toString(36).slice(2, 8); }
 
 /**

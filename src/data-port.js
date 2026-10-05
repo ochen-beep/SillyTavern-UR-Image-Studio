@@ -162,9 +162,7 @@ const TRANSIENT_FIELDS = new Set(['pendingOperation', 'pending', 'recovery', 're
 
 function plain(value) { return value !== null && typeof value === 'object' && !Array.isArray(value); }
 function cloneExact(value) {
-    if (value === null || value === undefined) return value;
-    if (typeof structuredClone === 'function') return structuredClone(value);
-    return JSON.parse(JSON.stringify(value));
+    return structuredClone(value);
 }
 function portable(value) {
     if (value === null || typeof value !== 'object') return value;
@@ -788,30 +786,6 @@ export async function runExport() {
     } catch (e) {
         error('runExport:', e);
         reportFailure({ scope: URIS_SCOPES.dataPort, message: 'Ошибка экспорта: ' + (e?.message || e), toast: true, toastText: 'Ошибка экспорта: ' + e.message, toastTitle: DISPLAY_NAME });
-    }
-}
-
-/**
- * Import data from a file.
- * @param {'merge'|'replace'} [mode='merge']
- * @param {Function} [onSuccess] — callback after successful import (e.g. UI update)
- */
-export async function runImport(mode = 'merge', onSuccess) {
-    try {
-        const data = await uploadJson();
-        const result = await importUrisData(data, { mode });
-        toastr?.success(
-            `Импортировано ${result.importedRecords} записей, конфигураций чата: ${result.importedChatBindings}`,
-            DISPLAY_NAME
-        );
-        if (typeof onSuccess === 'function') {
-            try { onSuccess(result); } catch (e) { warn('runImport: onSuccess callback error', e.message); }
-        }
-        return result;
-    } catch (e) {
-        error('runImport:', e);
-        reportFailure({ scope: URIS_SCOPES.dataPort, message: 'Ошибка импорта: ' + (e?.message || e), toast: true, toastText: 'Ошибка импорта: ' + e.message, toastTitle: DISPLAY_NAME });
-        throw e;
     }
 }
 

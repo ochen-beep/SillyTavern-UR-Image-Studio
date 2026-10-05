@@ -87,9 +87,7 @@ export function textToBase64(text) {
 }
 
 function clone(value) {
-    if (value === null || value === undefined) return value;
-    if (typeof structuredClone === 'function') return structuredClone(value);
-    return JSON.parse(JSON.stringify(value));
+    return structuredClone(value);
 }
 
 function defaultCountEntries(value) {
