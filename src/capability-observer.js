@@ -361,6 +361,41 @@ export function formatObservationLog(attempt, meta = {}) {
     return parts.join(' ');
 }
 
+// ── Failure streak (пункт 3.1 плана 2026-10-05) ─────────────────────────────
+// Сессионный счётчик «эта модель падает» per (connId, modelId): ≥ 2 подряд
+// provider-error/missing-image — признак устаревшего каталога шлюза. In-memory
+// без персистенции: после перезагрузки страницы история начинается заново —
+// факту «модель была мертва час назад» доверять нельзя. Любой другой исход
+// сбрасывает счётчик; «Проверить» сбрасывает принудительно.
+const FAILURE_STREAK_OUTCOMES = new Set(['provider-error', 'missing-image']);
+const failureStreaks = new Map(); // `${connId} ${modelId}` → { count, lastStatus }
+
+export function modelFailureStreak(connId, modelId) {
+    return failureStreaks.get(`${connId} ${modelId}`) || null;
+}
+
+/** Сброс «Проверить» / ручной смены модели: факты каталога перечитаны. */
+export function resetModelFailureStreak(connId) {
+    if (!connId) return;
+    for (const key of failureStreaks.keys()) {
+        if (key.startsWith(`${connId} `)) failureStreaks.delete(key);
+    }
+}
+
+function noteOutcomeForStreak(connId, modelId, attempt) {
+    if (!connId || !modelId) return;
+    const key = `${connId} ${modelId}`;
+    if (FAILURE_STREAK_OUTCOMES.has(attempt.outcome)) {
+        const previous = failureStreaks.get(key) || { count: 0, lastStatus: null };
+        failureStreaks.set(key, {
+            count: previous.count + 1,
+            lastStatus: Number.isSafeInteger(attempt.evidenceStatus) ? attempt.evidenceStatus : previous.lastStatus,
+        });
+    } else {
+        failureStreaks.delete(key);
+    }
+}
+
 // ── top-level convenience for the pipeline hook ────────────────────────────
 
 /**
@@ -371,7 +406,7 @@ export function formatObservationLog(attempt, meta = {}) {
  * @param {object} args `{ route, request, connection?, httpStatus?, error?, notify? }`
  * @returns {object|null}
  */
-export function observeCapabilityAttempt({ route, request, connection = {}, httpStatus = null, error = null, notify = null } = {}) {
+export function observeCapabilityAttempt({ route, request, connection = {}, httpStatus = null, error = null, notify = null, connId = null } = {}) {
   try {
     if (!route?.generationContract) return null;
     const { operation, referenceMode, delivery } = classifyOperation(route, request, connection);
@@ -384,7 +419,9 @@ export function observeCapabilityAttempt({ route, request, connection = {}, http
       delivery,
       refCount: refs.length,
       evidenceCode: error?.code || null,
+      evidenceStatus: Number.isSafeInteger(error?.httpStatus) ? error.httpStatus : (Number.isSafeInteger(httpStatus) ? httpStatus : null),
     };
+    noteOutcomeForStreak(connId, route?.modelId, attempt);
     const line = formatObservationLog(attempt, {
         modelId: route?.modelId,
         contract: route?.generationContract,

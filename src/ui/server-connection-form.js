@@ -12,7 +12,8 @@ import { deleteConnection, saveConnection } from '../connections.js';
 import { getConnectionApiKey, setConnectionApiKey } from '../connection-store.js';
 import { probeConnection } from '../connect-probe.js';
 import { CONTRACTS, normalizeEndpoint, normalizeConnectionTimeoutMs, CONNECTION_TIMEOUT_DEFAULT_MS } from '../image-connection-schema.js';
-import { deliveryHintFor, editDialectHintFor, clearDeliveryEvidenceFor } from '../delivery-evidence.js';
+import { deliveryHintFor, editDialectHintFor, editDialectsBothRejected, clearDeliveryEvidenceFor } from '../delivery-evidence.js';
+import { modelFailureStreak } from '../capability-observer.js';
 import { getProviderDescriptor } from '../provider-descriptors.js';
 import { validatePollinationsToken } from '../providers/image-pollinations.js';
 import { validateNaisteraToken } from '../providers/image-naistera.js';
@@ -99,6 +100,13 @@ function factsLine(draft) {
     const editHint = editDialectHintFor(draft);
     if (editHint === 'img2img-proxy') parts.push('Редактирование: авто→generations+image');
     else if (editHint === 'json-proxy') parts.push('Редактирование: авто→JSON через прокси');
+    else if (editDialectsBothRejected(draft)) parts.push('Редактирование: шлюз отвечает ошибкой на оба диалекта — референсы на этом шлюзе недоступны, дело не в настройках');
+    // Пункт 3.1: модель стабильно падает (≥ 2 подряд provider-error/без картинки) —
+    // признак мёртвой записи каталога; сбрасывается успехом и «Проверить».
+    const failureStreak = modelFailureStreak(draft?.id, draft?.model?.id);
+    if (failureStreak?.count >= 2) {
+        parts.push(`последние ${failureStreak.count} генераций этой модели упали${failureStreak.lastStatus && failureStreak.lastStatus !== 200 ? ` (HTTP ${failureStreak.lastStatus})` : ''} — возможно, модель в каталоге шлюза мертва`);
+    }
     const evidence = draft?.model?.id ? draft.evidence?.[draft.model.id] : null;
     if (evidence?.refs === 'confirmed') parts.push(`референсы: подтверждены${Number.isInteger(evidence.n) ? ` (${evidence.n})` : ''}`);
     else if (evidence?.refs === 'rejected') parts.push(`референсы: отклонены${evidence.reason ? ` — ${evidence.reason}` : ''}`);

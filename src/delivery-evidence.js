@@ -224,6 +224,26 @@ export function noteProbe({ connId, endpoint, verdict, now = Date.now() }) {
     );
 }
 
+/**
+ * Пункт 3.3 плана 2026-10-05: оба диалекта редактирования отвечают ошибкой —
+ * факт-строка карточки должна отличать «сломала настройку» от «шлюз так не
+ * умеет». Факты уже собирает диалектная цепочка: multipart заблокирован
+ * пр eyebrowфой (multipartBlockedAt) И JSON-диалект отвергнут (jsonRejectedAt),
+ * оба свежие (TTL 30 минут). Чистый читатель memory-карты — синхронный,
+ * как deliveryHintFor.
+ *
+ * @param {{id?: string, endpoint?: string}} conn
+ * @param {number} [nowMs]
+ * @returns {boolean}
+ */
+export function editDialectsBothRejected(conn, nowMs = Date.now()) {
+    const evidence = editMemory.get(conn?.id);
+    if (!evidence?.host) return false;
+    if (hostOfEndpoint(conn?.endpoint) !== evidence.host) return false;
+    return fresh(evidence.multipartBlockedAt, EDIT_DIALECT_TTL_MS, nowMs)
+        && fresh(evidence.jsonRejectedAt, EDIT_DIALECT_TTL_MS, nowMs);
+}
+
 /** Drop the stored experience (card «Сбросить знания о шлюзе»). */
 export async function clearDeliveryEvidenceFor(connId) {
     memory.delete(connId);

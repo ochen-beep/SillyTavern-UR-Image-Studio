@@ -7,6 +7,8 @@ import {
   classifyOutcome,
   formatObservationLog,
   observeCapabilityAttempt,
+  modelFailureStreak,
+  resetModelFailureStreak,
 } from '../src/capability-observer.js';
 import { providerError, ImageProviderError } from '../src/providers/image-base.js';
 
@@ -324,4 +326,63 @@ test('observeCapabilityAttempt forwards the log line to the notify hook and surv
     notify: () => { throw new Error('UI hook exploded'); },
   });
   assert.equal(attempt?.outcome, 'success');
+});
+// ── Failure streak (пункт 3.1) ──────────────────────────────────────────────
+
+const streakRoute = { ...baseRoute, modelId: 'dead-model' };
+const streakRequest = { references: [], requestId: 'req_streak_0001' };
+
+test('failure streak: две подряд provider-error дают счётчик 2 с последним HTTP', () => {
+  const httpError = new ImageProviderError('UPSTREAM_HTTP_ERROR', 'gateway exploded');
+  httpError.httpStatus = 500;
+  observeCapabilityAttempt({ route: streakRoute, request: streakRequest, error: httpError, connId: 'conn-streak' });
+  observeCapabilityAttempt({ route: streakRoute, request: streakRequest, error: httpError, connId: 'conn-streak' });
+  const streak = modelFailureStreak('conn-streak', 'dead-model');
+  assert.equal(streak.count, 2);
+  assert.equal(streak.lastStatus, 500);
+});
+
+test('failure streak: любой другой исход сбрасывает счётчик', () => {
+  const ok = observeCapabilityAttempt({ route: streakRoute, request: streakRequest, error: null, connId: 'conn-streak' });
+  assert.equal(ok.outcome, 'success');
+  assert.equal(modelFailureStreak('conn-streak', 'dead-model'), null);
+});
+
+test('failure streak: timeout и network-unknown не считаются падением модели', () => {
+  const timeout = Object.assign(new Error('Таймаут'), { name: 'AbortError' });
+  observeCapabilityAttempt({ route: streakRoute, request: streakRequest, error: timeout, connId: 'conn-streak' });
+  assert.equal(modelFailureStreak('conn-streak', 'dead-model'), null, 'abort — не факт о модели');
+  const cors = new TypeError('Failed to fetch');
+  observeCapabilityAttempt({ route: streakRoute, request: streakRequest, error: cors, connId: 'conn-streak' });
+  assert.equal(modelFailureStreak('conn-streak', 'dead-model'), null, 'CORS — не факт о модели');
+});
+
+test('failure streak: счётчики изолированы per (connId, modelId)', () => {
+  const httpError = new ImageProviderError('UPSTREAM_HTTP_ERROR', 'gateway exploded');
+  httpError.httpStatus = 500;
+  observeCapabilityAttempt({ route: streakRoute, request: streakRequest, error: httpError, connId: 'conn-a' });
+  observeCapabilityAttempt({ route: { ...streakRoute, modelId: 'other-model' }, request: streakRequest, error: httpError, connId: 'conn-a' });
+  assert.equal(modelFailureStreak('conn-a', 'dead-model').count, 1);
+  assert.equal(modelFailureStreak('conn-a', 'other-model').count, 1);
+  assert.equal(modelFailureStreak('conn-b', 'dead-model'), null);
+});
+
+test('failure streak: resetModelFailureStreak чистит всю связку connId (кнопка «Проверить»)', () => {
+  const httpError = new ImageProviderError('UPSTREAM_HTTP_ERROR', 'gateway exploded');
+  httpError.httpStatus = 500;
+  observeCapabilityAttempt({ route: streakRoute, request: streakRequest, error: httpError, connId: 'conn-reset' });
+  observeCapabilityAttempt({ route: streakRoute, request: streakRequest, error: httpError, connId: 'conn-reset' });
+  assert.equal(modelFailureStreak('conn-reset', 'dead-model').count, 2);
+  resetModelFailureStreak('conn-reset');
+  assert.equal(modelFailureStreak('conn-reset', 'dead-model'), null);
+});
+
+test('failure streak: missing-image (200 без картинки) тоже считает, HTTP не показывается', () => {
+  const missing = new ImageProviderError('UPSTREAM_RESPONSE_INVALID', 'OpenAI Images returned a successful response without an image.');
+  observeCapabilityAttempt({ route: streakRoute, request: streakRequest, error: missing, connId: 'conn-missing' });
+  observeCapabilityAttempt({ route: streakRoute, request: streakRequest, error: missing, connId: 'conn-missing' });
+  const streak = modelFailureStreak('conn-missing', 'dead-model');
+  assert.equal(streak.count, 2);
+  // У «200 без картинки» нет HTTP-ошибки — бейдж покажет только счётчик.
+  assert.equal(streak.lastStatus, null);
 });

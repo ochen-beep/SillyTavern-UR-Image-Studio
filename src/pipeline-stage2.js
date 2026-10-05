@@ -322,7 +322,7 @@ export async function runStage2ForDraft(input, onStatus = () => {}, signal, opts
         // nothing and never blocks or reruns the paid POST.
         observeCapabilityAttempt({
             route: effectiveRoute, request, connection: effectiveConnection,
-            httpStatus: 200, error: null,
+            httpStatus: 200, error: null, connId: imageConnId,
         });
 
         recordDiagnosticEvent({
@@ -384,7 +384,7 @@ export async function runStage2ForDraft(input, onStatus = () => {}, signal, opts
         // `network-unknown`, never `unsupported`. This call never throws.
         observeCapabilityAttempt({
             route: effectiveRoute, request, connection: effectiveConnection,
-            httpStatus: e?.httpStatus ?? null, error: e,
+            httpStatus: e?.httpStatus ?? null, error: e, connId: imageConnId,
         });
         const isCancelled = useSignal?.aborted || e?.name === 'AbortError';
         recordDiagnosticEvent({

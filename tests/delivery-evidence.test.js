@@ -174,3 +174,31 @@ test('noteProbe: смена хоста инвалидирует вердикт; 
     await evidence.noteProbe({ connId: 'c1', endpoint: 'https://gw.test/v1', verdict: 'sideways', now: NOW });
     assert.equal(evidence._peekEvidenceForTests('c1').delivery.probe.verdict, 'proxy', 'невалидный вердикт игнорируется');
 });
+
+// ── Оба диалекта редактирования отклонены (пункт 3.3) ──
+
+test('editDialectsBothRejected: multipartBlockedAt + jsonRejectedAt → true', async () => {
+    await evidence.noteEditDialectOutcome({ connId: 'c1', endpoint: 'https://gw.test/v1', dialect: 'multipart', ok: false, rejectKind: 'preflight', now: NOW });
+    await evidence.noteEditDialectOutcome({ connId: 'c1', endpoint: 'https://gw.test/v1', dialect: 'json', ok: false, now: NOW + MINUTE });
+    assert.equal(evidence.editDialectsBothRejected(conn(), NOW + 2 * MINUTE), true);
+});
+
+test('editDialectsBothRejected: только один факт — false', async () => {
+    await evidence.noteEditDialectOutcome({ connId: 'c2', endpoint: 'https://gw.test/v1', dialect: 'json', ok: false, now: NOW });
+    assert.equal(evidence.editDialectsBothRejected({ id: 'c2', endpoint: 'https://gw.test/v1' }, NOW + MINUTE), false, 'один диалект ещё не приговор');
+});
+
+test('editDialectsBothRejected: успех диалекта сбрасывает приговор', async () => {
+    await evidence.noteEditDialectOutcome({ connId: 'c3', endpoint: 'https://gw.test/v1', dialect: 'multipart', ok: false, rejectKind: 'preflight', now: NOW });
+    await evidence.noteEditDialectOutcome({ connId: 'c3', endpoint: 'https://gw.test/v1', dialect: 'json', ok: false, now: NOW + MINUTE });
+    assert.equal(evidence.editDialectsBothRejected({ id: 'c3', endpoint: 'https://gw.test/v1' }, NOW + 2 * MINUTE), true);
+    await evidence.noteEditDialectOutcome({ connId: 'c3', endpoint: 'https://gw.test/v1', dialect: 'json', ok: true, now: NOW + 3 * MINUTE });
+    assert.equal(evidence.editDialectsBothRejected({ id: 'c3', endpoint: 'https://gw.test/v1' }, NOW + 4 * MINUTE), false, 'json принят — шлюз умеет');
+});
+
+test('editDialectsBothRejected: TTL 30 минут и смена хоста инвалидный', async () => {
+    await evidence.noteEditDialectOutcome({ connId: 'c4', endpoint: 'https://gw.test/v1', dialect: 'multipart', ok: false, rejectKind: 'preflight', now: NOW });
+    await evidence.noteEditDialectOutcome({ connId: 'c4', endpoint: 'https://gw.test/v1', dialect: 'json', ok: false, now: NOW });
+    assert.equal(evidence.editDialectsBothRejected({ id: 'c4', endpoint: 'https://gw.test/v1' }, NOW + 31 * MINUTE), false, 'факты устарели');
+    assert.equal(evidence.editDialectsBothRejected({ id: 'c4', endpoint: 'https://other.test/v1' }, NOW + MINUTE), false, 'хост сменился');
+});
