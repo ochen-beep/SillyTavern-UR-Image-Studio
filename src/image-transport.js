@@ -278,7 +278,7 @@ export async function fetchImageRoute(url, options = {}, route, timeoutMs = 1200
         if (method === 'POST' && transport.bodyKind === 'json') {
             noteDeliveryPostOutcome({ connId: diagnostic?.connId, endpoint: url, delivery: 'direct', ok: false }).catch(() => {});
         }
-        throw ambiguousDeliveryError(error, transport.deliveryPolicy);
+        throw ambiguousDeliveryError(error, 'image', transport.deliveryPolicy);
     }
 }
 
@@ -328,12 +328,21 @@ export async function probePreflightDelivery(url, signal, timeoutMs) {
     }
 }
 
-function ambiguousDeliveryError(cause, policy = 'explicit-direct') {
-    const tail = policy === 'auto'
-        ? 'Повторите генерацию (кнопка «Повторить» в ленте очереди) — следующая попытка уйдёт через прокси SillyTavern: прямая доставка помечена нерабочей на ~30 минут.'
-        : 'Доставка ограничена настройкой «Только напрямую» — повтор пойдёт той же дорогой.';
-    const error = new Error(`Прямой запрос к провайдеру не получил ответа (CORS или обрыв связи), и его исход неизвестен — возможно, запрос уже обработан и будет оплачен, поэтому автоматически он не повторяется. ${tail}`, { cause });
-    error.code = 'IMAGE_DELIVERY_AMBIGUOUS';
+/**
+ * Пункт 2.4: единая фабрика «неизвестный исход платного запроса» для
+ * картинокного (image-transport) и текстового (proxy.autoFetch) путей —
+ * раньше две копии с разными текстами и кодами. scope 'text' сохраняет
+ * исторические текст/код/флаг noRetry прокси-пути (тесты без правок).
+ */
+export function ambiguousDeliveryError(cause, scope = 'image', policy = 'explicit-direct') {
+    const message = scope === 'text'
+        ? 'Запрос не получил ответ напрямую (CORS или обрыв связи) и мог быть уже обработан провайдером, поэтому автоматически не повторяется. Повторите действие — следующая попытка уйдёт через прокси SillyTavern (требуется enableCorsProxy в config.yaml).'
+        : `Прямой запрос к провайдеру не получил ответа (CORS или обрыв связи), и его исход неизвестен — возможно, запрос уже обработан и будет оплачен, поэтому автоматически он не повторяется. ${policy === 'auto'
+            ? 'Повторите генерацию (кнопка «Повторить» в ленте очереди) — следующая попытка уйдёт через прокси SillyTavern: прямая доставка помечена нерабочей на ~30 минут.'
+            : 'Доставка ограничена настройкой «Только напрямую» — повтор пойдёт той же дорогой.'}`;
+    const error = new Error(message, { cause });
+    error.code = scope === 'text' ? 'DELIVERY_AMBIGUOUS' : 'IMAGE_DELIVERY_AMBIGUOUS';
+    if (scope === 'text') error.noRetry = true;
     return error;
 }
 

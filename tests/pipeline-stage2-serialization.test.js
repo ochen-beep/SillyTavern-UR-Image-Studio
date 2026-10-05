@@ -297,9 +297,17 @@ test('browser ambiguous delivery codes are never auto-resubmitted', async () => 
     const recovery = await fs.readFile(new URL('../src/browser-image-recovery.js', import.meta.url), 'utf8');
     // The two browser-owned ambiguous delivery codes replace the former server
     // REQUEST_AMBIGUOUS / GENERATION_FAILED_AMBIGUOUS / UPSTREAM_RESULT_UNKNOWN.
-    for (const code of ['IMAGE_DELIVERY_AMBIGUOUS', 'MULTIPART_CORS_REQUIRED']) {
-        assert.match(transport, new RegExp(`code = '${code}'`), `${code} must be declared by the browser transport`);
-    }
+    // (2026-10-05, пункт 2.4: IMAGE_DELIVERY_AMBIGUOUS присваивается через
+    // тернарник единой фабрики ambiguousDeliveryError — код остаётся тем же.)
+    assert.match(transport, /code = scope === 'text' \? 'DELIVERY_AMBIGUOUS' : 'IMAGE_DELIVERY_AMBIGUOUS'/, 'IMAGE_DELIVERY_AMBIGUOUS must be declared by the browser transport');
+    assert.match(transport, /code = 'MULTIPART_CORS_REQUIRED'/, 'MULTIPART_CORS_REQUIRED must be declared by the browser transport');
+    // Поведенческая проверка кодов обеих ветвей фабрики.
+    const mod = await import('../src/image-transport.js');
+    const imageErr = mod.ambiguousDeliveryError(new Error('x'), 'image');
+    const textErr = mod.ambiguousDeliveryError(new Error('x'), 'text');
+    assert.equal(imageErr.code, 'IMAGE_DELIVERY_AMBIGUOUS');
+    assert.equal(textErr.code, 'DELIVERY_AMBIGUOUS');
+    assert.equal(textErr.noRetry, true);
     // Browser pending records are review/discard only; the recovery store must
     // never expose a resubmit path.
     assert.match(recovery, /never trigger a provider resend|review\/discard|Browser records never/);

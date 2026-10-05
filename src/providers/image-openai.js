@@ -1,11 +1,15 @@
 // @ts-check
 import { trace } from '../core.js';
 import { summarizeReference } from '../references.js';
-import { endpointBase, imageResultFromValue, providerError, readJsonResponse, referencesFor, requireInvocation, assertEncodedReferenceCount, diagnosticRequestOptions, ASPECT_SIZES } from './image-base.js';
+import { imageResultFromValue, providerError, readJsonResponse, authProfileFor, referencesFor, requireInvocation, assertEncodedReferenceCount, diagnosticRequestOptions, ASPECT_SIZES } from './image-base.js';
+import { resolveEndpoint } from '../endpoint-utils.js';
+import { getProviderDescriptor } from '../provider-descriptors.js';
 import { resolveWireGeometry, resolveWireQuality } from '../wire-params.js';
 import { isCorsProxyAvailable } from '../proxy.js';
 import { probePreflightDelivery } from '../image-transport.js';
 import { editDialectHintFor, noteEditDialectOutcome } from '../delivery-evidence.js';
+
+const DESCRIPTOR = getProviderDescriptor('openai-images');
 
 // Map all VALID_ASPECT_RATIOS (core.js) to OpenAI-compatible image sizes. The
 // shared table lives in image-base.js (same vocabulary as Pollinations). The
@@ -77,9 +81,9 @@ function wireQuality(route, quality) {
   return DALLE_QUALITY_MAP.get(quality);
 }
 
-function generationUrl(endpoint) { return `${endpointBase(endpoint)}/images/generations`; }
-function editUrl(endpoint) { return `${endpointBase(endpoint)}/images/edits`; }
-function modelsUrl(endpoint) { return `${endpointBase(endpoint)}/models`; }
+function generationUrl(endpoint) { return `${resolveEndpoint(DESCRIPTOR, endpoint)}${DESCRIPTOR.endpoint.generationPath}`; }
+function editUrl(endpoint) { return `${resolveEndpoint(DESCRIPTOR, endpoint)}${DESCRIPTOR.endpoint.editPath}`; }
+function modelsUrl(endpoint) { return `${resolveEndpoint(DESCRIPTOR, endpoint)}${DESCRIPTOR.endpoint.modelsPath}`; }
 
 function sizesForRoute(route) {
   return isDalleModel(route) ? ASPECT_SIZES_DALLE : ASPECT_SIZES;
@@ -358,7 +362,7 @@ async function dispatchEditWithDialectChain({ endpoint, route, request, referenc
     if (!diagnostic?.connId) return;
     noteEditDialectOutcome({ connId: diagnostic.connId, endpoint, dialect, ok, rejectKind }).catch(() => {});
   };
-  const readParsed = async response => ({ ...parse(await readJsonResponse(response, 'OpenAI Images')), warnings: paramWarnings(route, request) });
+  const readParsed = async response => ({ ...parse(await readJsonResponse(response, 'OpenAI Images', authProfileFor(route?.generationContract))), warnings: paramWarnings(route, request) });
   // Бесплатная проверка ключа GET /models через ту же прокси-доставку. Нужна
   // только для 400 на проксированной ноге: прямые 401/403 отсекает
   // isDialectCandidate, а 400 под прокси — это либо честный отказ диалекта,
@@ -517,5 +521,5 @@ export async function generateOpenAIImage(input) {
   const geometry = wireGeometry(route, request);
   const payload = generationBody(route, request, geometry);
   const response = await transport.requestJson(generationUrl(endpoint), diagnosticRequestOptions({ method: 'POST', headers: { ...headers, 'Content-Type': 'application/json' }, body: JSON.stringify(payload), signal }, diagnostic, { bodyKind: 'json', parameterSource: geometry.source, wireFields: ['model', 'prompt', 'n', ...(payload.size ? ['size'] : []), ...(payload.aspect_ratio ? ['aspect_ratio'] : []), ...(payload.quality ? ['quality'] : [])] }), route, connection.timeoutMs);
-  return { ...parse(await readJsonResponse(response, 'OpenAI Images')), warnings: paramWarnings(route, request) };
+  return { ...parse(await readJsonResponse(response, 'OpenAI Images', authProfileFor(route?.generationContract))), warnings: paramWarnings(route, request) };
 }

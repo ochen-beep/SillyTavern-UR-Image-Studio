@@ -8,7 +8,7 @@ import { isCorsProxyAvailable, isCorsOrNetworkError } from './proxy.js';
 import { deliveryHintFor, noteProbe } from './delivery-evidence.js';
 import { materializeImageResult, getCharacterImageFolder, makeThumbnailForPath } from './native-image-storage.js';
 import { addCard, updateCard } from './gallery-index.js';
-import { providerError } from './providers/image-base.js';
+import { providerError, assertApiKeyForContract } from './providers/image-base.js';
 import { summarizeReference } from './references.js';
 import { aspectDeviates } from './aspect-ratio.js';
 import { resolutionShortfall } from './image-dimensions.js';
@@ -155,15 +155,9 @@ export async function generateImageRequest(imageConnId, request, onStatus, signa
     // transport knows nothing about the connection-level useCorsProxy
     // override, and would print 'direct' while the POST goes 'via proxy'.
     request.delivery = deliveryRoute.transport.initialDelivery;
-    if (!apiKey && route?.generationContract !== 'comfyui') {
-        if (route?.generationContract === 'pollinations-images') {
-            throw providerError('POLLINATIONS_TOKEN_REQUIRED', 'Pollinations requires an sk_ access token in the connection Key field.');
-        }
-        if (route?.generationContract === 'naistera') {
-            throw providerError('NAISTERA_TOKEN_REQUIRED', 'Naistera requires a token from the Telegram bot in the connection Key field.');
-        }
-        throw providerError('MISSING_API_KEY', 'An API key is required in this browser for the selected image connection.');
-    }
+    // Пункт 2.3: наличие ключа — по дескриптору контракта (те же типизированные
+    // ошибки, что и в requireInvocation; ComfyUI — ключ опционален).
+    assertApiKeyForContract(route?.generationContract, apiKey);
 
     const snapshot = pendingSnapshot(imageConnId, route, request);
     const referenceSummaries = (request.references || []).map((ref, index) => ({

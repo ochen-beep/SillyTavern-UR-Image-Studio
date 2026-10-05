@@ -12,7 +12,9 @@
  * overall timeoutMs deadline and the caller's AbortSignal: one POST, then
  * read-only GETs — never a second paid POST.
  */
-import { imageResultFromValue, providerError, readJsonResponse, referencesFor, requireInvocation, diagnosticRequestOptions } from './image-base.js';
+import { imageResultFromValue, providerError, readJsonResponse, authProfileFor, referencesFor, requireInvocation, diagnosticRequestOptions } from './image-base.js';
+import { resolveEndpoint, interpolatePath } from '../endpoint-utils.js';
+import { sleep, abortError as baseAbortError } from '../async-utils.js';
 import { getProviderDescriptor } from '../provider-descriptors.js';
 
 const NAISTERA_DESCRIPTOR = getProviderDescriptor('naistera');
@@ -41,9 +43,7 @@ export function validateNaisteraToken(value) {
 }
 
 function baseUrl(endpoint) {
-    const value = String(endpoint || '').trim().replace(/\/+$/, '').replace(/\/api$/i, '');
-    if (!value) throw providerError('INVALID_ENDPOINT', 'Naistera endpoint is required.');
-    return value;
+    return resolveEndpoint(NAISTERA_DESCRIPTOR, endpoint);
 }
 
 function body(route, request) {
@@ -108,25 +108,9 @@ function jobErrorMessage(payload) {
     return '';
 }
 
-function sleep(ms, signal) {
-    if (signal?.aborted) return Promise.reject(abortError());
-    return new Promise((resolve, reject) => {
-        const timer = setTimeout(() => {
-            signal?.removeEventListener?.('abort', onAbort);
-            resolve();
-        }, ms);
-        function onAbort() {
-            clearTimeout(timer);
-            reject(abortError());
-        }
-        signal?.addEventListener?.('abort', onAbort, { once: true });
-    });
-}
-
+// Пункт 2.4: примитивы поллинга вынесены в ../async-utils.js.
 function abortError() {
-    const error = new Error('Naistera generation was cancelled.');
-    error.name = 'AbortError';
-    return error;
+    return baseAbortError('Naistera generation was cancelled.');
 }
 
 /**
@@ -156,7 +140,7 @@ async function pollJob({ jobUrl, token, transport, route, connection, signal, de
             route,
             remainingMs,
         );
-        const payload = await readJsonResponse(response, 'Naistera Jobs');
+        const payload = await readJsonResponse(response, 'Naistera Jobs', authProfileFor('naistera'));
         const status = jobStatus(payload);
         if (status === 'failed' || status === 'error' || status === 'cancelled' || status === 'canceled') {
             const detail = jobErrorMessage(payload);
@@ -194,7 +178,7 @@ export async function generateNaisteraImage(input) {
     const deadlineAt = Date.now() + timeoutMs;
 
     const response = await transport.requestJson(
-        `${baseUrl(endpoint)}/api/generate`,
+        `${baseUrl(endpoint)}${NAISTERA_DESCRIPTOR.endpoint.generationPath}`,
         diagnosticRequestOptions({
             method: 'POST',
             headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
@@ -208,7 +192,7 @@ export async function generateNaisteraImage(input) {
         route,
         connection.timeoutMs,
     );
-    const initial = await readJsonResponse(response, 'Naistera Generate');
+    const initial = await readJsonResponse(response, 'Naistera Generate', authProfileFor('naistera'));
 
     // Synchronous completion: the POST response already carries the image.
     const immediate = extractResult(initial, { allowMissing: true });
@@ -218,7 +202,7 @@ export async function generateNaisteraImage(input) {
     const jobId = String(initial?.job_id ?? initial?.jobId ?? initial?.id ?? '').trim();
     if (!jobId) throw providerError('UPSTREAM_RESPONSE_INVALID', 'Naistera returned neither an image nor a job_id.');
     return pollJob({
-        jobUrl: `${baseUrl(endpoint)}/api/generate/jobs/${encodeURIComponent(jobId)}`,
+        jobUrl: baseUrl(endpoint) + interpolatePath(NAISTERA_DESCRIPTOR.endpoint.jobPath, { jobId }),
         token,
         transport,
         route,

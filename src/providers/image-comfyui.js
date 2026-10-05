@@ -29,10 +29,13 @@ import {
     providerError,
     readJsonResponse,
     readResponseText,
+    authProfileFor,
     referencesFor,
     requireInvocation,
     diagnosticRequestOptions,
 } from './image-base.js';
+import { resolveEndpoint } from '../endpoint-utils.js';
+import { sleep as sharedSleep, abortError as baseAbortError } from '../async-utils.js';
 import { getProviderDescriptor } from '../provider-descriptors.js';
 
 const COMFYUI_DESCRIPTOR = getProviderDescriptor('comfyui');
@@ -88,9 +91,7 @@ export function aspectSize(ratio) {
 }
 
 function comfyBase(endpoint) {
-    const value = String(endpoint ?? '').trim().replace(/\/+$/, '').replace(/\/api$/i, '');
-    if (!value) throw providerError('INVALID_ENDPOINT', 'ComfyUI endpoint is required.');
-    return value;
+    return resolveEndpoint(COMFYUI_DESCRIPTOR, endpoint);
 }
 
 function authHeaders(apiKey) {
@@ -246,25 +247,13 @@ function firstOutputImage(outputs) {
     return null;
 }
 
+// Пункт 2.4: примитивы поллинга вынесены в ../async-utils.js.
 function sleep(ms, signal) {
-    if (signal?.aborted) return Promise.reject(abortError());
-    return new Promise((resolve, reject) => {
-        const timer = setTimeout(() => {
-            signal?.removeEventListener?.('abort', onAbort);
-            resolve();
-        }, ms);
-        function onAbort() {
-            clearTimeout(timer);
-            reject(abortError());
-        }
-        signal?.addEventListener?.('abort', onAbort, { once: true });
-    });
+    return sharedSleep(ms, signal, { abortMessage: 'ComfyUI generation was cancelled.' });
 }
 
 function abortError() {
-    const error = new Error('ComfyUI generation was cancelled.');
-    error.name = 'AbortError';
-    return error;
+    return baseAbortError('ComfyUI generation was cancelled.');
 }
 
 function bytesToBase64(bytes) {
@@ -295,7 +284,7 @@ async function uploadReferences({ base, references, requestId, transport, route,
             route,
             connection.timeoutMs,
         );
-        const payload = await readJsonResponse(response, 'ComfyUI Upload');
+        const payload = await readJsonResponse(response, 'ComfyUI Upload', authProfileFor('comfyui'));
         const name = String(payload?.name || '').trim();
         if (!name) throw providerError('UPSTREAM_RESPONSE_INVALID', 'ComfyUI /upload/image не вернул имя файла.');
         const subfolder = String(payload?.subfolder || '').trim();
@@ -365,7 +354,7 @@ async function pollHistory({ base, promptId, apiKey, transport, route, signal, d
             route,
             remainingMs,
         );
-        const payload = await readJsonResponse(response, 'ComfyUI History');
+        const payload = await readJsonResponse(response, 'ComfyUI History', authProfileFor('comfyui'));
         const outcome = extractHistoryOutcome(payload, promptId, workflow);
         if (outcome.status === 'done') return outcome.image;
         if (outcome.status === 'error') throw providerError('COMFY_EXECUTION_ERROR', `ComfyUI не выполнил workflow: ${outcome.message}`);

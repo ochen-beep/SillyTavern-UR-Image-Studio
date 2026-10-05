@@ -1,15 +1,21 @@
 // @ts-check
 import { trace } from '../core.js';
 import { summarizeReference } from '../references.js';
-import { endpointBase, imageResultFromValue, providerError, readJsonResponse, referencesFor, requireInvocation, assertEncodedReferenceCount, diagnosticRequestOptions } from './image-base.js';
+import { imageResultFromValue, providerError, readJsonResponse, authProfileFor, referencesFor, requireInvocation, assertEncodedReferenceCount, diagnosticRequestOptions } from './image-base.js';
+import { resolveEndpoint, interpolatePath } from '../endpoint-utils.js';
+import { getProviderDescriptor } from '../provider-descriptors.js';
+
+const DESCRIPTOR = getProviderDescriptor('gemini-native');
 import { unsupportedImageSizeReason } from '../image-model-capabilities.js';
 
 function generationUrl(endpoint, route) {
+  // Проба «Проверить» может закрепить versionedBase на маршруте — он
+  // приоритетнее нормализации дескриптора.
   const savedBase = route?.remoteMetadata?.versionedBase;
-  const base = String(savedBase || endpoint || '').trim().replace(/\/+$/, '');
-  if (!base) throw providerError('INVALID_ENDPOINT', 'Gemini Native endpoint is required.');
-  const versionedBase = /\/(v1|v1beta)$/i.test(base) ? base : `${base}/v1beta`;
-  return `${versionedBase}/models/${encodeURIComponent(route.modelId)}:generateContent`;
+  const base = savedBase
+    ? String(savedBase).trim().replace(/\/+$/, '')
+    : resolveEndpoint(DESCRIPTOR, endpoint);
+  return base + interpolatePath(DESCRIPTOR.endpoint.generationPath, { model: route.modelId });
 }
 
 function headers(endpoint, route, apiKey) {
@@ -103,5 +109,5 @@ export async function generateGeminiImage(input) {
   const warnings = sizeWarning
     ? [{ feature: 'Размер', details: `размер ${sizeWarning.size} не поддерживается: ${sizeWarning.reason} — параметр опущен.` }]
     : [];
-  return { ...parse(await readJsonResponse(response, 'Gemini Native')), warnings };
+  return { ...parse(await readJsonResponse(response, 'Gemini Native', authProfileFor(route?.generationContract))), warnings };
 }

@@ -1,5 +1,6 @@
 // @ts-check
-import { imageResultFromValue, providerError, readJsonResponse, referencesFor, requireInvocation, diagnosticRequestOptions, ASPECT_SIZES } from './image-base.js';
+import { imageResultFromValue, providerError, readJsonResponse, authProfileFor, referencesFor, requireInvocation, diagnosticRequestOptions, ASPECT_SIZES } from './image-base.js';
+import { resolveEndpoint } from '../endpoint-utils.js';
 import { getProviderDescriptor } from '../provider-descriptors.js';
 
 const POLLINATIONS_DESCRIPTOR = getProviderDescriptor('pollinations-images');
@@ -26,8 +27,7 @@ export function validatePollinationsToken(value) {
 }
 
 function generationUrl(endpoint) {
-    const value = String(endpoint || '').trim().replace(/\/+$/, '').replace(/\/v1$/i, '');
-    return `${value}/v1/images/generations`;
+    return `${resolveEndpoint(POLLINATIONS_DESCRIPTOR, endpoint)}${POLLINATIONS_DESCRIPTOR.endpoint.generationPath}`;
 }
 
 function supports(route, parameter) {
@@ -98,5 +98,5 @@ export async function generatePollinationsImage(input) {
         route,
         connection.timeoutMs,
     );
-    return parse(await readJsonResponse(response, 'Pollinations Images'));
+    return parse(await readJsonResponse(response, 'Pollinations Images', authProfileFor('pollinations-images')));
 }

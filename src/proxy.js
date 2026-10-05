@@ -19,6 +19,10 @@
  * We detect this and give a friendly error instead of a silent "Failed to fetch".
  */
 import { fetchWithTimeout, log, warn } from './core.js';
+// Пункт 2.4: фабрика неоднозначного исхода одна на оба пути (циклический
+// импорт безопасен: фабрика — hoisted function declaration, вызывается
+// только в рантайме).
+import { ambiguousDeliveryError } from './image-transport.js';
 
 // Probe result cache (session-scoped, in module memory).
 // A POSITIVE result is cached for the session. A definitive negative
@@ -200,15 +204,7 @@ export function getHostStrategies() {
  * automatically; the host strategy is flipped to 'proxy' by autoFetch so the
  * caller's next attempt takes the safe path.
  */
-function ambiguousDeliveryError(cause) {
-    const error = new Error(
-        'Запрос не получил ответ напрямую (CORS или обрыв связи) и мог быть уже обработан провайдером, поэтому автоматически не повторяется. Повторите действие — следующая попытка уйдёт через прокси SillyTavern (требуется enableCorsProxy в config.yaml).',
-        { cause },
-    );
-    error.code = 'DELIVERY_AMBIGUOUS';
-    error.noRetry = true;
-    return error;
-}
+
 
 /**
  * Automatic fetch: tries direct request, falls back to proxy on CORS block.
@@ -276,7 +272,7 @@ export async function autoFetch(url, options = {}, timeoutMs = 120000) {
         if (noResubmit) {
             _hostStrategy.set(host, 'proxy');
             log('autoFetch: paid POST failed with an ambiguous outcome; host flipped to proxy', host, e.message);
-            throw ambiguousDeliveryError(e);
+            throw ambiguousDeliveryError(e, 'text');
         }
         // Idempotent request — the historical hybrid fallback is safe.
         log('autoFetch: direct fetch failed (likely CORS), retrying through proxy', host, e.message);

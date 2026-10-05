@@ -1,14 +1,11 @@
 // @ts-check
 import { trace } from '../core.js';
 import { summarizeReference } from '../references.js';
-import { imageResultFromValue, providerError, readJsonResponse, referencesFor, requireInvocation, assertEncodedReferenceCount, diagnosticRequestOptions } from './image-base.js';
+import { imageResultFromValue, readJsonResponse, authProfileFor, referencesFor, requireInvocation, assertEncodedReferenceCount, diagnosticRequestOptions } from './image-base.js';
+import { resolveEndpoint } from '../endpoint-utils.js';
+import { getProviderDescriptor } from '../provider-descriptors.js';
 
-function base(endpoint) {
-  const value = String(endpoint || '').trim().replace(/\/+$/, '');
-  if (value === 'https://openrouter.ai') return `${value}/api/v1`;
-  if (!/\/api\/v1$/i.test(value)) throw providerError('INVALID_ENDPOINT', 'OpenRouter endpoint must be the official origin or end in /api/v1.');
-  return value;
-}
+const DESCRIPTOR = getProviderDescriptor('openrouter-images');
 
 function parse(payload) {
   const first = Array.isArray(payload?.data) ? payload.data[0] : null;
@@ -63,8 +60,8 @@ export async function generateOpenRouterImage(input) {
       quality: payload.quality || null,
     },
   });
-  const response = await transport.requestJson(`${base(endpoint)}/images`, diagnosticRequestOptions({
+  const response = await transport.requestJson(`${resolveEndpoint(DESCRIPTOR, endpoint)}${DESCRIPTOR.endpoint.generationPath}`, diagnosticRequestOptions({
     method: 'POST', headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' }, body: JSON.stringify(payload), signal,
   }, diagnostic, { bodyKind: 'json', wireFields: Object.keys(payload), parameterSource: Array.isArray(remoteSupported) ? 'remoteMetadata.supportedParameters' : Array.isArray(capabilitySupported) ? 'route.capabilities.supportedParameters' : 'unknown' }), route, connection.timeoutMs);
-  return parse(await readJsonResponse(response, 'OpenRouter Images'));
+  return parse(await readJsonResponse(response, 'OpenRouter Images', authProfileFor(route?.generationContract)));
 }

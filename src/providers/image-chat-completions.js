@@ -1,11 +1,15 @@
 // @ts-check
 import { trace } from '../core.js';
 import { summarizeReference } from '../references.js';
-import { endpointBase, imageResultFromValue, providerError, readJsonResponse, referencesFor, requireInvocation, assertEncodedReferenceCount, diagnosticRequestOptions } from './image-base.js';
+import { imageResultFromValue, providerError, readJsonResponse, authProfileFor, referencesFor, requireInvocation, assertEncodedReferenceCount, diagnosticRequestOptions } from './image-base.js';
+import { resolveEndpoint } from '../endpoint-utils.js';
+import { getProviderDescriptor } from '../provider-descriptors.js';
+
+const DESCRIPTOR = getProviderDescriptor('chat-completions');
 import { promptAspectConflicts } from '../aspect-ratio.js';
 import { unsupportedImageSizeReason } from '../image-model-capabilities.js';
 
-function chatUrl(endpoint) { return `${endpointBase(endpoint)}/chat/completions`; }
+function chatUrl(endpoint) { return `${resolveEndpoint(DESCRIPTOR, endpoint)}${DESCRIPTOR.endpoint.generationPath}`; }
 
 // ── Image extraction from chat completion messages ──
 //
@@ -290,5 +294,5 @@ export async function generateChatCompletionImage(input) {
     bodyKind: 'json', wireFields, omittedFields, aspectChannel,
     ...(parameterSource ? { parameterSource } : {}),
   }), route, connection.timeoutMs);
-  return { ...parse(await readJsonResponse(response, 'Chat Completions')), warnings };
+  return { ...parse(await readJsonResponse(response, 'Chat Completions', authProfileFor(route?.generationContract))), warnings };
 }
