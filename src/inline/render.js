@@ -93,19 +93,49 @@ function ensureObserver() {
     _observer.observe(chatEl, { childList: true, subtree: true });
 }
 
-function onChatMutated() {
+function onChatMutated(mutations) {
     if (_debounceId) clearTimeout(_debounceId);
     _debounceId = setTimeout(() => {
         _debounceId = null;
-        try { reconcileVisible(); ensureObserver(); } catch { /* реконсиляция не роняет чат */ }
+        try {
+            // Пункт 25: мутации обычно указывают на конкретные посты — полному
+            // обходу чата есть замена. null = «вынести нельзя» (мутации вне
+            // .mes) → старый полный проход.
+            const targets = collectAffectedMes(mutations);
+            if (targets === null) reconcileVisible();
+            else if (targets.size) reconcileVisible({ only: targets });
+            ensureObserver();
+        } catch { /* реконсиляция не роняет чат */ }
     }, DEBOUNCE_MS);
+}
+
+/** Из пачки мутаций вынести затронутые mesid. null — нельзя (мутация вне
+ * постов: перестройка контейнера чата и т.п.). Собственные вставки рендера
+ * (оболочки/📷-кнопки внутри .mes_text) резолвятся в их пост — повторный
+ * проход точечный и сходится. */
+function collectAffectedMes(mutations) {
+    const ids = new Set();
+    for (const m of mutations || []) {
+        for (const node of [...(m.addedNodes || []), ...(m.removedNodes || [])]) {
+            let el = null;
+            if (node && node.nodeType === 1 && node.closest) el = node.closest('.mes');
+            if (!el && m.target && m.target.closest) el = m.target.closest('.mes');
+            if (!el) return null;
+            const idRaw = el.getAttribute('mesid');
+            if (idRaw == null || idRaw === '') continue;
+            ids.add(Number(idRaw));
+        }
+    }
+    return ids;
 }
 
 /**
  * Обход .mes[mesid] в #chat: план по маркерам → mount/keep; заодно ручные
  * 📷-кнопки. Дешёвый fast-path: нет маркеров, items и существующих оболочек — skip.
+ * `{ only: Set<msgId> }` (пункт 25) — точечный проход по постам, затронутым
+ * мутацией; без фильтра — полный обход (старт, uris:inline-* события).
  */
-export function reconcileVisible() {
+export function reconcileVisible({ only = null } = {}) {
     if (typeof document === 'undefined') return;
     if (state.settings?.inlineEnabled !== true) return;
     ensureObserver();
@@ -120,6 +150,7 @@ export function reconcileVisible() {
         const msgIdRaw = mesEl.getAttribute('mesid');
         if (msgIdRaw == null || msgIdRaw === '') continue;
         const msgId = Number(msgIdRaw);
+        if (only && !only.has(msgId)) continue;
         const mes = chat?.[msgId]?.mes;
         const markers = typeof mes === 'string' ? parseInline(mes) : [];
         let shellEls = [];

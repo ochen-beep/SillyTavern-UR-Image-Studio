@@ -624,11 +624,12 @@ async function generate(request, opts = {}) {
         return generateOnce(caller, requestId, norm, controller, onStatus);
     };
 
-    // Serial by default: one external paid POST at a time (protects against a
-    // consumer loop firing unbounded paid requests). queue:false = run now.
-    // The queue is the shared autolane (bridge + inline automation): one
-    // automatic paid POST at a time across both.
-    if (options.queue === false) return run();
+    // Serial, always (пункт 24 плана): one external paid POST at a time — the
+    // shared autolane (bridge + inline automation). Раньше options.queue === false
+    // позволял внешнему расширению обойти лейн и ударить платным POST сразу:
+    // consumer-цикл с queue:false мог занять провайдера параллельно с авто-
+    // генерациями самого URIS. Параметр принимается, но игнорируется — внешние
+    // вызовы всегда сериализуются; своей очереди у потребителя нет.
     return enqueueAutoLane(run);
 }
 
