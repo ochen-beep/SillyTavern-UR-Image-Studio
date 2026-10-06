@@ -82,7 +82,10 @@ test('item click с чужим target (каскад фейк-дома от ов�
     const btn = overlay.querySelector('.uris-action-menu-item');
     btn.dispatchEvent({ type: 'click', target: overlay, preventDefault() {} });
     assert.deepEqual(calls, [], 'чужой target не выбирает пункт');
-    assert.ok(overlay.parentNode, 'оверлей остаётся открытым');
+    // 2026-10-06 (пузырь в fake-dom): клик с target===overlay доходит и до
+    // backdrop-обработчика оверлея — по DOM-семантике это клик по фону, меню
+    // закрывается. Контракт пункта — только «чужой target не выбирает пункт».
+    assert.equal(overlay.parentNode, null, 'backdrop-клик (target=overlay) закрывает меню');
 });
 
 test('backdrop click closes without firing items', async () => {
@@ -133,7 +136,12 @@ test('contextmenu (ПКМ / Android long-press): preventDefault + onOpen at the 
     let pd = false;
     el.dispatchEvent({ type: 'contextmenu', clientX: 40, clientY: 60, preventDefault: () => { pd = true; } });
     assert.equal(pd, true, 'native menu suppressed');
-    assert.deepEqual(opens, [{ x: 40, y: 60, isLongPress: false }]);
+    // fake-dom с 2026-10-06 проставляет target=узел диспатча; проверяем поля
+    // по отдельности вместо deepEqual (target — живой элемент).
+    assert.equal(opens.length, 1);
+    assert.equal(opens[0].x, 40);
+    assert.equal(opens[0].y, 60);
+    assert.equal(opens[0].isLongPress, false);
 });
 
 test('iOS long-press: pointerdown held 500ms fires onOpen(isLongPress), the follow-up click is swallowed', async (t) => {
@@ -145,7 +153,10 @@ test('iOS long-press: pointerdown held 500ms fires onOpen(isLongPress), the foll
     el.dispatchEvent({ type: 'pointerdown', pointerType: 'touch', clientX: 10, clientY: 20 });
     t.mock.timers.tick(500);
     el.dispatchEvent({ type: 'click', preventDefault() {}, stopPropagation() {} });
-    assert.deepEqual(opens, [{ x: 10, y: 20, isLongPress: true }]);
+    assert.equal(opens.length, 1);
+    assert.equal(opens[0].x, 10);
+    assert.equal(opens[0].y, 20);
+    assert.equal(opens[0].isLongPress, true);
     t.mock.timers.reset();
 });
 

@@ -53,9 +53,30 @@ export function makeFakeDocument() {
             addEventListener(type, fn) { this._listeners.push({ type, fn }); },
             removeEventListener(type, fn) { this._listeners = this._listeners.filter(l => l.type !== type || l.fn !== fn); },
             dispatchEvent(ev) {
+                // Топография настоящего DOM: нисходящий проход от узла (все
+                // потомки) + ПУЗЫРЬ к предкам. Пузырь добавлен 2026-10-06 для
+                // делегирования на контейнерах (галерейная сетка слушает клики
+                // на контейнере, тест кликает по кнопке карточки).
+                // target всегда равен узлу диспатча (как в браузере), а
+                // stopPropagation() события гасит дальнейшее распространение —
+                // без этого делегированные обработчики ловят чужие клики.
+                // Настоящий Event имеет target-геттер: тень свойство ставим
+                // через defineProperty и молча пропускаем замёртвые объекты.
+                try {
+                    if (!ev.target) Object.defineProperty(ev, 'target', { value: this, configurable: true, writable: true });
+                    Object.defineProperty(ev, 'stopPropagation', { value: () => { ev.__urisStopped = true; }, configurable: true });
+                } catch { /* read-only/frozen event objects */ }
                 const results = [];
-                for (const l of this._listeners) if (l.type === ev.type) results.push(l.fn(ev));
-                for (const c of this.children) if (isElement(c)) results.push(c.dispatchEvent(ev));
+                const stopped = () => ev.__urisStopped === true;
+                const fire = (node) => { if (!stopped()) for (const l of node._listeners) if (l.type === ev.type) results.push(l.fn(ev)); };
+                const walkDown = (node) => {
+                    fire(node);
+                    if (stopped()) return;
+                    for (const c of node.children) if (isElement(c) && !stopped()) walkDown(c);
+                };
+                walkDown(this);
+                let p = isElement(this.parentNode) ? this.parentNode : null;
+                while (p && !stopped()) { fire(p); p = isElement(p.parentNode) ? p.parentNode : null; }
                 const promises = results.filter(r => r && typeof r.then === 'function');
                 return promises.length ? Promise.all(promises) : undefined;
             },

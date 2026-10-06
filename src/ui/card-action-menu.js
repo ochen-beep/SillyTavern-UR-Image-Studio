@@ -137,7 +137,9 @@ export function bindCardContextMenu(el, onOpen) {
         e.preventDefault?.();
         stamp();
         cancelTimer();
-        onOpen({ x: e.clientX ?? 0, y: e.clientY ?? 0, isLongPress: false });
+        // target: для делегированного биндинга на контейнере — резолв карточки
+        // из цели события (обратно совместимо: старые колбэки поле игнорируют).
+        onOpen({ x: e.clientX ?? 0, y: e.clientY ?? 0, isLongPress: false, target: e.target });
     });
 
     el.addEventListener('pointerdown', (e) => {
@@ -148,7 +150,7 @@ export function bindCardContextMenu(el, onOpen) {
         timer = setTimeout(() => {
             timer = null;
             stamp();
-            onOpen({ x: startX, y: startY, isLongPress: true });
+            onOpen({ x: startX, y: startY, isLongPress: true, target: e.target });
         }, LONG_PRESS_MS);
     });
     el.addEventListener('pointermove', (e) => {

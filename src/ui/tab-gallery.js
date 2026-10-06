@@ -192,40 +192,55 @@ function gotoSourcePost(msgId) {
 // просмотра; scopeEl — контейнер сетки, в котором ищутся карточки. Это разные
 // элементы: смешение их давало «root is not defined» на клике по картинке
 // (обработчики молча падали с ReferenceError — просмотр не открывался).
-async function bindCards(scopeEl, root, items, chatId, from = 0, to = items.length) {
+//
+// Делегирование (2026-10-06, пункт 23): один click/contextmenu-обработчик на
+// контейнер сетки вместо шести на каждую карточку — рендер большой галереи
+// больше не ставит O(n) слушателей (innerHTML-вайп всё равно снимал старые).
+async function bindCards(scopeEl, root, items, chatId) {
     const { copyItemText, saveAsReference, regenerate, deleteImage } = await import('./gallery-actions.js');
-    scopeEl.querySelectorAll('.uris-card').forEach(cardEl => {
+    if (scopeEl.dataset.delegated === '1') return;   // idempotent per render
+    scopeEl.dataset.delegated = '1';
+    const hitOf = (target) => {
+        const cardEl = target?.closest?.('.uris-card');
+        if (!cardEl || !scopeEl.contains(cardEl)) return null;
         const idx = parseInt(cardEl.dataset.idx, 10);
-        if (idx < from || idx >= to) return;       // outside this chunk
-        if (cardEl.dataset.bound === '1') return;  // already bound (idempotent)
-        cardEl.dataset.bound = '1';
-        const id = cardEl.dataset.id;
-        const it = () => items.find(x => x.id === id);
-        cardEl.querySelector('[data-act="view"]')?.addEventListener('click', (e) => {
-            e.stopPropagation(); _viewer.showLightbox(items, idx, { chatId, root });
-        });
-        cardEl.querySelector('[data-act="copy"]')?.addEventListener('click', async (e) => {
-            e.stopPropagation(); await copyItemText(it());
-        });
-        cardEl.querySelector('[data-act="regen"]')?.addEventListener('click', async (e) => {
-            e.stopPropagation();
-            const regenBtn = cardEl.querySelector('[data-act="regen"]');
-            await regenerate(it(), root, regenBtn);
-        });
-        // Navigate to source post: scroll the chat to .mes[mesid="N"].
-        cardEl.querySelector('[data-act="goto"]')?.addEventListener('click', (e) => {
-            e.stopPropagation();
-            gotoSourcePost(it()?.sourceMsgId);
-        });
-        cardEl.querySelector('[data-act="del"]')?.addEventListener('click', async (e) => {
-            e.stopPropagation(); await deleteImage(it(), chatId, root);
-        });
-        cardEl.querySelector('[data-act="saveRef"]')?.addEventListener('click', async (e) => {
-            e.stopPropagation(); await saveAsReference(it());
-        });
-        // Долгий тап (телефон) / ПКМ (десктоп): меню действий карточки.
-        bindCardContextMenu(cardEl, ({ x, y }) => {
-            openCardActionMenu({ title: 'Карточка', items: galleryMenuItems(it(), { chatId, root }), x, y });
-        });
+        return {
+            cardEl,
+            idx,
+            it: () => items.find(x => x.id === cardEl.dataset.id),
+        };
+    };
+    scopeEl.addEventListener('click', (e) => {
+        const hit = hitOf(e.target);
+        if (!hit) return;
+        const act = e.target?.closest?.('[data-act]')?.dataset.act;
+        e.stopPropagation();
+        switch (act) {
+            case 'view':
+                _viewer.showLightbox(items, hit.idx, { chatId, root });
+                break;
+            case 'copy':
+                void copyItemText(hit.it());
+                break;
+            case 'regen':
+                void regenerate(hit.it(), root, hit.cardEl.querySelector('[data-act="regen"]'));
+                break;
+            // Navigate to source post: scroll the chat to .mes[mesid="N"].
+            case 'goto':
+                gotoSourcePost(hit.it()?.sourceMsgId);
+                break;
+            case 'del':
+                void deleteImage(hit.it(), chatId, root);
+                break;
+            case 'saveRef':
+                void saveAsReference(hit.it());
+                break;
+        }
+    });
+    // Долгий тап (телефон) / ПКМ (десктоп): меню действий карточки.
+    bindCardContextMenu(scopeEl, ({ x, y, target }) => {
+        const hit = hitOf(target);
+        if (!hit) return;
+        openCardActionMenu({ title: 'Карточка', items: galleryMenuItems(hit.it(), { chatId, root }), x, y });
     });
 }
