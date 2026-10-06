@@ -26,6 +26,7 @@ import {
 } from './folder-picker.js';
 import { showFolderManager } from './folder-manager.js';
 import { openCardActionMenu, bindCardContextMenu } from './card-action-menu.js';
+import { editTextModal } from './text-editor.js';
 
 // Layout state
 let _activeFolderFilter = 'all';
@@ -621,7 +622,8 @@ function refEditorBodyHtml(ref, { deleteLabel = 'Удалить карточку
         <label class="uris-ed-label">Aliases</label>
         <input class="text_pole uris-ed-aliases" value="${escapeHtml(aliasesStr)}" placeholder="через запятую">
         <small class="uris-hint">Сопоставление с промптом идёт по алиасам — перечислите имена и прозвища через запятую. Имя — только подпись. Поддерживаются {{char}}/{{user}}.</small>
-        <label class="uris-ed-label">Описание</label>
+        <div class="uris-field-head"><label class="uris-ed-label">Описание</label>
+            <button class="uris-expand-btn" type="button" data-act="expand-desc" title="Развернуть редактор" aria-label="Развернуть редактор"><i class="fa-solid fa-maximize"></i></button></div>
         <textarea class="text_pole uris-ed-desc" rows="3" placeholder="Текст для Stage1">${escapeHtml(ref.description || '')}</textarea>
         <label class="uris-ed-check"><input type="checkbox" class="uris-ed-binding-mode" ${ref.bindingMode === 'description' ? 'checked' : ''}> Только описание</label>
         <small class="uris-hint">Без картинки в генерацию попадёт только это описание.</small>
@@ -1102,6 +1104,17 @@ function _bindEditorBody(root, host, ref, folders, opts = {}) {
     nameInput.addEventListener('change', saveBasic);
     aliasesInput.addEventListener('change', saveBasic);
     descInput.addEventListener('change', saveBasic);
+
+    // Expanded editor (ST-style maximized_textarea popup), same unified pattern
+    // as the template instruction and image prompt fields. Direct saveBasic()
+    // instead of a synthetic change event, like the templates card: bubbled
+    // change events don't propagate in the fake-dom tests.
+    host.querySelector('[data-act="expand-desc"]')?.addEventListener('click', async () => {
+        const next = await editTextModal({ value: descInput.value, title: 'Описание', placeholder: 'Текст для Stage1' });
+        if (next === null || next === descInput.value) return;
+        descInput.value = next;
+        await saveBasic();
+    });
 
     // Папки: чипы выбранных + «+ Папка» с листом-поиском (folder-picker.js).
     // Каждая смена применяется сразу, как остальные поля карточки; шит живёт

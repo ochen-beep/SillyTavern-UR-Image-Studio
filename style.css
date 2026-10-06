@@ -1559,6 +1559,9 @@
     font-size: var(--uris-font-label); text-transform: uppercase; letter-spacing: .15em;
     color: var(--uris-text-dim); margin-top: 4px;
 }
+/* В строке-заголовке поля (Описание + кнопка «развернуть») верхний отступ
+   метки ломает выравнивание по центру строки. */
+.uris-field-head .uris-ed-label { margin-top: 0; }
 .uris-hint { font-size: var(--uris-font-xs); color: var(--uris-text-dim); }
 .uris-ed-autosave {
     font-size: var(--uris-font-xs); color: var(--uris-text-dim);
