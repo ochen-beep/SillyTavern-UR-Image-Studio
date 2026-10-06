@@ -1,6 +1,7 @@
 // @ts-check
 import assert from 'node:assert/strict';
 import { afterEach, beforeEach, test } from 'node:test';
+import { makeUserFileServer } from './_helpers.js';
 
 let context;
 let originalSt;
@@ -12,25 +13,12 @@ let originalFetch;
  * an in-memory `serverFiles` map (the server-file shape has its own deeper
  * suite, tests/gallery-file-store.test.js).
  */
-const serverFiles = new Map();
-
-function installFileFetch() {
-    globalThis.fetch = async (url, options = {}) => {
-        const u = String(url);
-        if (u === '/api/files/verify') return { ok: true, status: 200, json: async () => ({}), text: async () => '' };
-        if (u === '/api/files/upload' && options.method === 'POST') {
-            const body = JSON.parse(options.body);
-            serverFiles.set(body.name, Buffer.from(body.data, 'base64').toString('utf8'));
-            return { ok: true, status: 200, json: async () => ({}), text: async () => '' };
-        }
-        if (u.startsWith('/user/files/')) {
-            const name = decodeURIComponent(u.slice('/user/files/'.length));
-            if (!serverFiles.has(name)) return { ok: false, status: 404, text: async () => '', json: async () => ({}) };
-            return { ok: true, status: 200, text: async () => serverFiles.get(name), json: async () => ({}) };
-        }
+const fileServer = makeUserFileServer({
+    fallback() {
         return { ok: true, status: 200, json: async () => [], text: async () => '' };
-    };
-}
+    },
+});
+const serverFiles = fileServer.serverFiles;
 
 /** The stored card array from the in-memory server files (manifest + shards). */
 function galleryFileDoc() {
@@ -49,7 +37,7 @@ beforeEach(async () => {
     originalFetch = globalThis.fetch;
     context = { extensionSettings: {}, saveSettingsDebounced: () => {} };
     globalThis.SillyTavern = { getContext: () => context };
-    installFileFetch();
+    globalThis.fetch = fileServer.fetch;
     // Flush BEFORE clearing: a write loop parked mid-upload from the previous
     // test must land in the PREVIOUS map, not leak into this one (proven flake
     // class — see flush-before-reset in the other store suites). Gallery is
@@ -226,25 +214,17 @@ test('reconcileCards scans every distinct folder referenced by cards plus the le
         getContext: () => ctx,
         libs: { localforage: { getItem: async () => '' } },
     };
-    globalThis.fetch = async (url, options = {}) => {
-        const u = String(url);
-        if (u === '/api/files/verify') return { ok: true, status: 200, json: async () => ({}), text: async () => '' };
-        if (u === '/api/files/upload' && options.method === 'POST') {
+    // Folder-listing endpoint за пределами user-files: /api/images/folders и т.п.
+    const folderServer = makeUserFileServer({
+        fallback(u, options) {
             const body = JSON.parse(options.body);
-            serverFiles.set(body.name, Buffer.from(body.data, 'base64').toString('utf8'));
-            return { ok: true, status: 200, json: async () => ({}), text: async () => '' };
-        }
-        if (u.startsWith('/user/files/')) {
-            const name = decodeURIComponent(u.slice('/user/files/'.length));
-            if (!serverFiles.has(name)) return { ok: false, status: 404, text: async () => '', json: async () => ({}) };
-            return { ok: true, status: 200, text: async () => serverFiles.get(name), json: async () => ({}) };
-        }
-        const body = JSON.parse(options.body);
-        listedFolders.push(body.folder);
-        if (body.folder === 'UR Image Studio') return { ok: true, json: async () => ['legacy.png'] };
-        if (body.folder === 'Alice') return { ok: true, json: async () => ['alice1.png'] };
-        return { ok: true, json: async () => [] };
-    };
+            listedFolders.push(body.folder);
+            if (body.folder === 'UR Image Studio') return { ok: true, json: async () => ['legacy.png'] };
+            if (body.folder === 'Alice') return { ok: true, json: async () => ['alice1.png'] };
+            return { ok: true, json: async () => [] };
+        },
+    });
+    globalThis.fetch = folderServer.fetch;
     const { addCard, reconcileCards } = await import('../src/gallery-index.js');
     await addCard({ id: 'a', imagePath: 'user/images/Alice/alice1.png', prompt: 'alice' });
     await addCard({ id: 'l', imagePath: 'user/images/UR%20Image%20Studio/legacy.png', prompt: 'legacy' });

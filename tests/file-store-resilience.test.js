@@ -13,14 +13,37 @@
  */
 import assert from 'node:assert/strict';
 import { after, afterEach, beforeEach, describe, it } from 'node:test';
+import { makeUserFileServer } from './_helpers.js';
 
 const moduleSettings = {};
-const serverFiles = new Map();
-const uploads = [];            // every upload, keepalive or not
 let keepaliveUploads = 0;
 let verifyAvailable = true;
 let probeThrows = false;
 let failReads = false;
+
+// Фейковый user-files сервер; рычаги прежнего локального стба: бросковый probe
+// (verify), 500 на чтения (onRead), счётчик keepalive-загрузок (обёртка).
+const fileServer = makeUserFileServer({
+    verify() {
+        if (probeThrows) throw new Error('offline');
+        if (!verifyAvailable) return { ok: false, status: 404, text: async () => '' };
+        return { ok: true, status: 200, json: async () => ({}), text: async () => '' };
+    },
+    onRead() {
+        if (failReads) return { ok: false, status: 500, text: async () => 'boom' };
+        return undefined;
+    },
+});
+
+const fetchStub = async (url, options = {}) => {
+    if (url === '/api/files/upload' && options.method === 'POST' && options.keepalive === true) {
+        keepaliveUploads += 1;
+    }
+    return fileServer.fetch(url, options);
+};
+
+const serverFiles = fileServer.serverFiles;
+const uploads = fileServer.uploads;   // every upload, keepalive or not
 
 const originalSt = globalThis.SillyTavern;
 const originalFetch = globalThis.fetch;
@@ -45,28 +68,6 @@ function installStubs() {
     globalThis.toastr = { error: msg => toastErrors.push(msg) };
     globalThis.fetch = fetchStub;
 }
-
-const fetchStub = async (url, options = {}) => {
-    if (url === '/api/files/verify') {
-        if (probeThrows) throw new Error('offline');
-        if (!verifyAvailable) return { ok: false, status: 404, text: async () => '' };
-        return { ok: true, status: 200, json: async () => ({}), text: async () => '' };
-    }
-    if (url === '/api/files/upload' && options.method === 'POST') {
-        const body = JSON.parse(options.body);
-        uploads.push({ ...body, keepalive: options.keepalive === true });
-        if (options.keepalive === true) keepaliveUploads += 1;
-        serverFiles.set(body.name, Buffer.from(body.data, 'base64').toString('utf8'));
-        return { ok: true, status: 200, json: async () => ({}) };
-    }
-    if (url.startsWith('/user/files/')) {
-        if (failReads) return { ok: false, status: 500, text: async () => 'boom' };
-        const name = decodeURIComponent(url.slice('/user/files/'.length));
-        if (!serverFiles.has(name)) return { ok: false, status: 404, text: async () => '' };
-        return { ok: true, status: 200, text: async () => serverFiles.get(name) };
-    }
-    return { ok: true, status: 200, json: async () => ({}) };
-};
 
 const { createFileStore, resetFileStoresForTests } = await import('../src/file-store.js');
 

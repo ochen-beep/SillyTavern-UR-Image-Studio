@@ -7,26 +7,13 @@
  */
 import { test, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
+import { makeUserFileServer } from './_helpers.js';
 
 // ── Server + browser stubs (mirrors tests/file-store-merge.test.js) ──
 
-const serverFiles = new Map();
 const moduleSettings = {};
-
-const fetchStub = async (url, options = {}) => {
-    if (url === '/api/files/verify') return { ok: true, status: 200, json: async () => ({}), text: async () => '' };
-    if (url === '/api/files/upload' && options.method === 'POST') {
-        const body = JSON.parse(options.body);
-        serverFiles.set(body.name, Buffer.from(body.data, 'base64').toString('utf8'));
-        return { ok: true, status: 200, json: async () => ({}), text: async () => '' };
-    }
-    if (url.startsWith('/user/files/')) {
-        const name = decodeURIComponent(url.slice('/user/files/'.length));
-        if (!serverFiles.has(name)) return { ok: false, status: 404, text: async () => '', json: async () => ({}) };
-        return { ok: true, status: 200, text: async () => serverFiles.get(name), json: async () => ({}) };
-    }
-    return { ok: true, status: 200, json: async () => ({}), text: async () => '' };
-};
+const fileServer = makeUserFileServer();
+const serverFiles = fileServer.serverFiles;
 
 function makeLocalforage() {
     const store = new Map();
@@ -66,7 +53,7 @@ beforeEach(async () => {
     for (const key of Object.keys(moduleSettings)) delete moduleSettings[key];
     lfa = makeLocalforage();
     installContext({ chatId: null });
-    globalThis.fetch = fetchStub;
+    globalThis.fetch = fileServer.fetch;
     globalThis.toastr = undefined;
     const { resetStudioStoreForTests } = await import('../src/studio-scope.js');
     resetStudioStoreForTests();

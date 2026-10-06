@@ -1,6 +1,7 @@
 // @ts-check
 import { beforeEach, test } from 'node:test';
 import assert from 'node:assert/strict';
+import { makeUserFileServer } from './_helpers.js';
 import {
     LF_API_KEY, LF_GALLERY_PREFIX,
     LF_GENERATION_DRAFT_PREFIX, LF_HISTORY_PREFIX, LF_IMAGE_PARAMS,
@@ -21,22 +22,9 @@ const localforage = {
     async removeItem(key) { memoryStore.delete(key); },
 };
 
-const serverFiles = new Map();
-globalThis.fetch = async (url, options = {}) => {
-    const u = String(url);
-    if (u === '/api/files/verify') return { ok: true, status: 200, json: async () => ({}), text: async () => '' };
-    if (u === '/api/files/upload' && options.method === 'POST') {
-        const body = JSON.parse(options.body);
-        serverFiles.set(body.name, Buffer.from(body.data, 'base64').toString('utf8'));
-        return { ok: true, status: 200, json: async () => ({}), text: async () => '' };
-    }
-    if (u.startsWith('/user/files/')) {
-        const name = decodeURIComponent(u.slice('/user/files/'.length));
-        if (!serverFiles.has(name)) return { ok: false, status: 404, text: async () => '', json: async () => ({}) };
-        return { ok: true, status: 200, text: async () => serverFiles.get(name), json: async () => ({}) };
-    }
-    return { ok: true, status: 200, json: async () => ({}), text: async () => '' };
-};
+const fileServer = makeUserFileServer();
+const serverFiles = fileServer.serverFiles;
+globalThis.fetch = fileServer.fetch;
 
 globalThis.SillyTavern = {
     getContext: () => ({

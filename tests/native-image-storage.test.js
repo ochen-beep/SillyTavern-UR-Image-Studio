@@ -1,6 +1,7 @@
 // @ts-check
 import assert from 'node:assert/strict';
 import { afterEach, beforeEach, test } from 'node:test';
+import { makeUserFileServer } from './_helpers.js';
 
 let originalFetch;
 let originalSt;
@@ -496,14 +497,17 @@ test('gallery actions land in the diagnostic journal', async () => {
         getContext: () => context,
         libs: { localforage: { getItem: async () => null, setItem: async () => {}, removeItem: async () => {} } },
     };
-    globalThis.fetch = async (url) => {
-        const u = String(url);
-        if (u === '/api/files/verify') return { ok: true, status: 200, json: async () => ({}), text: async () => '' };
-        if (u === '/api/files/upload') return { ok: true, status: 200, json: async () => ({}) };
-        if (u === '/api/images/upload') return { ok: true, status: 200, json: async () => ({ path: 'user/images/UR%20Image%20Studio/uris_manual.png' }) };
-        if (u.startsWith('/user/files/')) return { ok: false, status: 404, text: async () => '' };
-        return { ok: true, status: 200, json: async () => [], text: async () => '' };
-    };
+    // Чтение user-files всегда 404 (как в прежнем локальном стбе), запись — 200.
+    const fileServer = makeUserFileServer({
+        onRead() {
+            return { ok: false, status: 404, text: async () => '', json: async () => ({}) };
+        },
+        fallback(u) {
+            if (u === '/api/images/upload') return { ok: true, status: 200, json: async () => ({ path: 'user/images/UR%20Image%20Studio/uris_manual.png' }) };
+            return { ok: true, status: 200, json: async () => [], text: async () => '' };
+        },
+    });
+    globalThis.fetch = fileServer.fetch;
     const { addToGallery, deleteGalleryCard, clearGallery } = await import('../src/storage.js');
 
     await addToGallery('chat-a', { id: 'a', imagePath: 'user/images/UR%20Image%20Studio/one.png', prompt: 'one' });

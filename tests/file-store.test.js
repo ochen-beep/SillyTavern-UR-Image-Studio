@@ -6,14 +6,44 @@
  */
 import assert from 'node:assert/strict';
 import { after, afterEach, beforeEach, describe, it } from 'node:test';
+import { makeUserFileServer } from './_helpers.js';
 
 const moduleSettings = {};       // stands in for extensionSettings.ur_image_studio
-const serverFiles = new Map();   // name → file text (what the server would store)
-const uploads = [];              // { name, data, keepalive }
 let verifyAvailable = true;
 let failUploads = false;
 let probeThrows = false;
 let gateUploads = null;          // optional deferred gating of upload responses
+
+// Фейковый user-files сервер; рычаги прежнего локального стба (бросковый probe,
+// роняемые записи, гейтинг загрузок) — в обёртке над fileServer.fetch, причём
+// провалившаяся запись не оставляет контент на сервере (откат записанного
+// хелпером содержимого — как в исходном стбе).
+const fileServer = makeUserFileServer({
+    verify() {
+        if (probeThrows) throw new Error('offline');
+        if (!verifyAvailable) return { ok: false, status: 404, text: async () => '' };
+        return { ok: true, status: 200, json: async () => ({}), text: async () => '' };
+    },
+});
+
+const fetchStub = async (url, options = {}) => {
+    if (url === '/api/files/upload' && options.method === 'POST') {
+        if (gateUploads) await gateUploads;
+        if (failUploads) {
+            const body = JSON.parse(options.body);
+            const had = fileServer.serverFiles.has(body.name);
+            const prev = fileServer.serverFiles.get(body.name);
+            await fileServer.fetch(url, options);   // журнал uploads[] ведёт хелпер
+            if (had) fileServer.serverFiles.set(body.name, prev);
+            else fileServer.serverFiles.delete(body.name);
+            return { ok: false, status: 500, text: async () => 'boom' };
+        }
+    }
+    return fileServer.fetch(url, options);
+};
+
+const serverFiles = fileServer.serverFiles;   // name → file text (what the server would store)
+const uploads = fileServer.uploads;           // { name, data, keepalive }
 
 const originalSt = globalThis.SillyTavern;
 const originalFetch = globalThis.fetch;
@@ -44,28 +74,6 @@ function installStubs() {
     globalThis.toastr = { error: msg => toastErrors.push(msg) };
     globalThis.fetch = fetchStub;
 }
-
-const fetchStub = async (url, options = {}) => {
-    if (url === '/api/files/verify') {
-        if (probeThrows) throw new Error('offline');
-        if (!verifyAvailable) return { ok: false, status: 404, text: async () => '' };
-        return { ok: true, status: 200, json: async () => ({}), text: async () => '' };
-    }
-    if (url === '/api/files/upload' && options.method === 'POST') {
-        const body = JSON.parse(options.body);
-        uploads.push({ ...body, keepalive: options.keepalive === true });
-        if (gateUploads) await gateUploads;
-        if (failUploads) return { ok: false, status: 500, text: async () => 'boom' };
-        serverFiles.set(body.name, Buffer.from(body.data, 'base64').toString('utf8'));
-        return { ok: true, status: 200, json: async () => ({}), text: async () => '' };
-    }
-    if (url.startsWith('/user/files/')) {
-        const name = decodeURIComponent(url.slice('/user/files/'.length));
-        if (!serverFiles.has(name)) return { ok: false, status: 404, text: async () => '', json: async () => ({}) };
-        return { ok: true, status: 200, text: async () => serverFiles.get(name), json: async () => ({}) };
-    }
-    return { ok: true, status: 200, json: async () => ({}), text: async () => '' };
-};
 
 const { createFileStore, listFileStores, resetFileStoresForTests } = await import('../src/file-store.js');
 

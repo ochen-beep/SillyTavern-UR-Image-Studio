@@ -8,11 +8,22 @@
 import { test, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { makeFakeDocument } from './fake-dom.js';
+import { makeUserFileServer } from './_helpers.js';
 
 let originalFetch;
 let originalSt;
 let listCalls;
-const serverFiles = new Map();
+const fileServer = makeUserFileServer({
+    fallback(u, options) {
+        if (u === '/api/images/list') {
+            listCalls.push(u);
+            const body = JSON.parse(options.body);
+            return { ok: true, json: async () => (body.folder === 'Test' ? ['one.png', 'two.png'] : []) };
+        }
+        return { ok: true, json: async () => ({}) };
+    },
+});
+const serverFiles = fileServer.serverFiles;
 
 beforeEach(() => {
     originalFetch = globalThis.fetch;
@@ -45,26 +56,7 @@ beforeEach(() => {
         { id: 'card-1', imagePath: 'user/images/Test/one.png', prompt: 'первый', provenance: { chatId: 'test-chat' }, status: 'ready', createdAt: 1 },
         { id: 'card-2', imagePath: 'user/images/Test/two.png', prompt: 'второй', provenance: { chatId: 'test-chat' }, status: 'ready', createdAt: 2 },
     ] }));
-    globalThis.fetch = async (url, options = {}) => {
-        const u = String(url);
-        if (u === '/api/files/verify') return { ok: true, status: 200, json: async () => ({}), text: async () => '' };
-        if (u === '/api/files/upload' && options.method === 'POST') {
-            const body = JSON.parse(options.body);
-            serverFiles.set(body.name, Buffer.from(body.data, 'base64').toString('utf8'));
-            return { ok: true, status: 200, json: async () => ({}), text: async () => '' };
-        }
-        if (u.startsWith('/user/files/')) {
-            const name = decodeURIComponent(u.slice('/user/files/'.length));
-            if (!serverFiles.has(name)) return { ok: false, status: 404, text: async () => '', json: async () => ({}) };
-            return { ok: true, status: 200, text: async () => serverFiles.get(name), json: async () => ({}) };
-        }
-        if (u === '/api/images/list') {
-            listCalls.push(u);
-            const body = JSON.parse(options.body);
-            return { ok: true, json: async () => (body.folder === 'Test' ? ['one.png', 'two.png'] : []) };
-        }
-        return { ok: true, json: async () => ({}) };
-    };
+    globalThis.fetch = fileServer.fetch;
     import('../src/gallery-index.js').then(m => m.resetGalleryStoreForTests());
 });
 

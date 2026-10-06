@@ -7,13 +7,36 @@
  */
 import assert from 'node:assert/strict';
 import { after, afterEach, beforeEach, describe, it } from 'node:test';
+import { makeUserFileServer } from './_helpers.js';
 
 const extensionSettings = {};
-const serverFiles = new Map();
-const uploads = [];
 let verifyAvailable = true;
 let failUploads = false;
 let saveCalls = 0;
+
+// Фейковый user-files сервер: verifyAvailable роняет probe, failUploads роняет
+// запись, /api/images/list отдаёт существующие нативные файлы, остальное — 200
+// c json-массивом (как в прежнем локальном стбе).
+const fileServer = makeUserFileServer({
+    verify() {
+        if (!verifyAvailable) return { ok: false, status: 404, text: async () => '' };
+        return { ok: true, status: 200, json: async () => ({}), text: async () => '' };
+    },
+    onUpload() {
+        if (failUploads) return { ok: false, status: 500, text: async () => 'boom' };
+        return undefined;
+    },
+    fallback(url, options) {
+        if (url === '/api/images/list') {
+            const folder = JSON.parse(options.body).folder;
+            // The native files that actually exist on this fake server.
+            return { ok: true, json: async () => (folder === 'UR Image Studio' ? ['one.png'] : []) };
+        }
+        return { ok: true, status: 200, json: async () => [], text: async () => '' };
+    },
+});
+const serverFiles = fileServer.serverFiles;
+const uploads = fileServer.uploads;
 
 const originalSt = globalThis.SillyTavern;
 const originalFetch = globalThis.fetch;
@@ -35,33 +58,8 @@ function installStubs() {
         },
     };
     globalThis.toastr = { error() {} };
-    globalThis.fetch = fetchStub;
+    globalThis.fetch = fileServer.fetch;
 }
-
-const fetchStub = async (url, options = {}) => {
-    if (url === '/api/files/verify') {
-        if (!verifyAvailable) return { ok: false, status: 404, text: async () => '' };
-        return { ok: true, status: 200, json: async () => ({}), text: async () => '' };
-    }
-    if (url === '/api/files/upload' && options.method === 'POST') {
-        const body = JSON.parse(options.body);
-        uploads.push(body);
-        if (failUploads) return { ok: false, status: 500, text: async () => 'boom' };
-        serverFiles.set(body.name, Buffer.from(body.data, 'base64').toString('utf8'));
-        return { ok: true, status: 200, json: async () => ({}), text: async () => '' };
-    }
-    if (url === '/api/images/list') {
-        const folder = JSON.parse(options.body).folder;
-        // The native files that actually exist on this fake server.
-        return { ok: true, json: async () => (folder === 'UR Image Studio' ? ['one.png'] : []) };
-    }
-    if (url.startsWith('/user/files/')) {
-        const name = decodeURIComponent(url.slice('/user/files/'.length));
-        if (!serverFiles.has(name)) return { ok: false, status: 404, text: async () => '', json: async () => ({}) };
-        return { ok: true, status: 200, text: async () => serverFiles.get(name), json: async () => ({}) };
-    }
-    return { ok: true, status: 200, json: async () => [], text: async () => '' };
-};
 
 const gallery = await import('../src/gallery-index.js');
 

@@ -1,6 +1,7 @@
 // @ts-check
 import assert from 'node:assert/strict';
 import { afterEach, beforeEach, test } from 'node:test';
+import { makeUserFileServer } from './_helpers.js';
 
 let originalFetch;
 let originalSt;
@@ -27,40 +28,32 @@ beforeEach(async () => {
         getContext: () => ctx,
         libs: { localforage: { getItem: async () => '' } },
     };
-    const serverFiles = new Map();
     // Хранилище должно отвечать ДО clearCards(): ready() с недоступной
     // поверхностью ждёт, а не откатывается в settings-мир.
-    globalThis.fetch = async (url, options = {}) => {
-        if (url === '/api/files/verify') return { ok: true, status: 200, json: async () => ({}), text: async () => '' };
-        if (url === '/api/files/upload' && options.method === 'POST') {
-            const body = JSON.parse(options.body);
-            serverFiles.set(body.name, Buffer.from(body.data, 'base64').toString('utf8'));
-            return { ok: true, status: 200, json: async () => ({}), text: async () => '' };
-        }
-        if (String(url).startsWith('/user/files/')) {
-            const name = decodeURIComponent(String(url).slice('/user/files/'.length));
-            if (!serverFiles.has(name)) return { ok: false, status: 404, text: async () => '', json: async () => ({}) };
-            return { ok: true, status: 200, text: async () => serverFiles.get(name), json: async () => ({}) };
-        }
-        if (url === '/api/images/upload') {
-            const body = JSON.parse(options.body);
-            uploadedFolders.push(body.ch_name);
-            return { ok: true, json: async () => ({ path: `user/images/${encodeURIComponent(body.ch_name)}/${body.filename}.png` }) };
-        }
-        if (url === '/api/images/delete') {
-            deletedPaths.push(JSON.parse(options.body).path);
+    // Нативные маршруты /api/images/* живут в fallback, как в прежнем стбе.
+    const fileServer = makeUserFileServer({
+        fallback(url, options) {
+            if (url === '/api/images/upload') {
+                const body = JSON.parse(options.body);
+                uploadedFolders.push(body.ch_name);
+                return { ok: true, json: async () => ({ path: `user/images/${encodeURIComponent(body.ch_name)}/${body.filename}.png` }) };
+            }
+            if (url === '/api/images/delete') {
+                deletedPaths.push(JSON.parse(options.body).path);
+                return { ok: true, json: async () => ({}) };
+            }
+            if (url === '/api/images/list') {
+                const folder = JSON.parse(options.body).folder;
+                listedFolders.push(folder);
+                // Return filenames that match cards added in this test.
+                if (folder === 'Aria') return { ok: true, json: async () => ['aria_scene.png', 's.png', 'h.png'] };
+                if (folder === 'UR Image Studio') return { ok: true, json: async () => ['old.png'] };
+                return { ok: true, json: async () => [] };
+            }
             return { ok: true, json: async () => ({}) };
-        }
-        if (url === '/api/images/list') {
-            const folder = JSON.parse(options.body).folder;
-            listedFolders.push(folder);
-            // Return filenames that match cards added in this test.
-            if (folder === 'Aria') return { ok: true, json: async () => ['aria_scene.png', 's.png', 'h.png'] };
-            if (folder === 'UR Image Studio') return { ok: true, json: async () => ['old.png'] };
-            return { ok: true, json: async () => [] };
-        }
-        return { ok: true, json: async () => ({}) };
-    };
+        },
+    });
+    globalThis.fetch = fileServer.fetch;
     // Forget the in-memory gallery index from any prior test (full store reset:
     // следующее обращение заново пройдёт probe/ready через заглушку fetch выше).
     const { resetGalleryStoreForTests } = await import('../src/gallery-index.js');

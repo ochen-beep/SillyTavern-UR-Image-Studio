@@ -12,11 +12,22 @@
  */
 import assert from 'node:assert/strict';
 import { after, afterEach, beforeEach, describe, it } from 'node:test';
+import { makeUserFileServer } from './_helpers.js';
 
-const serverFiles = new Map();   // name → file text (what the server would store)
-const uploads = [];              // { name, data, keepalive }
 let probeThrows = false;
 let verifyAvailable = true;
+let probeCalls = 0;
+
+const fileServer = makeUserFileServer({
+    verify() {
+        probeCalls += 1;
+        if (probeThrows) throw new Error('offline');
+        if (!verifyAvailable) return { ok: false, status: 404, text: async () => '' };
+        return { ok: true, status: 200, json: async () => ({}), text: async () => '' };
+    },
+});
+const serverFiles = fileServer.serverFiles;   // name → file text (what the server would store)
+const uploads = fileServer.uploads;           // { name, data, keepalive }
 
 const originalSt = globalThis.SillyTavern;
 const originalFetch = globalThis.fetch;
@@ -40,30 +51,8 @@ function installStubs() {
         },
     };
     globalThis.toastr = { error: msg => toastErrors.push(msg), warning: msg => toastErrors.push(msg) };
-    globalThis.fetch = fetchStub;
+    globalThis.fetch = fileServer.fetch;
 }
-
-let probeCalls = 0;
-const fetchStub = async (url, options = {}) => {
-    if (url === '/api/files/verify') {
-        probeCalls += 1;
-        if (probeThrows) throw new Error('offline');
-        if (!verifyAvailable) return { ok: false, status: 404, text: async () => '' };
-        return { ok: true, status: 200, json: async () => ({}), text: async () => '' };
-    }
-    if (url === '/api/files/upload' && options.method === 'POST') {
-        const body = JSON.parse(options.body);
-        uploads.push({ ...body, keepalive: options.keepalive === true });
-        serverFiles.set(body.name, Buffer.from(body.data, 'base64').toString('utf8'));
-        return { ok: true, status: 200, json: async () => ({}), text: async () => '' };
-    }
-    if (url.startsWith('/user/files/')) {
-        const name = decodeURIComponent(url.slice('/user/files/'.length));
-        if (!serverFiles.has(name)) return { ok: false, status: 404, text: async () => '', json: async () => ({}) };
-        return { ok: true, status: 200, text: async () => serverFiles.get(name), json: async () => ({}) };
-    }
-    return { ok: true, status: 200, json: async () => ({}), text: async () => '' };
-};
 
 const { createFileStore, resetFileStoresForTests } = await import('../src/file-store.js');
 

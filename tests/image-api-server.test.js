@@ -1,6 +1,7 @@
 // @ts-check
 import { after, beforeEach, test } from 'node:test';
 import assert from 'node:assert/strict';
+import { makeUserFileServer } from './_helpers.js';
 
 const store = new Map();
 const extensionSettings = {};
@@ -21,30 +22,27 @@ globalThis.SillyTavern = {
 };
 
 const originalFetch = globalThis.fetch;
-const serverFiles = new Map();
-globalThis.fetch = async (url, options = {}) => {
+// Единый фейковый user-files сервер; маршруты провайдера и /api/images/upload
+// живут в fallback, всё неизвестное — Forbidden (как в прежнем локальном стбе).
+const fileServer = makeUserFileServer({
+    fallback(url, options) {
+        if (url === 'https://images.example/v1/images/generations') {
+            if (providerResponse instanceof Error) throw providerResponse;
+            return providerResponse;
+        }
+        if (url === 'https://images.example/result.png') {
+            return { ok: true, blob: async () => new Blob(['image-bytes'], { type: 'image/png' }) };
+        }
+        if (url === '/api/images/upload') return jsonResponse({ path: 'user/images/UR%20Image%20Studio/generated.png' });
+        throw new Error(`Forbidden network call: ${options.method || 'GET'} ${url}`);
+    },
+});
+// Журнал всех вызовов (включая user-files) — поверх общего сервера.
+const baseFetch = (url, options = {}) => {
     fetchCalls.push({ url: String(url), options });
-    if (url === '/api/files/verify') return jsonResponse({});
-    if (url === '/api/files/upload' && options.method === 'POST') {
-        const body = JSON.parse(options.body);
-        serverFiles.set(body.name, Buffer.from(body.data, 'base64').toString('utf8'));
-        return jsonResponse({});
-    }
-    if (String(url).startsWith('/user/files/')) {
-        const name = decodeURIComponent(String(url).slice('/user/files/'.length));
-        if (!serverFiles.has(name)) return { ok: false, status: 404, text: async () => '', json: async () => ({}) };
-        return { ok: true, status: 200, text: async () => serverFiles.get(name), json: async () => ({}) };
-    }
-    if (url === 'https://images.example/v1/images/generations') {
-        if (providerResponse instanceof Error) throw providerResponse;
-        return providerResponse;
-    }
-    if (url === 'https://images.example/result.png') {
-        return { ok: true, blob: async () => new Blob(['image-bytes'], { type: 'image/png' }) };
-    }
-    if (url === '/api/images/upload') return jsonResponse({ path: 'user/images/UR%20Image%20Studio/generated.png' });
-    throw new Error(`Forbidden network call: ${options.method || 'GET'} ${url}`);
+    return fileServer.fetch(url, options);
 };
+globalThis.fetch = baseFetch;
 
 const { createConnection, setConnectionApiKey } = await import('../src/connection-store.js');
 const { listPendingBrowserRequests, getPendingBrowserRequest, getPendingBrowserRequestStatus, discardPendingBrowserRequest, clearPendingBrowserRequests } = await import('../src/browser-image-recovery.js');
@@ -438,6 +436,7 @@ test('browser dispatch preserves a captured route through normalization and does
 
 test('browser dispatch routes a JSON generation through the ST proxy when useCorsProxy is set on the connection', async () => {
     // Reset fetch to a /proxy/-aware mock so we can observe viaProxy.
+    const standardFetch = globalThis.fetch;
     const calls = [];
     globalThis.fetch = async (url, options = {}) => {
         const urlStr = String(url);
@@ -472,17 +471,6 @@ test('browser dispatch routes a JSON generation through the ST proxy when useCor
         assert.equal(posts[0].viaProxy, true, 'the paid POST must traverse the ST proxy, not go direct');
     } finally {
         // Restore the file-level fetch mock for subsequent tests.
-        globalThis.fetch = async (url, options = {}) => {
-            fetchCalls.push({ url: String(url), options });
-            if (url === 'https://images.example/v1/images/generations') {
-                if (providerResponse instanceof Error) throw providerResponse;
-                return providerResponse;
-            }
-            if (url === 'https://images.example/result.png') {
-                return { ok: true, blob: async () => new Blob(['image-bytes'], { type: 'image/png' }) };
-            }
-            if (url === '/api/images/upload') return jsonResponse({ path: 'user/images/UR%20Image%20Studio/generated.png' });
-            throw new Error(`Forbidden network call: ${options.method || 'GET'} ${url}`);
-        };
+        globalThis.fetch = standardFetch;
     }
 });

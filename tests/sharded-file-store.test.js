@@ -6,9 +6,8 @@
  */
 import assert from 'node:assert/strict';
 import { after, beforeEach, describe, it } from 'node:test';
+import { makeUserFileServer } from './_helpers.js';
 
-const serverFiles = new Map();   // name → file text (what the server would store)
-const uploads = [];              // { name, data, keepalive }
 let verifyAvailable = true;
 let failUploads = false;
 let failUploadsOnce = false;     // one-shot: only the next upload fails, then writes recover
@@ -17,6 +16,47 @@ let failReadsOnce = new Set();   // names answering 500 on their NEXT read only,
 let parkedUploadName = null;     // uploads of this name park in flight until released
 let releaseParkedUpload = null;  // resolver set while an upload is parked
 let missingNames = new Set();    // names answering 404 even if present in serverFiles
+
+// Фейковый user-files сервер со всеми рычагами прежнего локального стба:
+// роняемые (разово или постоянно) загрузки и чтения, «отсутствующие» имена и
+// парковка загрузки в полёте до релиза. Провалившаяся загрузка не оставляет
+// контент на сервере — как в исходном стбе, поэтому фейл обслуживает обёртка
+// поверх fileServer.fetch c откатом записанного хелпером содержимого.
+const fileServer = makeUserFileServer({
+    verify() {
+        if (!verifyAvailable) return { ok: false, status: 404, text: async () => '' };
+        return { ok: true, status: 200, json: async () => ({}), text: async () => '' };
+    },
+    onRead(name, serverFiles) {
+        if (!serverFiles.has(name) || missingNames.has(name)) return { ok: false, status: 404, text: async () => '', json: async () => ({}) };
+        if (failReadsOnce.has(name)) { failReadsOnce.delete(name); return { ok: false, status: 500, text: async () => 'boom', json: async () => ({}) }; }
+        if (failReads.has(name)) return { ok: false, status: 500, text: async () => 'boom', json: async () => ({}) };
+        return undefined;
+    },
+});
+
+const fetchStub = async (url, options = {}) => {
+    const u = String(url);
+    if (u === '/api/files/upload' && options.method === 'POST') {
+        const body = JSON.parse(options.body);
+        if (body.name === parkedUploadName && releaseParkedUpload === null) {
+            await new Promise(resolve => { releaseParkedUpload = resolve; });
+        }
+        if (failUploads || failUploadsOnce) {
+            if (failUploadsOnce) failUploadsOnce = false;
+            const had = fileServer.serverFiles.has(body.name);
+            const prev = fileServer.serverFiles.get(body.name);
+            await fileServer.fetch(url, options);   // журнал uploads[] ведёт хелпер
+            if (had) fileServer.serverFiles.set(body.name, prev);
+            else fileServer.serverFiles.delete(body.name);
+            return { ok: false, status: 500, text: async () => 'boom' };
+        }
+    }
+    return fileServer.fetch(url, options);
+};
+
+const serverFiles = fileServer.serverFiles;   // name → file text (what the server would store)
+const uploads = fileServer.uploads;           // { name, data, keepalive }
 
 const originalSt = globalThis.SillyTavern;
 const originalFetch = globalThis.fetch;
@@ -35,32 +75,6 @@ function installStubs() {
     globalThis.toastr = { error: msg => toastErrors.push(msg) };
     globalThis.fetch = fetchStub;
 }
-
-const fetchStub = async (url, options = {}) => {
-    if (url === '/api/files/verify') {
-        if (!verifyAvailable) return { ok: false, status: 404, text: async () => '' };
-        return { ok: true, status: 200, json: async () => ({}), text: async () => '' };
-    }
-    if (url === '/api/files/upload' && options.method === 'POST') {
-        const body = JSON.parse(options.body);
-        uploads.push({ ...body, keepalive: options.keepalive === true });
-        if (body.name === parkedUploadName && releaseParkedUpload === null) {
-            await new Promise(resolve => { releaseParkedUpload = resolve; });
-        }
-        if (failUploads) return { ok: false, status: 500, text: async () => 'boom' };
-        if (failUploadsOnce) { failUploadsOnce = false; return { ok: false, status: 500, text: async () => 'boom' }; }
-        serverFiles.set(body.name, Buffer.from(body.data, 'base64').toString('utf8'));
-        return { ok: true, status: 200, json: async () => ({}), text: async () => '' };
-    }
-    if (url.startsWith('/user/files/')) {
-        const name = decodeURIComponent(url.slice('/user/files/'.length));
-        if (!serverFiles.has(name) || missingNames.has(name)) return { ok: false, status: 404, text: async () => '', json: async () => ({}) };
-        if (failReadsOnce.has(name)) { failReadsOnce.delete(name); return { ok: false, status: 500, text: async () => 'boom', json: async () => ({}) }; }
-        if (failReads.has(name)) return { ok: false, status: 500, text: async () => 'boom', json: async () => ({}) };
-        return { ok: true, status: 200, text: async () => serverFiles.get(name), json: async () => ({}) };
-    }
-    return { ok: true, status: 200, json: async () => ({}), text: async () => '' };
-};
 
 const { createShardedFileStore } = await import('../src/sharded-file-store.js');
 const { resetFileStoresForTests } = await import('../src/file-store.js');

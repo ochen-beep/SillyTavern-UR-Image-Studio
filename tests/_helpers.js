@@ -129,8 +129,7 @@ export function makeGzipFrame(input) {
 }
 
 /** In-memory authoritative collections for reference-library integration tests. */
-export function makeReferenceStore() {
-    const collections = new Map();
+export function makeReferenceStore() {    const collections = new Map();
     return {
         async available() { return true; },
         async list(name) { return structuredClone(collections.get(name) || []); },
@@ -167,3 +166,66 @@ export function makeReferenceStore() {
     };
 }
 
+
+// ── Единый фейковый user-files сервер (замена ~19 локальных копий стба) ──
+//
+// Обслуживает официальную поверхность, через которую ходят все сторы:
+//   POST /api/files/verify   — probe доступности (или бросает через hooks.verify)
+//   POST /api/files/upload   — запись файла (тело {name, data(base64)}), с
+//                              журналом uploads[] и флагом keepalive
+//   GET  /user/files/<name>  — чтение (404 для неизвестных)
+// Всё остальное — hooks.fallback(url, options), по умолчанию 200 OK.
+//
+// makeUserFileServer({ verify, onUpload, onRead, fallback }) → {
+//   fetch,          // ставится в globalThis.fetch вручную (не глобально!)
+//   serverFiles,    // Map<name, string> — «серверное» состояние
+//   uploads,        // журнал: { name, data, keepalive }
+//   reset(),        // очистить файлы и журнал
+// }
+
+/**
+ * @param {{
+ *   verify?: () => object|never,
+ *   onUpload?: (body: object, options: object, serverFiles: Map<string,string>) => object|void,
+ *   onRead?: (name: string, serverFiles: Map<string,string>) => object|void,
+ *   fallback?: (url: string, options: object) => object|void,
+ * }} [hooks]
+ */
+export function makeUserFileServer(hooks = {}) {
+    const serverFiles = new Map();
+    const uploads = [];
+    const fetch = async (url, options = {}) => {
+        const u = String(url);
+        if (u === '/api/files/verify') {
+            if (hooks.verify) return hooks.verify();
+            return { ok: true, status: 200, json: async () => ({}), text: async () => '' };
+        }
+        if (u === '/api/files/upload' && options.method === 'POST') {
+            const body = JSON.parse(options.body);
+            uploads.push({ name: body.name, data: body.data, keepalive: options.keepalive === true });
+            serverFiles.set(body.name, Buffer.from(body.data, 'base64').toString('utf8'));
+            if (hooks.onUpload) return hooks.onUpload(body, options, serverFiles) ?? { ok: true, status: 200, json: async () => ({}), text: async () => '' };
+            return { ok: true, status: 200, json: async () => ({}), text: async () => '' };
+        }
+        if (u.startsWith('/user/files/')) {
+            const name = decodeURIComponent(u.slice('/user/files/'.length));
+            if (hooks.onRead) {
+                const hooked = hooks.onRead(name, serverFiles);
+                if (hooked) return hooked;
+            }
+            if (!serverFiles.has(name)) return { ok: false, status: 404, text: async () => '', json: async () => ({}) };
+            return { ok: true, status: 200, text: async () => serverFiles.get(name), json: async () => ({}) };
+        }
+        if (hooks.fallback) {
+            const hooked = hooks.fallback(u, options);
+            if (hooked) return hooked;
+        }
+        return { ok: true, status: 200, json: async () => ({}), text: async () => '' };
+    };
+    return {
+        fetch,
+        serverFiles,
+        uploads,
+        reset() { serverFiles.clear(); uploads.length = 0; },
+    };
+}

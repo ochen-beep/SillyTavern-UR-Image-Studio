@@ -21,6 +21,9 @@ import { recordDiagnosticEvent } from './diagnostic-events.js';
 import { autoFetch, proxiedFetch, isCorsOrNetworkError, isCorsProxyAvailable } from './proxy.js';
 import { notePreflightOracleDead, noteDeliveryPostOutcome } from './delivery-evidence.js';
 
+/** Typed code for the multipart-over-direct-CORS rejection (no export of the string elsewhere). */
+export const MULTIPART_CORS_REQUIRED = 'MULTIPART_CORS_REQUIRED';
+
 function isAbortOrTimeout(error, signal) {
     return signal?.aborted
         || error?.name === 'AbortError'
@@ -207,7 +210,7 @@ export async function fetchImageRoute(url, options = {}, route, timeoutMs = 1200
 
         if (transport.bodyKind === 'multipart') {
             if (isCorsOrNetworkError(error)) {
-                if (method === 'POST') recordDiagnosticEvent({ event: 'dispatch-error', level: 'error', stage: diagnostic?.stage || 'stage2', requestId: diagnostic?.requestId || null, attemptId: rootAttemptId, attemptIndex: attemptDiagnostic.attemptIndex, delivery: 'direct', bodyKind: transport.bodyKind, outcome: 'preflight-cors', durationMs: Date.now() - attemptStartedAt, details: { code: 'MULTIPART_CORS_REQUIRED' } });
+                if (method === 'POST') recordDiagnosticEvent({ event: 'dispatch-error', level: 'error', stage: diagnostic?.stage || 'stage2', requestId: diagnostic?.requestId || null, attemptId: rootAttemptId, attemptIndex: attemptDiagnostic.attemptIndex, delivery: 'direct', bodyKind: transport.bodyKind, outcome: 'preflight-cors', durationMs: Date.now() - attemptStartedAt, details: { code: MULTIPART_CORS_REQUIRED } });
                 throw multipartCorsError(error);
             }
             if (method === 'POST') recordDiagnosticEvent({ event: 'dispatch-error', level: 'error', stage: diagnostic?.stage || 'stage2', requestId: diagnostic?.requestId || null, attemptId: rootAttemptId, attemptIndex: attemptDiagnostic.attemptIndex, delivery: 'direct', bodyKind: transport.bodyKind, outcome: 'network-unknown', durationMs: Date.now() - attemptStartedAt, details: { code: error?.code || null } });
@@ -284,7 +287,7 @@ export async function fetchImageRoute(url, options = {}, route, timeoutMs = 1200
 
 function multipartCorsError(cause) {
     const error = new Error('Multipart image requests require direct CORS. Enable CORS on the image provider or use a JSON image route.', { cause });
-    error.code = 'MULTIPART_CORS_REQUIRED';
+    error.code = MULTIPART_CORS_REQUIRED;
     return error;
 }
 

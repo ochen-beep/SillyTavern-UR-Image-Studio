@@ -7,27 +7,16 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { makeFakeDocument } from './fake-dom.js';
+import { makeUserFileServer } from './_helpers.js';
 
 // Файловая дверь: сторы данных должны резолвиться мгновенно и без сети.
 // Без неё ready() ходит в реальный сервер (если запущен) или ждёт вечно.
-{
-    const serverFiles = new Map();
-    globalThis.fetch = async (url, options = {}) => {
-        const u = String(url);
-        if (u === '/api/files/verify') return { ok: true, status: 200, json: async () => ({}), text: async () => '' };
-        if (u === '/api/files/upload' && options.method === 'POST') {
-            const body = JSON.parse(options.body);
-            serverFiles.set(body.name, Buffer.from(body.data, 'base64').toString('utf8'));
-            return { ok: true, status: 200, json: async () => ({}), text: async () => '' };
-        }
-        if (u.startsWith('/user/files/')) {
-            const name = decodeURIComponent(u.slice('/user/files/'.length));
-            if (!serverFiles.has(name)) return { ok: false, status: 404, text: async () => '', json: async () => ({}) };
-            return { ok: true, status: 200, text: async () => serverFiles.get(name), json: async () => ({}) };
-        }
+const fileServer = makeUserFileServer({
+    fallback(url, options) {
         return globalThis.__realFetch ? globalThis.__realFetch(url, options) : { ok: true, status: 200, json: async () => ({}), text: async () => '' };
-    };
-}
+    },
+});
+globalThis.fetch = fileServer.fetch;
 
 
 const { document } = makeFakeDocument();

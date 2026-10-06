@@ -292,33 +292,30 @@ test('browser generation rejects references exceeding the route maximum before P
 });
 
 test('browser ambiguous delivery codes are never auto-resubmitted', async () => {
-    const fs = await import('node:fs/promises');
-    const transport = await fs.readFile(new URL('../src/image-transport.js', import.meta.url), 'utf8');
-    const recovery = await fs.readFile(new URL('../src/browser-image-recovery.js', import.meta.url), 'utf8');
-    // The two browser-owned ambiguous delivery codes replace the former server
-    // REQUEST_AMBIGUOUS / GENERATION_FAILED_AMBIGUOUS / UPSTREAM_RESULT_UNKNOWN.
-    // (2026-10-05, пункт 2.4: IMAGE_DELIVERY_AMBIGUOUS присваивается через
-    // тернарник единой фабрики ambiguousDeliveryError — код остаётся тем же.)
-    assert.match(transport, /code = scope === 'text' \? 'DELIVERY_AMBIGUOUS' : 'IMAGE_DELIVERY_AMBIGUOUS'/, 'IMAGE_DELIVERY_AMBIGUOUS must be declared by the browser transport');
-    assert.match(transport, /code = 'MULTIPART_CORS_REQUIRED'/, 'MULTIPART_CORS_REQUIRED must be declared by the browser transport');
-    // Поведенческая проверка кодов обеих ветвей фабрики.
+    // Behavioral (2026-10-06, было source-regex): коды обеих ветвей фабрики и
+    // публичная поверхность recovery проверяются через импорт модулей, а не
+    // через регексы по исходнику.
     const mod = await import('../src/image-transport.js');
     const imageErr = mod.ambiguousDeliveryError(new Error('x'), 'image');
     const textErr = mod.ambiguousDeliveryError(new Error('x'), 'text');
     assert.equal(imageErr.code, 'IMAGE_DELIVERY_AMBIGUOUS');
     assert.equal(textErr.code, 'DELIVERY_AMBIGUOUS');
     assert.equal(textErr.noRetry, true);
-    // Browser pending records are review/discard only; the recovery store must
-    // never expose a resubmit path.
-    assert.match(recovery, /never trigger a provider resend|review\/discard|Browser records never/);
-    assert.ok(!/autoResubmit|resendPending/i.test(recovery), 'browser recovery must not auto-resend');
-});
-
-test('old guard string is gone', async () => {
-    const fs = await import('node:fs');
-    const content = fs.readFileSync(new URL('../src/pipeline.js', import.meta.url), 'utf8');
-    assert.ok(!content.includes('stage2RunningMsgId'), 'не должно остаться stage2RunningMsgId');
-    assert.ok(!content.includes('пропуск дубля'), 'не должно остаться пропуск дубля');
+    // MULTIPART_CORS_REQUIRED обязан существовать как типизированный код
+    // браузерного транспорта: проверяем через публичную таблицу/фабрику.
+    const { MULTIPART_CORS_REQUIRED } = await import('../src/image-transport.js');
+    assert.equal(MULTIPART_CORS_REQUIRED, 'MULTIPART_CORS_REQUIRED');
+    // Browser pending records are review/discard only: публичная поверхность
+    // recovery не содержит никакого пути повторной отправки.
+    const recoveryMod = await import('../src/browser-image-recovery.js');
+    const exportedNames = Object.keys(recoveryMod);
+    assert.ok(exportedNames.length > 0, 'recovery module exports its review surface');
+    assert.ok(
+        exportedNames.every(name => !/resubmit|resend|retry/i.test(name)),
+        `recovery surface must not expose a resubmit path: ${exportedNames.join(', ')}`,
+    );
+    assert.ok(exportedNames.includes('discardPendingBrowserRequest'), 'review flow: discard is available');
+    assert.ok(exportedNames.includes('listPendingBrowserRequests'), 'review flow: listing is available');
 });
 
 /**
