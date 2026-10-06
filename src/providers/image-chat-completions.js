@@ -202,8 +202,8 @@ function paramWarnings({ mode, aspectRatio, imageSize, quality, prompt, unsuppor
 }
 
 export async function generateChatCompletionImage(input) {
-  const { endpoint, apiKey, route, request, transport, signal, connection = {}, diagnostic = null } = requireInvocation(input);
-  const references = referencesFor(request);
+  const { endpoint, apiKey, route, request, transport, signal, connection = {}, diagnostic = null, parsedReferences } = requireInvocation(input);
+  const references = parsedReferences ?? referencesFor(request);
   const bindingText = (request?.referenceBindings || []).map(binding =>
     `Reference image ${binding.index} corresponds to "${binding.label}". Use it as the visual reference for that subject.`
   );

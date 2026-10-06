@@ -30,7 +30,7 @@ function isAbortOrTimeout(error, signal) {
         // code — типизированный путь; регэкс — легаси-фолбэк для сторонних
         // создателей таймаут-ошибок (tests, внешние вызовы fetchWithTimeout).
         || error?.code === 'FETCH_TIMEOUT'
-        || /Таймаут/.test(error?.message || '');
+        ;
 }
 
 function transportFor(route, options = {}) {
@@ -326,7 +326,7 @@ export async function probePreflightDelivery(url, signal, timeoutMs) {
         return response.ok ? 'alive' : 'dead';
     } catch (error) {
         if (signal?.aborted || error?.name === 'AbortError') throw error;
-        if (error?.code === 'FETCH_TIMEOUT' || /Таймаут/.test(error?.message || '')) return 'unknown';
+        if (error?.code === 'FETCH_TIMEOUT' ) return 'unknown';
         return isCorsOrNetworkError(error) ? 'dead' : 'unknown';
     }
 }

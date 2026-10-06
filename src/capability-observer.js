@@ -205,7 +205,7 @@ function isCorsOrNetworkFailure(error) {
 function isAbort(error) {
   return error?.name === 'AbortError'
     || error?.code === 20 // DOMException AbortError
-    || /Таймаут|timeout/i.test(error?.message || '');
+    || /timeout/i.test(error?.message || '');
 }
 
 /**

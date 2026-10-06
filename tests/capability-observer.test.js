@@ -162,9 +162,9 @@ test('classifyOutcome success on no error', () => {
   assert.equal(classifyOutcome(null), 'success');
 });
 
-test('classifyOutcome timeout for Abort and Таймаут', () => {
+test('classifyOutcome timeout for Abort and typed FETCH_TIMEOUT', () => {
   assert.equal(classifyOutcome(new DOMException('Aborted', 'AbortError')), 'timeout');
-  const err = new Error('Таймаут (120с)');
+  const err = new Error('Timeout (120s)'); err.code = 'FETCH_TIMEOUT';
   assert.equal(classifyOutcome(err), 'timeout');
 });
 

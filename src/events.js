@@ -11,6 +11,7 @@ import { state, getCtx, log, warn, error } from './core.js';
 import { recordDiagnosticEvent, hashDiagnosticId } from './diagnostic-events.js';
 import { loadChatConfig, applyChatConfigToState } from './chat-binding.js';
 import { cancelForeignQueueItems } from './pipeline-queue.js';
+import { removeGalleryForChat } from './storage.js';
 import { POST_FILTER, setFilter, getFilter, getLastPostIndex, setCurrentMsgId, isGenerationEligible } from './post-navigator.js';
 
 let _bound = false;
@@ -20,6 +21,7 @@ let _onAutomation = null;      // callback: ({chatId,msgId,messageText,templateI
 let _onGenerationEnded = null; // reference for removeListener
 let _onMessageSent = null;     // reference for removeListener
 let _onChatChanged = null;     // reference for removeListener
+let _onChatDeleted = null;     // reference for removeListener (gallery GC)
 let _onPostFollow = null;      // single function for GENERATION_ENDED/MESSAGE_SENT/MESSAGE_SWIPED
 let _onStopAll = null;         // GENERATION_STOPPED → abort all in-flight extension generations
 
@@ -175,6 +177,21 @@ export function bindEvents(handlers) {
     };
     ctx.eventSource.on(et.CHAT_CHANGED, _onChatChanged);
 
+    // CHAT_DELETED: gallery GC — карточки удалённого чата иначе остаются в
+    // общем индексе навсегда (пункт 43 плана). Метаданные чистим, файлы
+    // картинок не трогаем (нативная галерея ST переживает чат сознательно).
+    // ST эмитит имя файла чата; карточки сопоставляются по provenance.chatId —
+    // расхождение формата означает просто отсутствие GC (старое поведение).
+    _onChatDeleted = async (chatName) => {
+        try {
+            const removed = await removeGalleryForChat(String(chatName || ''));
+            if (removed > 0) log('CHAT_DELETED: gallery GC removed', removed, 'card(s)');
+        } catch (e) {
+            warn('CHAT_DELETED: gallery GC failed:', e?.message || e);
+        }
+    };
+    ctx.eventSource.on(et.CHAT_DELETED, _onChatDeleted);
+
     // GENERATION_STOPPED: the user pressed ST's global Stop button (stopGeneration
     // emits it unconditionally, even when nothing was generating). The handler
     // ("Stop stops everything") cancels all in-flight extension generations and
@@ -194,6 +211,7 @@ export function unbindEvents() {
         try { if (_onGenerationEnded) ctx.eventSource.removeListener(et.GENERATION_ENDED, _onGenerationEnded); } catch {}
         try { if (_onMessageSent) ctx.eventSource.removeListener(et.MESSAGE_SENT, _onMessageSent); } catch {}
         try { if (_onChatChanged) ctx.eventSource.removeListener(et.CHAT_CHANGED, _onChatChanged); } catch {}
+        try { if (_onChatDeleted) ctx.eventSource.removeListener(et.CHAT_DELETED, _onChatDeleted); } catch {}
         try { if (_onPostFollow) {
             ctx.eventSource.removeListener(et.GENERATION_ENDED, _onPostFollow);
             ctx.eventSource.removeListener(et.MESSAGE_SENT, _onPostFollow);
@@ -204,6 +222,7 @@ export function unbindEvents() {
     _onGenerationEnded = null;
     _onMessageSent = null;
     _onChatChanged = null;
+    _onChatDeleted = null;
     _onPostFollow = null;
     _onStopAll = null;
     _onAutomation = null;

@@ -74,9 +74,9 @@ function parse(payload) {
 }
 
 export async function generatePollinationsImage(input) {
-    const { endpoint, apiKey, route, request, transport, signal, connection = {}, diagnostic = null } = requireInvocation(input);
+    const { endpoint, apiKey, route, request, transport, signal, connection = {}, diagnostic = null, parsedReferences } = requireInvocation(input);
     const token = validatePollinationsToken(apiKey);
-    const references = referencesFor(request);
+    const references = parsedReferences ?? referencesFor(request);
     if (references.length) throw providerError('REFERENCES_UNSUPPORTED', 'Pollinations image generation does not accept references in this route.');
     const payload = body(route, request);
     const response = await transport.requestJson(

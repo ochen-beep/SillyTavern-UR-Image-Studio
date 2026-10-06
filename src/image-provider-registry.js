@@ -31,7 +31,9 @@ export function validateImageProviderInvocation(input) {
   const adapter = getImageProviderAdapter(contract);
   if (!adapter) throw providerError('UNSUPPORTED_GENERATION_CONTRACT', 'The selected image route has an unsupported generation contract. Re-select and save a supported contract before generating.');
   assertReferencePolicy(input.route, input.request);
-  referencesFor(input.request);
+  // Парсим data-URL (мегабайтные строки) ОДИН раз и штампуем в invocation —
+  // иначе каждый адаптер парсит те же референсы повторно (пункт 18 плана).
+  input.parsedReferences = referencesFor(input.request);
   return adapter;
 }
 

@@ -15,8 +15,8 @@ function parse(payload) {
 }
 
 export async function generateOpenRouterImage(input) {
-  const { endpoint, apiKey, route, request, transport, signal, connection = {}, diagnostic = null } = requireInvocation(input);
-  const references = referencesFor(request);
+  const { endpoint, apiKey, route, request, transport, signal, connection = {}, diagnostic = null, parsedReferences } = requireInvocation(input);
+  const references = parsedReferences ?? referencesFor(request);
   if (references.length && route?.capabilities?.references === 'unsupported') throw providerError('REFERENCES_UNSUPPORTED', 'Selected OpenRouter route does not support references.');
   const maxReferences = route?.capabilities?.maxReferences;
   if (Number.isSafeInteger(maxReferences) && references.length > maxReferences) throw providerError('TOO_MANY_REFERENCES', 'Too many reference images for the selected OpenRouter route.');

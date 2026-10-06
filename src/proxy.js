@@ -179,7 +179,6 @@ function hostnameOf(url) {
 export function isCorsOrNetworkError(e) {
     if (!(e instanceof TypeError)) return false;
     const m = e.message || '';
-    if (/Таймаут/.test(m)) return false;
     return /Failed to fetch|Load failed|NetworkError/i.test(m);
 }
 
@@ -237,7 +236,7 @@ export async function autoFetch(url, options = {}, timeoutMs = 120000) {
     if (strategy === 'proxy') {
         try { return await proxiedFetch(url, options, timeoutMs); }
         catch (e) {
-            if (e?.name === 'AbortError' || e?.code === 'FETCH_TIMEOUT' || /Таймаут/.test(e?.message || '')) throw e;
+            if (e?.name === 'AbortError' || e?.code === 'FETCH_TIMEOUT') throw e;
             // The proxy leg may have reached the provider — a direct re-send
             // could bill twice. Propagate; the strategy stays 'proxy'.
             if (noResubmit) throw e;
@@ -258,7 +257,7 @@ export async function autoFetch(url, options = {}, timeoutMs = 120000) {
         // User cancellation / timeout — propagate without changing strategy.
         // (fetchWithTimeout already distinguishes them: AbortError from external signal
         // is thrown as DOMException('Aborted'), timeout as Error('Timeout').)
-        if (e?.name === 'AbortError' || e?.code === 'FETCH_TIMEOUT' || /Таймаут/.test(e?.message || '')) throw e;
+        if (e?.name === 'AbortError' || e?.code === 'FETCH_TIMEOUT') throw e;
         if (!isCorsOrNetworkError(e)) throw e;
         // CORS/network failure on a paid POST: outcome unknown — do not re-send.
         if (noResubmit) {
@@ -305,7 +304,7 @@ export async function probeDeliveryStrategy(url, probeUrl, { headers = {}, timeo
         _hostStrategy.set(host, 'direct');
         return 'direct';
     } catch (e) {
-        if (e?.name === 'AbortError' || e?.code === 'FETCH_TIMEOUT' || /Таймаут/.test(e?.message || '')) throw e;
+        if (e?.name === 'AbortError' || e?.code === 'FETCH_TIMEOUT') throw e;
         if (!isCorsOrNetworkError(e)) throw e;
         _hostStrategy.set(host, 'proxy');
         log('probeDeliveryStrategy: host needs the ST proxy', host, e.message);

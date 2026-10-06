@@ -14,7 +14,7 @@
  */
 import { imageResultFromValue, providerError, readJsonResponse, authProfileFor, referencesFor, requireInvocation, diagnosticRequestOptions } from './image-base.js';
 import { resolveEndpoint, interpolatePath } from '../endpoint-utils.js';
-import { sleep, abortError as baseAbortError } from '../async-utils.js';
+import { sleep, pollUntil, abortError as baseAbortError } from '../async-utils.js';
 import { getProviderDescriptor } from '../provider-descriptors.js';
 
 const NAISTERA_DESCRIPTOR = getProviderDescriptor('naistera');
@@ -46,7 +46,7 @@ function baseUrl(endpoint) {
     return resolveEndpoint(NAISTERA_DESCRIPTOR, endpoint);
 }
 
-function body(route, request) {
+function body(route, request, parsedReferences) {
     const payload = {
         prompt: String(request?.prompt || ''),
         model: route.modelId,
@@ -61,7 +61,7 @@ function body(route, request) {
     }
     const preset = String(request?.preset ?? '').trim().toLowerCase();
     if (preset && PRESETS.has(preset)) payload.preset = preset;
-    const references = referencesFor(request);
+    const references = parsedReferences ?? referencesFor(request);
     if (references.length) payload.reference_objects = references.map(ref => ({
         image: ref.dataUrl,
         ...(typeof ref.description === 'string' && ref.description.trim()
@@ -116,61 +116,61 @@ function abortError() {
 /**
  * Poll GET /api/generate/jobs/{job_id} until a terminal state or the deadline.
  * Read-only GETs only; a timeout/abort never triggers a second POST.
+ * Скелет дедлайна/сна — pollUntil из async-utils (пункт 19).
  */
 async function pollJob({ jobUrl, token, transport, route, connection, signal, deadlineAt, diagnostic }) {
-    for (;;) {
-        if (Date.now() >= deadlineAt) {
+    return pollUntil({
+        signal,
+        deadlineAt,
+        intervalMs: POLL_INTERVAL_MS,
+        timeoutError: () => {
             const error = providerError('NAISTERA_JOB_TIMEOUT', 'Naistera job did not complete before the connection timeout.');
             error.jobStatus = 'timeout';
-            throw error;
-        }
-        const remainingMs = Math.max(1, deadlineAt - Date.now());
-        const response = await transport.requestJson(
-            jobUrl,
-            diagnosticRequestOptions({
-                method: 'GET',
-                headers: { Authorization: `Bearer ${token}` },
-                signal,
-            }, diagnostic, {
-                bodyKind: 'json',
-                wireFields: [],
-                omittedFields: [],
-                phase: 'poll',
-            }),
-            route,
-            remainingMs,
-        );
-        const payload = await readJsonResponse(response, 'Naistera Jobs', authProfileFor('naistera'));
-        const status = jobStatus(payload);
-        if (status === 'failed' || status === 'error' || status === 'cancelled' || status === 'canceled') {
-            const detail = jobErrorMessage(payload);
-            const error = providerError('NAISTERA_JOB_FAILED', `Naistera job ${status}${detail ? `: ${detail.slice(0, 240)}` : '.'}`);
-            error.jobStatus = status;
-            throw error;
-        }
-        const result = extractResult(payload, { allowMissing: true });
-        // A present image is authoritative regardless of the declared status:
-        // some APIs omit status on the completed response and just carry the
-        // image payload.
-        if (result) return result;
-        if (TERMINAL_STATES.has(status)) {
-            throw providerError('NAISTERA_JOB_FAILED', `Naistera job ended in status "${status}" without an image.`);
-        }
-        if (Date.now() >= deadlineAt) {
-            const error = providerError('NAISTERA_JOB_TIMEOUT', 'Naistera job did not complete before the connection timeout.');
-            error.jobStatus = status;
-            throw error;
-        }
-        await sleep(POLL_INTERVAL_MS, signal);
-    }
+            return error;
+        },
+        attempt: async (remainingMs) => {
+            const response = await transport.requestJson(
+                jobUrl,
+                diagnosticRequestOptions({
+                    method: 'GET',
+                    headers: { Authorization: `Bearer ${token}` },
+                    signal,
+                }, diagnostic, {
+                    bodyKind: 'json',
+                    wireFields: [],
+                    omittedFields: [],
+                    phase: 'poll',
+                }),
+                route,
+                remainingMs,
+            );
+            const payload = await readJsonResponse(response, 'Naistera Jobs', authProfileFor('naistera'));
+            const status = jobStatus(payload);
+            if (status === 'failed' || status === 'error' || status === 'cancelled' || status === 'canceled') {
+                const detail = jobErrorMessage(payload);
+                const error = providerError('NAISTERA_JOB_FAILED', `Naistera job ${status}${detail ? `: ${detail.slice(0, 240)}` : '.'}`);
+                error.jobStatus = status;
+                return { done: false, error };
+            }
+            const result = extractResult(payload, { allowMissing: true });
+            // A present image is authoritative regardless of the declared status:
+            // some APIs omit status on the completed response and just carry the
+            // image payload.
+            if (result) return { done: true, value: result };
+            if (TERMINAL_STATES.has(status)) {
+                return { done: false, error: providerError('NAISTERA_JOB_FAILED', `Naistera job ended in status "${status}" without an image.`) };
+            }
+            return { done: false };
+        },
+    });
 }
 
 export async function generateNaisteraImage(input) {
-    const { endpoint, apiKey, route, request, transport, signal, connection = {}, diagnostic = null } = requireInvocation(input);
+    const { endpoint, apiKey, route, request, transport, signal, connection = {}, diagnostic = null, parsedReferences } = requireInvocation(input);
     const token = validateNaisteraToken(apiKey);
     const preset = request?.preset ?? connection?.extraBody?.preset;
     const effectiveRequest = preset === undefined ? request : { ...request, preset };
-    const { payload, references } = body(route, effectiveRequest);
+    const { payload, references } = body(route, effectiveRequest, parsedReferences);
     if (references.length && route?.capabilities?.references !== 'supported') {
         throw providerError('REFERENCES_UNSUPPORTED', 'Naistera reference support was not declared for this model; the request was stopped before the paid POST.');
     }

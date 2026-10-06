@@ -160,8 +160,7 @@ export async function updateGalleryEntry(chatId, id, patch) {
 }
 
 /** Clear shared metadata cards belonging to one chat. Native source files remain untouched. */
-export async function clearGallery(chatId, { deleteFiles = false } = {}) {
-    const cards = await listCards({ reconcile: false });
+export async function clearGallery(chatId, { deleteFiles = false } = {}) {    const cards = await listCards({ reconcile: false });
     const mine = cards.filter(card => belongsToChat(card, chatId));
     if (deleteFiles) {
         for (const card of mine) {
@@ -178,4 +177,26 @@ export async function clearGallery(chatId, { deleteFiles = false } = {}) {
         outcome: 'ok', details: { count: mine.length, deleteFiles },
     });
     log('Gallery cleared for chat', chatId, deleteFiles ? '(files deleted)' : '(cards hidden)');
+}
+
+/**
+ * GC (2026-10-06, пункт 43): удалить МЕТАДАННЫЕ карточки удалённого чата из
+ * общего индекса — иначе они остаются там навсегда (ни ST, ни расширение не
+ * чистили их на CHAT_DELETED). Файлы картинок не трогаются: они живут в
+ * нативной галерее ST и переживают чат (для этого продукта это плюс).
+ * @param {string} chatId
+ * @returns {Promise<number>} сколько карточек удалено
+ */
+export async function removeGalleryForChat(chatId) {
+    if (!chatId || typeof chatId !== 'string') return 0;
+    const cards = await listCards({ reconcile: false });
+    const mine = cards.filter(card => belongsToChat(card, chatId));
+    if (!mine.length) return 0;
+    await Promise.all(mine.map(card => removeCard(card.id)));
+    recordDiagnosticEvent({
+        event: 'gallery-gc', stage: 'gallery', chatHash: hashDiagnosticId(chatId),
+        outcome: 'ok', details: { count: mine.length },
+    });
+    log('Gallery GC: removed metadata cards for deleted chat', chatId, `(${mine.length})`);
+    return mine.length;
 }

@@ -84,8 +84,8 @@ function parse(payload) {
 }
 
 export async function generateGeminiImage(input) {
-  const { endpoint, apiKey, route, request, transport, signal, connection = {}, diagnostic = null } = requireInvocation(input);
-  const references = referencesFor(request);
+  const { endpoint, apiKey, route, request, transport, signal, connection = {}, diagnostic = null, parsedReferences } = requireInvocation(input);
+  const references = parsedReferences ?? referencesFor(request);
   const { payload, sizeWarning } = body(route, request, references);
   const encodedReferences = payload.contents[0].parts.filter(part => part?.inlineData).length;
   assertEncodedReferenceCount(references.length, encodedReferences, 'gemini-inlineData');

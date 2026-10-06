@@ -295,7 +295,7 @@ async function readBodyJson(response, timeoutMs, externalSignal) {
         if (streamError?.name === 'AbortError') {
             if (externalSignal?.aborted) throw new DOMException('Aborted', 'AbortError');
             const timeout = new Error(`Таймаут (${Math.round(timeoutMs / 1000)}с)`);
-            timeout.code = 'CATALOG_TIMEOUT';
+            timeout.code = 'FETCH_TIMEOUT';
             throw timeout;
         }
         if (streamError) {
@@ -384,7 +384,7 @@ async function request(url, apiKey, fetcher, proxiedFetcher, headers, timeoutMs,
         try {
             return await readBodyJson(response, timeoutMs, externalSignal);
         } catch (parseError) {
-            if (parseError?.code === 'CATALOG_TIMEOUT' || parseError?.name === 'AbortError') throw parseError;
+            if (parseError?.code === 'FETCH_TIMEOUT' || parseError?.name === 'AbortError') throw parseError;
             // ST's /proxy/<url> middleware copies upstream headers verbatim but
             // node's fetch already decompresses the body upstream; when the
             // copied `Content-Encoding: gzip` header survives onto the proxy

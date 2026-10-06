@@ -35,7 +35,7 @@ import {
     diagnosticRequestOptions,
 } from './image-base.js';
 import { resolveEndpoint } from '../endpoint-utils.js';
-import { sleep as sharedSleep, abortError as baseAbortError } from '../async-utils.js';
+import { sleep as sharedSleep, pollUntil, abortError as baseAbortError } from '../async-utils.js';
 import { getProviderDescriptor } from '../provider-descriptors.js';
 
 const COMFYUI_DESCRIPTOR = getProviderDescriptor('comfyui');
@@ -341,27 +341,31 @@ function comfyTimeout() {
 }
 
 async function pollHistory({ base, promptId, apiKey, transport, route, signal, diagnostic, deadlineAt, workflow }) {
-    for (;;) {
-        if (Date.now() >= deadlineAt) throw comfyTimeout();
-        const remainingMs = Math.max(1, deadlineAt - Date.now());
-        const response = await transport.requestJson(
-            `${base}/history/${encodeURIComponent(promptId)}`,
-            diagnosticRequestOptions({
-                method: 'GET',
-                headers: authHeaders(apiKey),
-                signal,
-            }, diagnostic, { bodyKind: 'json', wireFields: [], omittedFields: [], phase: 'poll' }),
-            route,
-            remainingMs,
-        );
-        const payload = await readJsonResponse(response, 'ComfyUI History', authProfileFor('comfyui'));
-        const outcome = extractHistoryOutcome(payload, promptId, workflow);
-        if (outcome.status === 'done') return outcome.image;
-        if (outcome.status === 'error') throw providerError('COMFY_EXECUTION_ERROR', `ComfyUI не выполнил workflow: ${outcome.message}`);
-        if (outcome.status === 'empty') throw providerError('COMFY_NO_OUTPUT', 'Workflow выполнился, но не вернул картинок — нужна нода SaveImage/PreviewImage с непустым выходом.');
-        if (Date.now() >= deadlineAt) throw comfyTimeout();
-        await sleep(POLL_INTERVAL_MS, signal);
-    }
+    // Скелет дедлайна/сна — pollUntil из async-utils (пункт 19).
+    return pollUntil({
+        signal,
+        deadlineAt,
+        intervalMs: POLL_INTERVAL_MS,
+        timeoutError: comfyTimeout,
+        attempt: async (remainingMs) => {
+            const response = await transport.requestJson(
+                `${base}/history/${encodeURIComponent(promptId)}`,
+                diagnosticRequestOptions({
+                    method: 'GET',
+                    headers: authHeaders(apiKey),
+                    signal,
+                }, diagnostic, { bodyKind: 'json', wireFields: [], omittedFields: [], phase: 'poll' }),
+                route,
+                remainingMs,
+            );
+            const payload = await readJsonResponse(response, 'ComfyUI History', authProfileFor('comfyui'));
+            const outcome = extractHistoryOutcome(payload, promptId, workflow);
+            if (outcome.status === 'done') return { done: true, value: outcome.image };
+            if (outcome.status === 'error') return { done: false, error: providerError('COMFY_EXECUTION_ERROR', `ComfyUI не выполнил workflow: ${outcome.message}`) };
+            if (outcome.status === 'empty') return { done: false, error: providerError('COMFY_NO_OUTPUT', 'Workflow выполнился, но не вернул картинок — нужна нода SaveImage/PreviewImage с непустым выходом.') };
+            return { done: false };
+        },
+    });
 }
 
 async function downloadImage({ base, image, transport, signal, deadlineAt }) {
@@ -378,9 +382,9 @@ async function downloadImage({ base, image, transport, signal, deadlineAt }) {
 }
 
 export async function generateComfyUIImage(input) {
-    const { endpoint, apiKey, route, request, transport, signal, connection = {}, diagnostic = null } = requireInvocation(input);
+    const { endpoint, apiKey, route, request, transport, signal, connection = {}, diagnostic = null, parsedReferences } = requireInvocation(input);
     const base = comfyBase(endpoint);
-    const references = referencesFor(request);
+    const references = parsedReferences ?? referencesFor(request);
     const timeoutMs = Math.max(1, Number.isFinite(connection.timeoutMs) ? connection.timeoutMs : 120000);
     const deadlineAt = Date.now() + timeoutMs;
     const seed = Math.floor(Math.random() * 2 ** 53);

@@ -494,8 +494,8 @@ function paramWarnings(route, request) {
 }
 
 export async function generateOpenAIImage(input) {
-  const { endpoint, apiKey, route, request, transport, signal, connection = {}, diagnostic = null } = requireInvocation(input);
-  const references = referencesFor(request);
+  const { endpoint, apiKey, route, request, transport, signal, connection = {}, diagnostic = null, parsedReferences } = requireInvocation(input);
+  const references = parsedReferences ?? referencesFor(request);
   if (references.length && route?.capabilities?.references === 'unsupported') {
     throw providerError('REFERENCES_UNSUPPORTED', 'Selected OpenAI Images route does not support references.');
   }
