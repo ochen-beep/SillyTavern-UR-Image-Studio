@@ -44,7 +44,6 @@ import { reportFailure, URIS_SCOPES } from './src/error-pool.js';
 import { exportDiagnosticDump, clearAllDiagnostics } from './src/diagnostic-dump.js';
 import { loadDiagnosticEvents, flushDiagnosticEvents, recordDiagnosticEvent } from './src/diagnostic-events.js';
 import { flushAllFileStores, flushAllFileStoresOnUnload } from './src/file-store.js';
-import { flushTemplateWrites } from './src/template-file-store.js';
 import { ensureGalleryStoreReady, flushGalleryWrites } from './src/gallery-index.js';
 import { ensureRefsStoreReady, flushRefsWrites } from './src/refs-library.js';
 import { ensureParamPresetStoreReady, flushParamPresetWrites } from './src/param-presets.js';

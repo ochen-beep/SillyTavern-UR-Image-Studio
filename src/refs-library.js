@@ -28,7 +28,7 @@ import { createShardedFileStore } from './sharded-file-store.js';
 import { recordDiagnosticEvent } from './diagnostic-events.js';
 import { isStudioActive, getStudioBinding, saveStudioBinding } from './studio-scope.js';
 
-export const REFS_FILE_NAME = 'uris_refs.json';
+const REFS_FILE_NAME = 'uris_refs.json';
 export const REFS_MANIFEST_NAME = 'uris_refs_manifest.json';
 export const REFS_SHARD_PREFIX = 'uris_refs_shard_';
 export const REFS_META_NAME = 'uris_refs_meta.json';

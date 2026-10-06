@@ -184,7 +184,8 @@ export function isCorsOrNetworkError(e) {
 }
 
 /**
- * Clear strategy cache for a host (or all). Tests / UI button only.
+ * Clear strategy cache for a host (or all). Test seam (5 тест-файлов сбрасывают
+ * кэш между кейсами); UI-кнопки на него нет.
  * @param {string} [host] — if given, clears only that host; otherwise the whole cache.
  */
 export function clearHostStrategy(host) {
@@ -192,7 +193,7 @@ export function clearHostStrategy(host) {
     else _hostStrategy.clear();
 }
 
-/** Expose cache for UI (read-only snapshot). */
+/** Test seam: introspection of the per-host strategy cache (proxy.test). */
 export function getHostStrategies() {
     return Object.fromEntries(_hostStrategy);
 }

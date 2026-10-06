@@ -43,17 +43,16 @@ function normalizePhrase(phrase) {
 
 /**
  * Test whether a phrase (full canonical name or explicit alias) appears in text
- * as a whole Unicode alphanumeric token.
+ * as a whole Unicode alphanumeric token. Прод-путь матчинга — phraseRegex ниже;
+ * эта обёртка остаётся тест-швом для семантики совпадения (scene-context.test).
  *
  * @param {string} phrase
  * @param {string} text
  * @returns {boolean}
  */
 export function matchesScenePhrase(phrase, text) {
-    const normalized = normalizePhrase(phrase);
-    if (!normalized) return false;
-    const re = new RegExp(`(?<![\\p{L}\\p{N}])${normalized}(?![\\p{L}\\p{N}])`, 'giu');
-    return re.test(String(text || ''));
+    const re = phraseRegex(phrase);
+    return re ? re.test(String(text || '')) : false;
 }
 
 /**
@@ -332,11 +331,11 @@ export async function resolvePromptReferenceContext({ prompt, candidates, correc
 }
 
 /**
+ * Единственный конструктор матч-регекса сцены: normalizePhrase + whole-token
+ * границы. Используется и прод-матчингом, и тест-швом matchesScenePhrase.
  * @param {string} phrase
  * @returns {RegExp|null} null для пустой фразы (после фильтра алиасов не
  * встречается, но универсальный матч пустой строки опаснее, чем null).
- * Нормализация единая с matchesScenePhrase (normalizePhrase) — вторая копия
- * escape-логики здесь уже разъезжалась с первой.
  */
 function phraseRegex(phrase) {
     const normalized = normalizePhrase(phrase);

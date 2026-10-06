@@ -468,7 +468,6 @@ export async function runStage2(msgId, instruction, onStatus, signal, opts = {})
     const ctx = getCtx();
     const chatId = ctx.chatId;
     const messageText = ctx.chat?.[msgId]?.mes || '';
-    state.pendingSourceMesHash = hashMessage(messageText);
     // Capture current chat config at the start of this manual Stage 2 so it
     // cannot be affected by a later chat switch.
     const chatConfig = opts.chatConfig || await resolveChatConfigSnapshot();

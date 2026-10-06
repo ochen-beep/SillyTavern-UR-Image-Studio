@@ -35,6 +35,7 @@ export function ensureTemplateStoreReady() {
     return store.ready();
 }
 
+/** Test seam: which backend the store resolved to ('file' | 'readonly' | 'unknown'). */
 export function templateStoreMode() { return store.mode(); }
 
 /** Await all queued template file writes (import paths and tests). */
@@ -42,22 +43,15 @@ export function flushTemplateWrites() {
     return store.flush();
 }
 
-/**
- * Last-chance durability on page unload: re-send the newest not-yet-confirmed
- * payload with `fetch keepalive` so the request may outlive the page. A no-op
- * when every write already landed.
- */
-export function flushTemplateWritesOnUnload() {
-    store.flushOnUnload();
-}
+// Универсальный unload-флаш — flushAllFileStoresOnUnload() из file-store.js:
+// стор регистрируется в общем реестре при создании (createFileStore).
 
-// ── Mirror CRUD (file mode only) ──
+// ── Readonly/unknown mode ──
 //
-// Legacy mode returns null/undefined instead of mutating: `prompt-templates.js`
-// owns its own settings-backed store there, and writing through this module as
-// well would double-persist the same records.
+// mode 'readonly'/'unknown' (сервер недоступен / файл повреждён) вместо мутаций
+// возвращает null/undefined: вызывающий код читает прежние данные из settings.
 
-/** Raw records from the mirror, cloned. Returns null in legacy mode. */
+/** Raw records from the mirror, cloned. Returns null unless the store is in file mode. */
 export async function listTemplateRecords() {
     if (await store.ready() !== 'file') return null;
     return store.snapshot();
@@ -74,7 +68,8 @@ export async function applyTemplateMutation(mutator) {
 
 /**
  * Replace the whole record set (backup import / rollback) and await durability.
- * Returns false when the session runs in legacy mode (settings already carry them).
+ * Returns false unless the store is in file mode (readonly/unknown: the caller
+ * keeps the settings copy untouched).
  */
 export async function replaceTemplateRecords(records) {
     if (await store.ready() !== 'file') return false;
@@ -82,10 +77,6 @@ export async function replaceTemplateRecords(records) {
     return true;
 }
 
-/**
- * Fresh records for export paths. Null in legacy mode — the caller then keeps
- * reading templates from settings, as before.
- */
 // ── Test-only surface ──
 
 export function resetTemplateFileStoreForTests() {

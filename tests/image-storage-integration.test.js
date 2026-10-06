@@ -61,9 +61,10 @@ beforeEach(async () => {
         }
         return { ok: true, json: async () => ({}) };
     };
-    // Clear in-memory gallery index from any prior test.
-    const { clearCards } = await import('../src/gallery-index.js');
-    await clearCards();
+    // Forget the in-memory gallery index from any prior test (full store reset:
+    // следующее обращение заново пройдёт probe/ready через заглушку fetch выше).
+    const { resetGalleryStoreForTests } = await import('../src/gallery-index.js');
+    resetGalleryStoreForTests();
 });
 
 afterEach(() => {

@@ -322,7 +322,6 @@
 /* Утилиты взамен inline-стилей в разметке. */
 .uris-w-full { width: 100%; }
 .uris-muted { margin-top: 6px; font-size: 0.8em; opacity: var(--uris-o-70); }
-.uris-rule-num { width: 60px; }
 
 /* ── Ресайзер ── */
 .uris-resizer {
@@ -373,12 +372,7 @@
 
 /* ── Коннекты / Контент ── */
 /* Индикатор наличия API-ключа (сам ключ НЕ выводится — только статус) */
-.uris-key-status {
-    font-size: var(--uris-font-sm); opacity: var(--uris-o-70); white-space: nowrap; flex: 0 0 auto; align-self: center;
-}
-.uris-key-status:empty::before { content: 'ключ не задан'; opacity: var(--uris-o-50); }
 /* Кнопки в строке модели */
-.uris-fetch-models { flex: 0 0 auto; }
 .uris-fetch-models.loading i { animation: uris-spin .8s linear infinite; }
 @keyframes uris-spin { to { transform: rotate(360deg); } }
 
@@ -419,39 +413,12 @@
     border-color: var(--uris-accent-line);
     box-shadow: inset 3px 0 0 var(--uris-accent);
 }
-.uris-server-unavailable,
-.uris-server-warning,
-.uris-server-success,
-.uris-server-keyless-import,
-.uris-server-key-preserved {
+.uris-server-warning{
     padding: 6px 8px; border-radius: var(--uris-radius);
     font-size: var(--uris-font-sm); line-height: 1.4;
-}
-.uris-server-unavailable {
-    color: var(--uris-err); background: var(--uris-err-bg);
-    border: 1px solid var(--uris-err-border);
-}
-.uris-server-warning,
-.uris-server-keyless-import {
+}.uris-server-warning{
     color: var(--uris-warn); background: var(--uris-warn-soft);
     border: 1px solid var(--uris-warn-line);
-}
-.uris-server-success,
-.uris-server-key-preserved {
-    color: var(--uris-accent); background: var(--uris-accent-soft);
-    border: 1px solid var(--uris-accent-line);
-}
-.uris-server-fetched {
-    display: block; color: var(--uris-text-mut); font-size: var(--uris-font-xs);
-}
-.uris-server-fetched.uris-server-stale,
-.uris-server-stale .uris-server-fetched {
-    color: var(--uris-warn);
-}
-.uris-server-manual-mode {
-    display: flex; flex-direction: column; gap: 6px; padding: var(--uris-pad);
-    border: 1px dashed var(--uris-border); border-radius: var(--uris-radius-card);
-    background: var(--uris-tint-hover);
 }
 .uris-server-manual-mode .uris-row { margin-bottom: 0; }
 .uris-server-actions { display: flex; gap: 6px; flex-wrap: wrap; }
@@ -587,7 +554,6 @@
 }
 
 .uris-prompt-area { font-size: var(--uris-font-sm); line-height: 1.45; resize: vertical; min-height: 80px; }
-.uris-editor { display: flex; flex-direction: column; gap: 6px; }
 .uris-gen-actions { display: flex; gap: 6px; flex-wrap: wrap; }
 .uris-gen-actions button { flex: 1; }
 .uris-gen-actions .uris-btn-primary { flex: 2; }
@@ -595,70 +561,11 @@
 /* Server-request recovery notices emitted by tab-generate. State is encoded by
    the available actions: no action = checking, Resume = not submitted, and a
    lone Discard action = failed or provider result uncertain. */
-.uris-pending-server-host {
-    display: flex; flex-direction: column; gap: 6px;
-}
-.uris-pending-server-host:empty { display: none; }
-.uris-pending-server-host .uris-pending-server {
-    display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
-    min-height: 34px; padding: 6px 8px;
-    border: 1px solid var(--uris-border-soft); border-radius: var(--uris-radius);
-    background: var(--uris-surface-card); color: var(--uris-text-mut);
-    font-size: var(--uris-font-sm); line-height: 1.4;
-}
-.uris-pending-server-host .uris-pending-server:not(:has([data-pending-server-action])) {
-    border-color: var(--uris-accent-line);
-    background: var(--uris-accent-soft); color: var(--uris-text-strong);
-}
-.uris-pending-server-host .uris-pending-server:not(:has([data-pending-server-action]))::before {
-    content: ''; width: 12px; height: 12px; flex: 0 0 12px;
-    box-sizing: border-box; border: 2px solid currentColor; border-right-color: transparent;
-    border-radius: 50%; animation: uris-spin .8s linear infinite;
-}
-.uris-pending-server-host .uris-pending-server:has([data-pending-server-action="resume"]) {
-    border-color: var(--uris-warn-line);
-    background: var(--uris-warn-soft); color: var(--uris-warn);
-}
-.uris-pending-server-host .uris-pending-server:has([data-pending-server-action="discard"]):not(:has([data-pending-server-action="resume"])) {
-    border-color: var(--uris-err-border);
-    background: var(--uris-err-bg); color: var(--uris-err);
-}
-.uris-pending-server-host [data-pending-server-action] {
-    min-height: 32px; padding: 4px 9px;
-    border: 1px solid var(--uris-border); border-radius: var(--uris-radius);
-    background: var(--uris-surface-btn); color: var(--uris-text-strong);
-    cursor: pointer; font: inherit; font-weight: 500;
-    transition: background .12s, border-color .12s, color .12s, opacity .12s;
-    pointer-events: auto;
-}
-.uris-pending-server-host [data-pending-server-action="resume"] {
-    border-color: var(--uris-accent-line);
-    background: var(--uris-accent-soft); color: var(--uris-accent);
-}
-.uris-pending-server-host [data-pending-server-action="discard"] { margin-left: auto; }
-.uris-pending-server-host [data-pending-server-action]:not(:disabled):hover {
-    background: var(--uris-surface-btn-hover); border-color: currentColor;
-}
-.uris-pending-server-host [data-pending-server-action]:focus-visible {
-    outline: 2px solid var(--uris-accent); outline-offset: 2px;
-}
-.uris-pending-server-host [data-pending-server-action]:disabled,
-.uris-pending-server-host [data-pending-server-action][aria-busy="true"] {
-    opacity: var(--uris-o-50); cursor: wait; pointer-events: none;
-}
-.uris-pending-server-host [data-pending-server-action]:disabled::before,
-.uris-pending-server-host [data-pending-server-action][aria-busy="true"]::before {
-    content: ''; width: 11px; height: 11px; display: inline-block; margin-right: 5px;
-    box-sizing: border-box; border: 2px solid currentColor; border-right-color: transparent;
-    border-radius: 50%; animation: uris-spin .8s linear infinite;
-}
 /* reduce-глушение этих спиннеров — в консолидированном блоке в конце файла. */
-.uris-advanced-toggle { align-self: flex-start; font-size: var(--uris-font); color: var(--uris-text-mut); cursor: pointer; }
 .uris-advanced { display: flex; flex-direction: column; gap: 6px; padding: var(--uris-pad); border: 1px solid var(--uris-border-soft); border-radius: var(--uris-radius-card); background: var(--uris-surface-card); }
 .uris-advanced > summary { cursor: pointer; font-size: var(--uris-font-sm); color: var(--uris-text-mut); }
 .uris-advanced .uris-row label { min-width: var(--uris-label-w, 90px); }
 .uris-advanced .checkbox_label { font-size: var(--uris-font-sm); color: var(--uris-text-mut); }
-.uris-rawjson { margin-top: 4px; }
 
 /* Параметры: компактный inline-ряд без тяжёлых label'ов. */
 .uris-gen-params { display: flex; flex-wrap: wrap; gap: var(--uris-gap); align-items: center; }
@@ -681,10 +588,6 @@
 .uris-draft-stale {
     font-size: var(--uris-font-xs); color: var(--uris-warn); background: var(--uris-warn-soft);
     padding: 2px 6px; border-radius: var(--uris-radius-pill); white-space: nowrap;
-}
-.uris-stage-error {
-    font-size: var(--uris-font-sm); color: var(--uris-err); background: var(--uris-err-bg);
-    padding: 6px 8px; border-radius: var(--uris-radius-card); white-space: pre-wrap;
 }
 .uris-gen-params .uris-row { flex-wrap: wrap; }
 
@@ -714,8 +617,6 @@
     background: transparent; border: none; color: inherit; cursor: pointer; opacity: var(--uris-o-70);
 }
 .uris-ref-include:hover, .uris-ref-exclude:hover { opacity: 1; }
-.uris-reference-included { outline: 2px solid var(--uris-accent); outline-offset: 2px; }
-.uris-reference-excluded { opacity: var(--uris-o-50); text-decoration: line-through; }
 
 /* Mobile */
 @media (max-width: 768px) {
@@ -892,43 +793,11 @@
 
 
 /* ── CORS-proxy status indicator ── */
-.uris-proxy-status { margin-bottom: 12px; }
-.uris-proxy-ok,
-.uris-proxy-warn {
-    padding: 8px 10px; border-radius: var(--uris-radius-card); font-size: var(--uris-font-sm);
-    display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
-    line-height: 1.4;
-}
-.uris-proxy-ok {
-    background: var(--uris-accent-soft);
-    color: var(--uris-accent);
-}
-.uris-proxy-warn {
-    background: var(--uris-warn-soft);
-    color: var(--uris-warn);
-}
-.uris-proxy-ok i, .uris-proxy-warn i { font-size: var(--uris-icon); }
-.uris-proxy-warn code {
-    background: rgba(0,0,0,0.25); padding: 1px 5px; border-radius: var(--uris-radius); font-size: var(--uris-font-sm);
-}
-.uris-proxy-recheck { margin-left: auto; font-size: var(--uris-font-sm); padding: 2px 10px; }
-.uris-proxy-checking { font-size: var(--uris-font); color: var(--uris-text-mut); }
 
 /* ── autoFetch: таблица стратегий хостов ── */
-.uris-host-table {
-    width: 100%; border-collapse: collapse; margin-top: 6px; font-size: var(--uris-font);
-}
-.uris-host-table th {
-    text-align: left; opacity: var(--uris-o-70); font-weight: 600; padding: 2px 8px;
-}
-.uris-host-table td { padding: 2px 8px; }
-.uris-host-name { font-family: monospace; }
-.uris-host-direct { color: var(--uris-accent); }
-.uris-host-proxy { color: var(--uris-warn); }
 
 /* ── v2.3 Phase 1: Плашка референсов на вкладке «Генерация» ── */
 /* (стили status-label/panel-head см. в блоке .uris-refs-panel ниже) */
-.uris-refs-edit { padding: 2px 8px; font-size: var(--uris-font-sm); }
 .uris-refs-empty { font-size: var(--uris-font-sm); color: var(--uris-text-mut); padding: 2px 0; }
 
 /* Единая панель референсов (Generate tab) */
@@ -949,23 +818,6 @@
     flex-wrap: wrap;
 }
 .uris-refs-status-label { font-size: var(--uris-font); font-weight: 600; color: var(--uris-text-strong); flex: 1; }
-.uris-refs-panel-chips {
-    display: flex;
-    flex-direction: column;
-    gap: 4px;
-}
-.uris-refs-panel-row {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    flex-wrap: wrap;
-}
-.uris-refs-panel-rowlabel {
-    font-size: var(--uris-font-sm);
-    opacity: var(--uris-o-70);
-    white-space: nowrap;
-    min-width: 130px;
-}
 .uris-refs-panel-preview {
     display: flex;
     flex-direction: column;
@@ -1067,67 +919,11 @@
     color: inherit;
     cursor: pointer;
 }
-.uris-folder-picker-list {
-    display: flex;
-    flex-direction: column;
-    gap: 6px;
-    max-height: min(50vh, 360px);
-    overflow: auto;
-}
-.uris-folder-picker-item {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    width: 100%;
-    min-height: 40px;
-    padding: 8px 10px;
-    border: 1px solid var(--uris-border-soft);
-    border-radius: var(--uris-radius);
-    background: var(--uris-surface-btn);
-    color: inherit;
-    text-align: left;
-    cursor: pointer;
-}
 .uris-folder-picker-item.uris-pick-selected { border-color: var(--uris-accent); }
-
-.uris-descref-chip {
-    display: inline-flex;
-    align-items: center;
-    gap: 4px;
-    padding: 3px 8px;
-    /* Пилюля + поверхность кнопок — единый язык чипов (были 12px и белая .06). */
-    border-radius: var(--uris-radius-pill);
-    background: var(--uris-surface-btn);
-    cursor: pointer;
-    font-size: var(--uris-font-sm);
-    border: 1px solid var(--uris-border-soft);
-    user-select: none;
-}
-.uris-descref-chip:hover {
-    border-color: var(--uris-accent);
-}
-.uris-descref-del {
-    background: none;
-    border: none;
-    color: inherit;
-    cursor: pointer;
-    opacity: var(--uris-o-50);
-    padding: 0;
-    font-size: var(--uris-font-xs);
-}
-.uris-descref-del:hover { opacity: 1; }
-.uris-refs-mode-select {
-    font-size: var(--uris-font-sm);
-    padding: 1px 6px;
-}
 
 /* Миниатюра-чип превью: 44×44 вариант удалён — был мёртвым,
    каскад CSS выбирал 64×64 декларацию ниже (v3-redesign).
    Оставшиеся правила (.uris-ref-chip-icon) не дублируются. */
-.uris-ref-chip-icon {
-    display: flex; align-items: center; justify-content: center;
-    width: 100%; height: 100%; font-size: var(--uris-icon); opacity: var(--uris-o-70);
-}
 .uris-effective-ref-remove {
     position: absolute;
     top: 1px;
@@ -1144,9 +940,6 @@
     cursor: pointer;
 }
 .uris-effective-ref-remove:hover { background: var(--uris-err); }
-.uris-effective-ref-add {
-    margin-left: auto;
-}
 
 .uris-refs-stage2-cap {
     font-size: var(--uris-font-sm);
@@ -1245,13 +1038,9 @@
 /* ── v3-redesign: референсы по чату + пул ── */
 
 /* Extras chips */
-.uris-extras-list {
-    display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px;
-}
 /* Host'ы whitelist/Stage1-описаний во вкладке генерации: чипы идут в горизонтальный
    ряд с переносом, как в библиотеке референсов (раньше падали по одному вертикально —
-   host не имел раскладки). Содержимое: кнопка «+», затем .uris-extra-chip. */
-.uris-refs-panel-extras, .uris-refs-panel-desc {
+   host не имел раскладки). Содержимое: кнопка «+», затем .uris-extra-chip. */.uris-refs-panel-extras{
     display: flex; flex-wrap: wrap; gap: 6px; align-items: flex-start; margin-top: 4px;
 }
 .uris-extra-chip {
@@ -1862,9 +1651,6 @@
 .uris-picker-actions {
     display: flex; gap: 8px; justify-content: flex-end;
 }
-.uris-editor-actions {
-    display: flex; gap: 8px; flex-wrap: wrap; margin-top: 12px;
-}
 
 /* ── Batch upload dialog (массовая загрузка референсов) ──
    Живёт в том же .uris-picker-dialog (bottom-sheet на мобиле). Список —
@@ -1947,11 +1733,6 @@
 
     /* host-table: горизонтальный скролл вместо раздутия контейнера tab-API.
        Таблица autoFetch-стратегий с длинными именами хостов. */
-    .uris-host-table {
-        display: block; overflow-x: auto;
-        -webkit-overflow-scrolling: touch;
-    }
-    .uris-host-name { word-break: break-all; }
 
     /* Мелкие tap-target'ы до мягкого минимума (~22px). 44px здесь перебор —
        кнопка ✕ поверх 64px tile'a стала бы огромной; 22px сохраняет ритм. */
@@ -1963,7 +1744,6 @@
     .uris-ref-include, .uris-ref-exclude {
         padding: 6px 10px; font-size: var(--uris-font); line-height: 1;
     }
-    .uris-descref-del { padding: 4px 6px; font-size: var(--uris-font); }
 }
 
 /* dvh-fallback для старых WebView (Termux / Android < Chromium 108): picker
@@ -1977,9 +1757,6 @@
 }
 
 /* ── Connection reference options ── */
-.uris-reference-options { margin-top: 0.5rem; }
-.uris-reference-note { display: block; color: var(--uris-accent); margin: 0.25rem 0 0.5rem; }
-.uris-reference-protocol-row[hidden] { display: none; }
 
 /* ── Header badges (QUEUE + INFO) ── */
 /* Оба бейджа собраны одной функцией (badgeButtonHtml в window.js) и живут по
@@ -2085,16 +1862,6 @@
 }
 
 /* ── Connection card model toggle (compact checkbox, not a big button) ── */
-.uris-server-model-toggle {
-    display: inline-flex;
-    align-items: center;
-    gap: 4px;
-    font-size: var(--uris-font);
-    opacity: var(--uris-o-85);
-    margin: 2px 0 0 0;
-    cursor: pointer;
-    width: auto;
-}
 
 /* ── Вкладка «Настройки» ── */
 .uris-settings { display: flex; flex-direction: column; gap: 10px; }
@@ -2955,12 +2722,8 @@ div.pswp__img--placeholder,
    гасится отдельным блоком у своего правила (строка ~157).
    Спиннер при этом остаётся видимым статичным глифом — статус «занят»
    читается и без вращения. */
-@media (prefers-reduced-motion: reduce) {
-    .uris-fetch-models.loading i,
+@media (prefers-reduced-motion: reduce) {.uris-fetch-models.loading i,
     .uris-server-probe.uris-server-loading::before,
     .uris-server-probe.loading::before,
-    .uris-pending-server-host .uris-pending-server::before,
-    .uris-pending-server-host [data-pending-server-action]:disabled::before,
-    .uris-pending-server-host [data-pending-server-action][aria-busy="true"]::before,
-    .uris-pswp .pswp__preloader .pswp__icn { animation: none; }
+    .uris-pswp .pswp__preloader .pswp__icn{ animation: none; }
 }

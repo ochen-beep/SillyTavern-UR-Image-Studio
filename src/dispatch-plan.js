@@ -374,15 +374,8 @@ export function classifyModelCapability(model, metadata = {}) {
     return { modelId, kind: 'unknown', confidence: 'unknown', reason: 'no-capability-evidence' };
 }
 
-export function isExplicitlyNonImageModel(modelId, detectedOrMetadata = []) {
-    const metadata = Array.isArray(detectedOrMetadata)
-        ? detectedOrMetadata
-        : detectedOrMetadata?.modelMetadata;
-    return classifyModelCapability(modelId, metadataForModel(modelId, metadata)).kind === 'non-image';
-}
-
 /** Classify a selected connection model using its bounded probe metadata. */
-export function classifyConnectionModel(connection, modelId = connectionModelId(connection)) {
+function classifyConnectionModel(connection, modelId = connectionModelId(connection)) {
     const detected = connection?.detected || {};
     const metadata = Array.isArray(detected.modelMetadata) ? detected.modelMetadata : [];
     return classifyModelCapability(modelId, metadataForModel(modelId, metadata));

@@ -15,12 +15,16 @@ import { sanitizeTriggerList, DEFAULT_TRIGGERS } from './inline/triggers.js';
 export const MODULE_NAME = 'ur_image_studio';
 export const DISPLAY_NAME = 'UR Image Studio';
 
-// localforage keys
-export const LF_IMAGE_PARAMS = 'uris_image_params';        // image param preset array
-export const LF_TEXT_PARAMS = 'uris_text_params';          // text param preset array
-export const LF_TEMPLATES = 'uris_prompt_templates';       // prompt template array
-export const LF_GALLERY_PREFIX = 'uris_gallery_';          // + chatId
-export const LF_HISTORY_PREFIX = 'uris_prompt_history_';   // + chatId
+// localforage keys.
+// ЛЕГАСИ: LF_IMAGE_PARAMS / LF_TEXT_PARAMS / LF_GALLERY_PREFIX / LF_HISTORY_PREFIX
+// больше никем не читаются и не пишутся — коллекции переехали в серверные файлы
+// (file-store). Имена остаются как документация старых namespace и для тестов
+// миграции data-port (проверяют, что эти ключи не попадают в бэкап).
+export const LF_IMAGE_PARAMS = 'uris_image_params';        // legacy: image param preset array
+export const LF_TEXT_PARAMS = 'uris_text_params';          // legacy: text param preset array
+export const LF_TEMPLATES = 'uris_prompt_templates';       // legacy: template array (now: server file)
+export const LF_GALLERY_PREFIX = 'uris_gallery_';          // legacy: + chatId (now: server file)
+export const LF_HISTORY_PREFIX = 'uris_prompt_history_';   // legacy: + chatId
 export const LF_API_KEY = 'uris_custom_apikey';            // API key for the "Custom" source (localforage, NOT in settings JSON)
 export const IMAGE_CONNECTION_SETTINGS_KEY = 'imageConnections';
 export const IMAGE_CONNECTION_KEY_PREFIX = 'uris_api_key:';
@@ -165,8 +169,6 @@ export const state = {
     // leaked the last visited chat's mode into the globally persisted
     // settings.json, and it came back as the next session's startup default.
     chatAutomationMode: 'manual',  // 'manual' | 'build-prompt' | 'full-pipeline'
-    // pendingSourceMsgId / pendingSourceMesHash are set in runStage1
-    // for race-safe post checking before anchor injection (pipeline.js).
 
     // Snapshot of references actually sent by the last generation (for inline preview on the Generate tab).
 };

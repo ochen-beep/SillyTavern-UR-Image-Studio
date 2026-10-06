@@ -56,6 +56,7 @@ globalThis.fetch = async (url, options = {}) => {
 
 const store = await import('../src/template-file-store.js');
 const templates = await import('../src/prompt-templates.js');
+const { flushAllFileStoresOnUnload } = await import('../src/file-store.js');
 
 function fileTemplates() {
     const text = serverFiles.get(store.TEMPLATE_FILE_NAME);
@@ -156,7 +157,7 @@ describe('template file store', () => {
         failUploads = false;
         // The failed payload stays pending, so the unload flush retries it
         // without any new user mutation.
-        store.flushTemplateWritesOnUnload();
+        flushAllFileStoresOnUnload();
         await store.flushTemplateWrites();
         assert.deepEqual(fileTemplates().map(t => t.name), ['First', 'Lost?'], 'unload retry heals the missed write');
 
@@ -171,7 +172,7 @@ describe('template file store', () => {
 
         const createPromise = templates.createInstructionTemplate({ name: 'Pending' });
         await new Promise(resolve => setTimeout(resolve, 0)); // let the write queue up behind the gate
-        store.flushTemplateWritesOnUnload();
+        flushAllFileStoresOnUnload();
         release();
         await createPromise;
         await store.flushTemplateWrites();
@@ -181,7 +182,7 @@ describe('template file store', () => {
         assert.equal(uploads[1].data, uploads[0].data, 'keepalive payload matches the queued write');
 
         // Nothing pending anymore — the unload flush must be a no-op.
-        store.flushTemplateWritesOnUnload();
+        flushAllFileStoresOnUnload();
         assert.equal(uploads.length, 2);
     });
 

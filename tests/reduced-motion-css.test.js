@@ -19,17 +19,15 @@ const css = rawCss.replace(/\/\*[\s\S]*?\*\//g, '');
 
 /**
  * Пары [селектор в reduce-блоке, селектор правила-источника].
- * У pending-server «плоский» селектор в reduce-блоке — источник же содержит
- * :not(:has(...)); у pswp-прелоадера источник вендорский, без префикса
- * .uris-pswp (усиление специфичности нашего глушителя — сознательное).
+ * У pswp-прелоадера источник вендорский, без префикса .uris-pswp
+ * (усиление специфичности нашего глушителя — сознательное).
+ * 2026-10-06: записи pending-server удалены вместе с их мёртвыми классами
+ * (ponytail #31) — UI «ожидание сервера» больше не существует.
  */
 const SPINNERS = [
     ['.uris-fetch-models.loading i', '.uris-fetch-models.loading i'],
     ['.uris-server-probe.uris-server-loading::before', '.uris-server-probe.uris-server-loading::before'],
     ['.uris-server-probe.loading::before', '.uris-server-probe.loading::before'],
-    ['.uris-pending-server-host .uris-pending-server::before', '.uris-pending-server-host .uris-pending-server:not(:has([data-pending-server-action]))::before'],
-    ['.uris-pending-server-host [data-pending-server-action]:disabled::before', '.uris-pending-server-host [data-pending-server-action]:disabled::before'],
-    ['.uris-pending-server-host [data-pending-server-action][aria-busy="true"]::before', '.uris-pending-server-host [data-pending-server-action][aria-busy="true"]::before'],
     ['.uris-pswp .pswp__preloader .pswp__icn', '.pswp__preloader .pswp__icn'],
 ];
 

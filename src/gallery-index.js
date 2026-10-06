@@ -84,6 +84,7 @@ export function ensureGalleryStoreReady() {
     return galleryStore.ready();
 }
 
+/** Test seam: which backend the store resolved to ('file' | 'readonly' | 'unknown'). */
 export function galleryStoreMode() { return galleryStore.mode(); }
 
 /** Await durability of queued card writes. */
@@ -195,11 +196,6 @@ export async function removeCard(id) {
         list.splice(position, 1);
         return true;
     });
-}
-
-/** Remove all metadata cards. Native image files remain untouched. */
-export async function clearCards() {
-    await galleryStore.mutate(list => { list.splice(0, list.length); });
 }
 
 /**

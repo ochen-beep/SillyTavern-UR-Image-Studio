@@ -12,8 +12,7 @@
  */
 import {
     MODULE_NAME, DISPLAY_NAME,
-    LF_IMAGE_PARAMS, LF_TEXT_PARAMS,
-    LF_TEMPLATES, LF_GALLERY_PREFIX, LF_HISTORY_PREFIX,
+    LF_TEMPLATES,
     LF_API_KEY, LF_REFS_POOL, LF_REFS_FOLDERS,
     LF_GENERATION_DRAFT_PREFIX, META_KEY, IMAGE_CONNECTION_SETTINGS_KEY,
     IMAGE_CONNECTION_KEY_PREFIX,
@@ -338,11 +337,6 @@ function mergeSharedSettings(current, incoming) {
             : value;
     }
     return out;
-}
-
-/** Does this localforage key store a secret (API key)? Never exported/imported. */
-export function isSecretLfKey(key) {
-    return key === LF_API_KEY || (typeof key === 'string' && key.startsWith(IMAGE_CONNECTION_KEY_PREFIX));
 }
 
 /** Fields recursively stripped from any backup object. */

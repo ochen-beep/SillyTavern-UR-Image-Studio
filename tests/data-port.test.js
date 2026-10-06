@@ -51,7 +51,7 @@ globalThis.SillyTavern = {
 
 const {
     exportUrisData, importUrisData,
-    isSecretLfKey, normalizeBackup, sanitizeBackupValue, summarizeBackup,
+    normalizeBackup, sanitizeBackupValue, summarizeBackup,
 } = await import('../src/data-port.js');
 
 function seed() {
@@ -86,10 +86,8 @@ test('v9 export carries no localforage section — collections live in shared', 
     assert.deepEqual(backup.data.localforage, {});
 });
 
-test('legacy API-key namespaces remain marked secret', async () => {
-    assert.equal(isSecretLfKey(LF_API_KEY), true);
-    assert.equal(isSecretLfKey(IMAGE_CONNECTION_KEY_PREFIX + 'connection-1'), true);
-});
+// isSecretLfKey удалён (2026-10-06): экспорт v9 структурно не читает localforage,
+// секреты не могут попасть в бэкап — инвариант покрывает final-verification round-trip.
 
 test('v9 normalization folds legacy localforage collections into shared and drops the rest', () => {
     const normalized = normalizeBackup({
