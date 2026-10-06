@@ -5,7 +5,7 @@
     "type": "module",
     "description": "SillyTavern extension: scene-first prompt building (Stage 1) and image generation (Stage 2) from chat posts.",
     "scripts": {
-        "test": "node --test --test-force-exit \"tests/*.test.js\""
+        "test": "node --test --test-timeout 30000 \"tests/*.test.js\""
     },
     "engines": {
         "node": ">=22"
