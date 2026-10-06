@@ -98,17 +98,21 @@ function firePersist() {
     persistSnapshot();
 }
 
+// Модуль намеренно без core.js. Таймеры персиста не держат процесс Node живым
+// в тестах; в браузере setTimeout — число, guard не делает ничего.
+const unref = t => { if (t && typeof t === 'object' && typeof t.unref === 'function') t.unref(); return t; };
+
 function schedulePersist() {
     if (!loaded || suppressWrites) return;
     // Быстрый путь: затишье после записи пишется дебаунсом 500 мс (он
     // сбрасывается следующей записью — так батчится спокойный трафик).
     if (timer === null && throttleTimer === null) {
-        timer = setTimeout(firePersist, PERSIST_DELAY_MS);
+        timer = unref(setTimeout(firePersist, PERSIST_DELAY_MS));
     }
     // Потолок: не сбрасывается — при любом потоке запись случится ≤ 5 с
     // после первого ещё не сохранённого события.
     if (throttleTimer === null) {
-        throttleTimer = setTimeout(firePersist, PERSIST_MAX_AGE_MS);
+        throttleTimer = unref(setTimeout(firePersist, PERSIST_MAX_AGE_MS));
     }
 }
 

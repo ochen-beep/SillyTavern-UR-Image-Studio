@@ -586,6 +586,17 @@ export function sanitizeId(value) {
 }
 
 /**
+ * Не держать процесс Node живым ради таймера (тесты: без --test-force-exit).
+ * В браузере setTimeout возвращает число — guard ничего не делает.
+ * @param {ReturnType<typeof setTimeout>} timer
+ * @returns {ReturnType<typeof setTimeout>} тот же timer (для цепочек)
+ */
+export function unrefTimer(timer) {
+    if (timer && typeof timer === 'object' && typeof timer.unref === 'function') timer.unref();
+    return timer;
+}
+
+/**
  * FNV-1a 32-bit hash — каноническое ядро для новых 32-битных идентификаторов
  * (прежде всего inline descHash). Возвращает число; hex-обёртка ниже строится
  * на нём. Исторический 16-разрядный messageHash черновиков намеренно остаётся
@@ -659,7 +670,7 @@ export async function callWithRetry(fn, label, mode = 'network', signal = null) 
     };
     const wait = (ms) => new Promise((resolve, reject) => {
         if (signal?.aborted) return reject(new DOMException('Aborted', 'AbortError'));
-        const timer = setTimeout(done, ms);
+        const timer = unrefTimer(setTimeout(done, ms));
         const onAbort = () => { clearTimeout(timer); signal.removeEventListener('abort', onAbort); reject(new DOMException('Aborted', 'AbortError')); };
         function done() { signal?.removeEventListener('abort', onAbort); resolve(); }
         signal?.addEventListener('abort', onAbort, { once: true });
@@ -772,11 +783,11 @@ export async function fetchWithTimeout(url, options = {}, timeoutMs = 120000) {
         error.code = 'FETCH_TIMEOUT';
         return error;
     };
-    timer = setTimeout(() => {
+    timer = unrefTimer(setTimeout(() => {
         timedOut = true;
         ctrl.abort();
         rejectDeadline(timeoutError());
-    }, Math.max(0, deadlineAt - Date.now()));
+    }, Math.max(0, deadlineAt - Date.now())));
     // Diagnostic metadata is consumed by netdump only and must never reach
     // native fetch as an unknown RequestInit field.
     const { __urisDiagnostic, ...requestOptions } = options || {};
@@ -860,11 +871,11 @@ export function withDeadline(timeoutMs, signal, run) {
     const deadlinePromise = new Promise((_, reject) => { rejectDeadline = reject; });
     // Не ронять процесс необработанным rejection, когда run успел раньше.
     deadlinePromise.catch(() => {});
-    const timer = setTimeout(() => {
+    const timer = unrefTimer(setTimeout(() => {
         timedOut = true;
         controller.abort();
         rejectDeadline(timeoutError());
-    }, Math.max(0, Number(timeoutMs) || 0));
+    }, Math.max(0, Number(timeoutMs) || 0)));
     const work = Promise.resolve().then(() => run(controller.signal)).catch((e) => {
         if (signal?.aborted) throw new DOMException('Aborted', 'AbortError');
         if (timedOut && e?.name === 'AbortError') throw timeoutError();

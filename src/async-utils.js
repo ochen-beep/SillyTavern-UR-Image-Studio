@@ -12,6 +12,10 @@ export function abortError(message = 'Operation was cancelled.') {
     return error;
 }
 
+// Модуль намеренно standalone (без core.js). Таймеры сна не должны держать
+// процесс Node живым в тестах; в браузере setTimeout — число, guard не нужен.
+const unref = t => { if (t && typeof t === 'object' && typeof t.unref === 'function') t.unref(); return t; };
+
 /**
  * Пауза, прерываемая сигналом: abort → reject(abortError(message)).
  * @param {number} ms
@@ -22,10 +26,10 @@ export function abortError(message = 'Operation was cancelled.') {
 export function sleep(ms, signal, { abortMessage = 'Operation was cancelled.' } = {}) {
     if (signal?.aborted) return Promise.reject(abortError(abortMessage));
     return new Promise((resolve, reject) => {
-        const timer = setTimeout(() => {
+        const timer = unref(setTimeout(() => {
             signal?.removeEventListener?.('abort', onAbort);
             resolve();
-        }, ms);
+        }, ms));
         function onAbort() {
             clearTimeout(timer);
             reject(abortError(abortMessage));
