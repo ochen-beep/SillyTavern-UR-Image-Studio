@@ -8,7 +8,7 @@
  * and `docs/plans/2026-09-12-storage-externalization.md`.
  */
 import {
-    VALID_ASPECT_RATIOS, VALID_IMAGE_SIZES, uid, log,
+    VALID_ASPECT_RATIOS, VALID_IMAGE_SIZES, uid, log, sanitizeId,
 } from './core.js';
 import { createFileStore } from './file-store.js';
 import { recordDiagnosticEvent } from './diagnostic-events.js';
@@ -93,7 +93,9 @@ const DEFAULT_IMAGE_PARAM = Object.freeze({
 });
 
 export function normalizeImageParam(data = {}) {
-    const item = { id: data.id ? String(data.id) : uid(), ...structuredClone(DEFAULT_IMAGE_PARAM), ...data };
+    // id после спреда data: иначе ...data перетирал бы санитизированный id сырым.
+    // Пресеты интерполируются в HTML (data-preset в crop-dialog) — алфавит обязателен.
+    const item = { ...structuredClone(DEFAULT_IMAGE_PARAM), ...data, id: sanitizeId(data.id) || uid() };
     if (!VALID_ASPECT_RATIOS.includes(item.aspectRatio)) item.aspectRatio = '1:1';
     if (!VALID_IMAGE_SIZES.includes(item.imageSize)) item.imageSize = '1K';
     return item;

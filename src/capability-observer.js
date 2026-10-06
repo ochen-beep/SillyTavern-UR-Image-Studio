@@ -368,23 +368,23 @@ export function formatObservationLog(attempt, meta = {}) {
 // факту «модель была мертва час назад» доверять нельзя. Любой другой исход
 // сбрасывает счётчик; «Проверить» сбрасывает принудительно.
 const FAILURE_STREAK_OUTCOMES = new Set(['provider-error', 'missing-image']);
-const failureStreaks = new Map(); // `${connId} ${modelId}` → { count, lastStatus }
+const failureStreaks = new Map(); // `${connId}\u0000${modelId}` → { count, lastStatus }
 
 export function modelFailureStreak(connId, modelId) {
-    return failureStreaks.get(`${connId} ${modelId}`) || null;
+    return failureStreaks.get(`${connId}\u0000${modelId}`) || null;
 }
 
 /** Сброс «Проверить» / ручной смены модели: факты каталога перечитаны. */
 export function resetModelFailureStreak(connId) {
     if (!connId) return;
     for (const key of failureStreaks.keys()) {
-        if (key.startsWith(`${connId} `)) failureStreaks.delete(key);
+        if (key.startsWith(`${connId}\u0000`)) failureStreaks.delete(key);
     }
 }
 
 function noteOutcomeForStreak(connId, modelId, attempt) {
     if (!connId || !modelId) return;
-    const key = `${connId} ${modelId}`;
+    const key = `${connId}\u0000${modelId}`;
     if (FAILURE_STREAK_OUTCOMES.has(attempt.outcome)) {
         const previous = failureStreaks.get(key) || { count: 0, lastStatus: null };
         failureStreaks.set(key, {

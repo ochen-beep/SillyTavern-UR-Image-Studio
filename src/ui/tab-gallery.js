@@ -82,7 +82,7 @@ function card(it, i) {
     const dims = Number(it.width) > 0 && Number(it.height) > 0
         ? ` width="${Number(it.width)}" height="${Number(it.height)}"`
         : '';
-    return `<div class="uris-card" data-id="${it.id}" data-idx="${i}">
+    return `<div class="uris-card" data-id="${escapeHtml(it.id)}" data-idx="${i}">
         <button type="button" class="uris-card-img" data-act="view" title="Просмотр" aria-label="Просмотр"><img src="${escapeHtml(src)}" alt="" loading="lazy" decoding="async"${dims}>${modelBadge}${badge}</button>
         <div class="uris-card-actions">
             <button class="uris-card-btn" data-act="regen" title="Перегенерировать" aria-label="Перегенерировать"><i class="fa-solid fa-rotate-right"></i></button>

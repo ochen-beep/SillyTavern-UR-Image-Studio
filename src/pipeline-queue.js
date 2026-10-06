@@ -201,6 +201,21 @@ async function processQueue() {
                 // resubmit snapshot), and never for user aborts.
                 const { autoRetryAmbiguous } = state.settings;
                 if (autoRetryAmbiguous === true && e?.code === 'IMAGE_DELIVERY_AMBIGUOUS' && item.retriedAmbiguous !== true) {
+                    // Guard 3.2 действует и для авто-повтора: если пользователь успел
+                    // вручную поставить ту же генерацию, пока эта исполнялась, повтор
+                    // дал бы вторую платную попытку. runningQueueItem не смотрим —
+                    // в этот момент это сам упавший item с тем же отпечатком.
+                    if (!canAutoRetry(item)) {
+                        const skipNote = 'авто-повтор пропущен: та же генерация уже в очереди';
+                        error('Q item failed:', `${e.message || ''} · ${skipNote}`.trim());
+                        finishItem(queueId, 'error', `${e.message || ''} · ${skipNote}`.trim());
+                        recordDiagnosticEvent({
+                            event: 'queue-auto-retry-skipped', level: 'warn', stage: 'queue', chatHash: hashDiagnosticId(item.chatId), msgId: item.msgId,
+                            details: { reason: 'IMAGE_DELIVERY_AMBIGUOUS', outcome: 'duplicate-queued' },
+                        });
+                        reject(e);
+                        continue;
+                    }
                     const retriedItem = { ...item, retriedAmbiguous: true };
                     const retryQueueId = uid();
                     state.queue.push({ item: retriedItem, resolve, reject, queueId: retryQueueId });
@@ -250,7 +265,7 @@ export function queueItemFingerprint(item) {
         config.imageRoute?.modelId ?? config.generationDefaults?.modelId ?? '',
         String(sub.prompt || ''),
         sub.aspectRatio ?? '', sub.imageSize ?? '', sub.quality ?? '',
-    ].join(' '));
+    ].join('\u0000'));
 }
 
 /**
@@ -265,6 +280,20 @@ export function findQueuedDuplicate(item) {
     const fingerprint = queueItemFingerprint(item);
     const candidates = [runningQueueItem, ...state.queue.map(entry => entry.item)].filter(Boolean);
     return candidates.find(other => other !== item && queueItemFingerprint(other) === fingerprint) || null;
+}
+
+/**
+ * Разрешён ли авто-повтор неоднозначной доставки: та же генерация не должна уже
+ * стоять в очереди — иначе повтор станет второй платной попыткой. Отличается от
+ * findQueuedDuplicate тем, что не смотрит на runningQueueItem: блок catch всё ещё
+ * исполняет упавший item (совпадающий отпечаток → ложный дубликат для любого
+ * копии-item). Смотрит только на state.queue — то, что поставлено после падения.
+ * @param {object} item — упавший элемент очереди
+ * @returns {boolean} true — авто-повтор можно ставить
+ */
+export function canAutoRetry(item) {
+    const fingerprint = queueItemFingerprint(item);
+    return !state.queue.some(entry => queueItemFingerprint(entry.item) === fingerprint);
 }
 
 /**

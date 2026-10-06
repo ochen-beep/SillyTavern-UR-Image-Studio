@@ -1235,7 +1235,9 @@ function _bindMobileAddRef(host, root) {
  */
 function pickerChipsHtml(folders, activeFilter) {
     const chip = (folder, label) =>
-        `<span class="uris-folder-chip ${activeFilter === folder ? 'uris-folder-chip-on' : ''}" data-folder="${folder}">${escapeHtml(label)}</span>`;
+        // folder в атрибуте экранируется наравне с label: id приходит из импорта
+        // и хотя sanitizeId режет алфавит на входе, тут страховка на два фронта.
+        `<span class="uris-folder-chip ${activeFilter === folder ? 'uris-folder-chip-on' : ''}" data-folder="${escapeHtml(folder)}">${escapeHtml(label)}</span>`;
     const prefs = getFolderPrefs();
     const byId = new Map(folders.map(f => [f.id, f]));
     const favorites = prefs.pinned.filter(id => byId.has(id)).slice(0, 5);

@@ -20,7 +20,7 @@
 import {
     META_KEY,
     uid, log, warn, getCtx, getImageConnectionSettings, IMAGE_CONNECTION_SETTINGS_KEY, saveSettings,
-    DEFAULT_CHAT_CONFIG_ENVELOPE, deepClone,
+    DEFAULT_CHAT_CONFIG_ENVELOPE, deepClone, sanitizeId,
 } from './core.js';
 import { normalizeAliases } from './scene-context.js';
 import { canonicalizeNativeImagePath } from './native-image-path.js';
@@ -237,14 +237,16 @@ function uniqueStrings(values) {
 /** Normalize a persisted or incoming pool record to the current aliases-only schema. */
 export function normalizePoolReference(data = {}) {
     const bindingMode = data.bindingMode === 'description' ? 'description' : 'image';
+    // id/folders приходят из импортируемого бэкапа и попадают в HTML-атрибуты:
+    // невалидный алфавит → свежий uid() / отбрасывается (SAFE_ID_RE в core.js).
     const item = {
-        id: data.id ? String(data.id) : uid(),
+        id: sanitizeId(data.id) || uid(),
         name: String(data.name || '').trim() || 'Без названия',
         aliases: uniqueStrings(normalizeAliases(data.aliases)),
         description: String(data.description || ''),
         ...(bindingMode === 'description' ? { bindingMode } : {}),
         imagePath: data.imagePath || '',
-        folders: uniqueStrings(Array.isArray(data.folders) ? data.folders : []),
+        folders: uniqueStrings(Array.isArray(data.folders) ? data.folders.map(sanitizeId).filter(Boolean) : []),
         createdAt: Number.isFinite(data.createdAt) ? data.createdAt : Date.now(),
         // Edit time drives cross-device merge resolution in file-store; absent
         // on records written before this build, which then never win a conflict.
@@ -501,7 +503,7 @@ export const FOLDER_COLOR_PALETTE = [
  */
 export function normalizeFolder(data = {}, fallbackIndex = 0) {
     return {
-        id: data.id ? String(data.id) : uid(),
+        id: sanitizeId(data.id) || uid(),
         name: String(data.name || 'Папка').trim() || 'Папка',
         color: typeof data.color === 'string' && /^#[0-9a-f]{6}$/i.test(data.color)
             ? data.color
@@ -509,7 +511,7 @@ export function normalizeFolder(data = {}, fallbackIndex = 0) {
                 ? FOLDER_COLOR_PALETTE[fallbackIndex % FOLDER_COLOR_PALETTE.length]
                 : '#808080'),
         order: Number.isFinite(data.order) ? data.order : 0,
-        parentId: (typeof data.parentId === 'string' && data.parentId) ? data.parentId : null,
+        parentId: sanitizeId(data.parentId) || null,
     };
 }
 

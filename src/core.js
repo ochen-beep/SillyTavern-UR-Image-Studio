@@ -216,7 +216,9 @@ export const defaultSettings = Object.freeze({
     collapsed: true,           // window hidden until first open
     launcherMode: 'bar',       // 'bar' | 'floating' | 'both' — кнопка(и) запуска
     activeTab: 'generate',     // last selected floating window tab
-    bridgeEnabled: true,       // external bridge (globalThis.URIS) accepts generations from other extensions
+    bridgeEnabled: false,      // external bridge (globalThis.URIS) — opt-in: permission UI не реализован,
+                               // пока юзер явно не включит тумблер, чужие расширения генерировать не могут
+                               // (старые сейвы без поля остаются включёнными — семантика !== false).
     bridgeTab: false,          // show the experimental "Мост" lab tab in the floating window
     experimentalTemplateFromDescription: false,
     followLastPost: true,      // Generation tab navigator follows the last post
@@ -563,6 +565,23 @@ export function debounce(fn, ms) {
 }
 
 export function uid() { return Date.now().toString(36) + Math.random().toString(36).slice(2, 8); }
+
+/**
+ * Единственный разрешённый алфавит идентификаторов карточек/референсов/папок.
+ * Граница безопасности: id приходят из импортируемых бэкапов (чужой файл) и
+ * интерполируются в HTML-атрибуты (data-id/data-folder) — всё, что ломает
+ * атрибут (кавычки, скобки, пробелы, =, &), при приёме заменяется uid().
+ * Буквы/цифры любого алфавита (\p{L}\p{N}) разрешены: uid() выдаёт base36,
+ * bridge-атрибуция добавляет подчёркивания, а в данных и тестах живут
+ * рукописные кириллические id — их вырезать незачем. Рендеры дополнительно
+ * экранируют атрибуты (escapeHtml) — границ здесь две, а не одна.
+ */
+export const SAFE_ID_RE = /^[\p{L}\p{N}_-]{1,128}$/u;
+
+/** Возвращает value, только если это строка-валидный id, иначе null. */
+export function sanitizeId(value) {
+    return (typeof value === 'string' && SAFE_ID_RE.test(value)) ? value : null;
+}
 
 /**
  * FNV-1a 32-bit hash — каноническое ядро для новых 32-битных идентификаторов

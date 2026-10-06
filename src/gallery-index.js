@@ -25,7 +25,7 @@
  * folders and are only referenced by `imagePath`.
  */
 
-import { uid, log, warn } from './core.js';
+import { uid, log, warn, sanitizeId } from './core.js';
 import { listNativeImages } from './native-image-storage.js';
 import { canonicalizeNativeImagePath, NATIVE_IMAGE_FOLDER } from './native-image-path.js';
 import { createShardedFileStore } from './sharded-file-store.js';
@@ -143,7 +143,9 @@ export function sanitizeGalleryCard(input = {}, existing = null) {
         if (SECRET_KEY.test(key) || PAYLOAD_KEY.test(key) || !Object.hasOwn(input, key)) continue;
         out[key] = input[key];
     }
-    out.id = existing?.id || (typeof input.id === 'string' && input.id ? input.id : uid());
+    // id приходит из импортируемого бэкапа (чужой файл) и попадает в HTML-атрибуты:
+    // невалидный алфавит → свежий uid() (см. SAFE_ID_RE в core.js).
+    out.id = existing?.id || sanitizeId(input.id) || uid();
     out.imagePath = canonicalizeNativeImagePath(existing?.imagePath || cleanText(input.imagePath));
     if (!out.imagePath) throw new Error('Gallery card requires a native image path');
     out.prompt = cleanText(out.prompt, existing?.prompt || '');
