@@ -62,7 +62,7 @@ async function resolveTemplateForDraft(templateId) {
  * pipeline resolves the effective template from the draft (override) or falls
  * back to `state.activeTemplateId` (default).
  *
- * @param {{chatId:string,msgId:number,messageText:string,templateId:string|null}} input
+ * @param {{chatId:string,msgId:number,messageText:string,templateId:string|null,chatConfig?:object}} input
  * @param {(status:string) => void} [onStatus]
  * @param {AbortSignal} [signal]
  * @param {object} [opts]
@@ -207,7 +207,7 @@ export async function runStage1ForDraft(input, onStatus = () => {}, signal, opts
 /**
  * Run the full scene-first pipeline (Stage 1 + Stage 2) for an explicit message.
  *
- * @param {{chatId:string,msgId:number,messageText:string,templateId:string|null}} input
+ * @param {{chatId:string,msgId:number,messageText:string,templateId:string|null,chatConfig?:object}} input
  * @param {(status:string) => void} [onStatus]
  * @param {AbortSignal} [signal]
  * @returns {Promise<object|null>}

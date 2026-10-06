@@ -119,11 +119,6 @@ export function normalizeAliases(value) {
  */
 
 /**
- * Recursively freeze arrays and plain objects.
- * @param {any} value
- * @returns {any}
- */
-/**
  * Shared entity resolver for scene text and prompt text.
  *
  * Detects aliases, applies corrections, resolves ambiguities,

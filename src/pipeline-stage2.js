@@ -3,8 +3,8 @@
  * Stage 2: immutable submission snapshot + image provider invocation.
  * Extracted from pipeline.js (see docs/archive/specs/2026-07-18-remove-descrefs-and-split-pipeline-design.md).
  *
- * runStage2 — positional compatibility adapter, used by tab-gallery.js for
- * "regenerate". runStage2ForDraft is the primary scene-first entry point.
+ * runStage2 — positional compatibility adapter, used by ui/gallery-actions.js
+ * for "regenerate". runStage2ForDraft is the primary scene-first entry point.
  */
 import { state, getCtx, trace, warn } from './core.js';
 import { recordDiagnosticEvent, hashDiagnosticId } from './diagnostic-events.js';

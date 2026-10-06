@@ -985,6 +985,8 @@ export function createShardedFileStore(config) {
             // Awaited: when `mutate` resolves, its write has landed (callers
             // and tests read server state right after; the loop still coalesces
             // mutations issued while it is in flight).
+            // КОНТРАКТ (write-through): в отличие от file-близнеца (write-behind,
+            // резолвится после применения к зеркалу) — здесь промис ждёт записи.
             if (changed && shouldPersist) await schedulePersist();
             return result;
         },

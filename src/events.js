@@ -211,8 +211,3 @@ export function unbindEvents() {
     _chatLoadToken = 0;
     _bound = false;
 }
-
-/**
- * Notify UI that Stage 1 produced a prompt. No automatic Stage 2 is started here —
- * the automation flow uses the captured message identity in index.js.
- */

@@ -1,7 +1,8 @@
 // @ts-check
 /**
  * Gallery facade: shared native ST files plus the shared metadata card index.
- * localforage is read-only migration input for legacy chat entries.
+ * Карточки живут в шардированном индексе (gallery-index), файлы картинок — в
+ * нативной галерее ST (native-image-storage); localforage этим слоем не используется.
  */
 import { uid, log, getCtx } from './core.js';
 import { recordDiagnosticEvent, hashDiagnosticId } from './diagnostic-events.js';

@@ -14,12 +14,9 @@
  * `uris_gallery_shard_*.json` files behind a tiny `uris_gallery_manifest.json`
  * (`uris_gallery.json` remains only as the one-time migration source), so a
  * mutation uploads one shard — the write cost is bounded by the shard size,
- * not the index size.
- *
- * The first load migrates the legacy `extensionSettings` copy into the file and
- * drops it — keeping a copy would defeat the entire point at this size. The
- * migration is written before the copy is dropped, so an interrupted migration
- * simply repeats on the next load.
+ * not the index size. Миграция из монолита — в sharded-file-store.js; миграция
+ * из extensionSettings удалена (d331ca3): все установки того поколения давно
+ * переехали в файлы.
  *
  * Native image FILES are untouched by any of this: they stay in ST's gallery
  * folders and are only referenced by `imagePath`.

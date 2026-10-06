@@ -747,6 +747,12 @@ export function createFileStore(config) {
          * Apply a synchronous mutator to the mirror and schedule the write. The
          * mutator's return value is passed through as the operation result.
          *
+         * КОНТРАКТ (write-behind): промис резолвится, когда мутация ПРИМЕНЕНА
+         * к зеркалу, запись ещё в очереди. Это отличается от sharded-близнеца
+         * (write-through: там mutate ждёт сетевой записи) — не ровняй их молча.
+         * Когда запись должна уже лежать на сервере (тесты, импорт, выгрузка
+         * перед disable) — await store.flush() явно.
+         *
          * `persist: false` is for recompute-then-compare flows (reconcile): the
          * caller mutates, decides whether anything actually changed, and calls
          * `persist()` only then. Without it a read path would rewrite the file
