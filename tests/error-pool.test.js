@@ -28,9 +28,9 @@ test('error pool records entries and deduplicates recent identical errors', () =
 });
 
 test('error pool keeps different scopes or messages as separate entries', () => {
-    recordUrisError({ scope: 'Stage 1', message: 'failed' });
-    recordUrisError({ scope: 'Stage 2', message: 'failed' });
-    recordUrisError({ scope: 'Stage 2', message: 'other' });
+    recordUrisError({ scope: URIS_SCOPES.stage1, message: 'failed' });
+    recordUrisError({ scope: URIS_SCOPES.generation, message: 'failed' });
+    recordUrisError({ scope: URIS_SCOPES.generation, message: 'other' });
 
     assert.equal(listUrisErrors().length, 3);
 });

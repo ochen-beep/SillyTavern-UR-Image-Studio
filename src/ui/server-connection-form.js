@@ -100,7 +100,7 @@ function factsLine(draft) {
     const editHint = editDialectHintFor(draft);
     if (editHint === 'img2img-proxy') parts.push('Редактирование: авто→generations+image');
     else if (editHint === 'json-proxy') parts.push('Редактирование: авто→JSON через прокси');
-    else if (editDialectsBothRejected(draft)) parts.push('Редактирование: шлюз отвечает ошибкой на оба диалекта — референсы на этом шлюзе недоступны, дело не в настройках');
+    else if (editDialectsBothRejected(draft)) parts.push('Редактирование: шлюз отклонил оба способа отправки референсов — на этом шлюзе референсы недоступны, дело не в настройках');
     // Пункт 3.1: модель стабильно падает (≥ 2 подряд provider-error/без картинки) —
     // признак мёртвой записи каталога; сбрасывается успехом и «Проверить».
     const failureStreak = modelFailureStreak(draft?.id, draft?.model?.id);

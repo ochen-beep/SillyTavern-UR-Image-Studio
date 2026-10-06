@@ -6,8 +6,6 @@ node_modules/
 # AI agent workspace data
 .zcode/
 
-# project docs (kept local, not part of the extension)
-docs/
 
 # temp scratch & test output
 tmp/

@@ -154,7 +154,7 @@ export const URIS_SCOPES = Object.freeze({
     generation: 'Генерация',
     provider: 'Провайдер',
     params: 'Параметры',
-    stage1: 'Stage 1',
+    stage1: 'Построение промпта',
     probe: 'Проверка',
     refs: 'Референсы',
     gallery: 'Галерея',

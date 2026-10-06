@@ -1,0 +1,12 @@
+# Research
+
+Черновые исследования к фиче «ComfyUI как провайдер Stage 2» (2026-09-30) и к её улучшению (2026-10-01).
+
+- [2026-09-30-github-comfyui-integrations.md](2026-09-30-github-comfyui-integrations.md) — опыт похожих проектов: нативная поддержка ComfyUI в ядре SillyTavern, сторонние ST-расширения, JS-клиентские библиотеки, топ-10 граблей со ссылками на issues.
+- [2026-09-30-comfyui-api-reference.md](2026-09-30-comfyui-api-reference.md) — справка по HTTP/WebSocket API ComfyUI: эндпоинты, WS-сообщения, формат workflow, конфигурация сервера, изменения 2024–2026.
+- [2026-09-30-comfyui-in-uris-synthesis.md](2026-09-30-comfyui-in-uris-synthesis.md) — синтез: оценка готовой базы URIS, три подхода (A/B/C) и рекомендация, таблица точек интеграции, самопроверка на 10 неоговорённых нюансов + «Ревизия» (режим пет-проекта).
+- [2026-09-30-comfyui-verification-checklist.md](2026-09-30-comfyui-verification-checklist.md) — инструкция живой проверки (для агента/нейросети).
+- [2026-09-30-comfyui-verification-report.md](2026-09-30-comfyui-verification-report.md) — отчёт живой проверки: все 6 сценариев прошли, багов расширения нет; расхождения — неточности чеклиста.
+- [2026-10-01-comfy-config-ux-st-ecosystem.md](2026-10-01-comfy-config-ux-st-ecosystem.md) — как 8 расширений ST настраивают ComfyUI: флоу, списки из сервера, маппинг нод, боли из issues.
+- [2026-10-01-workflow-as-product-patterns.md](2026-10-01-workflow-as-product-patterns.md) — паттерны «workflow → продукт»: ViewComfy, input-ноды, App Mode, шаблоны, матчинг по title; переносимость в браузерное расширение.
+- [2026-10-01-comfy-provider-improvements.md](2026-10-01-comfy-provider-improvements.md) — **синтез**: сравнение URIS с аналогами и рейтинг улучшений. Статус: У1–У4 реализованы 2026-10-01 (probe comfyui со списком чекпойнтов, живая сводка workflow, class_type в ошибках, кнопки встроенных графов), полный прогон 1461/1461, пробник проверен вживую на стенде 8188.

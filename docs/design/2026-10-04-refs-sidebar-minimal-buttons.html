@@ -1,0 +1,435 @@
+<!doctype html>
+<!--
+    Сайдбар папок: минимум кнопок, v2 (to-be, поверх Варианта A).
+    v2: убрана hover-кнопка «⋯» на строках — вместо неё меню действует через
+    (1) ПКМ/долгий тап на любой строке и (2) постоянную кнопку «⋯» в тулбаре,
+    привязанную к активной папке. Жест: src/ui/card-action-menu.js.
+-->
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>URIS · Сайдбар — минимум кнопок v2 (to-be)</title>
+<style>
+    :root {
+        --bg: #1c1c1c; --surface-tabs: #1a1a1a; --surface-card: #1e1e1e;
+        --surface-btn: #252525; --surface-btn-hover: #2d2d2d;
+        --border: #3a3a3a; --border-soft: #2a2a2a;
+        --text-strong: #d4d4d4; --text-mut: #888; --text-dim: #666;
+        --accent: #5a9e3a; --accent-soft: rgba(90,158,58,.18); --accent-line: rgba(90,158,58,.45);
+        --err: #e05050; --err-soft: rgba(224,80,80,.12);
+        --radius: 4px; --font-sm: 11px; --font-xs: 10px; --label: 9px;
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; padding: 32px 24px 80px; background: #101010; color: var(--text-strong);
+           font: 14px/1.5 "Segoe UI", "Noto Sans", system-ui, sans-serif; }
+    .wrap { max-width: 1500px; margin: 0 auto; }
+    h1 { font-size: 22px; margin: 0 0 4px; } h1 small { color: var(--text-mut); font-weight: 400; }
+    .sub { color: var(--text-mut); margin: 0 0 28px; font-size: 13px; max-width: 1000px; }
+    h2 { font-size: 16px; margin: 44px 0 6px; }
+    h2 .src { color: var(--text-dim); font-weight: 400; font-size: 12px; }
+    .section-sub { color: var(--text-mut); font-size: 13px; margin: 0 0 14px; max-width: 920px; }
+    code { background: #20241f; border: 1px solid #2c3328; border-radius: 4px; padding: 0 4px; font-size: 12px; color: #a9c99a; }
+
+    .pin { position: absolute; z-index: 50; width: 18px; height: 18px; border-radius: 50%;
+           background: var(--accent); color: #fff; font: 700 11px/18px "Segoe UI", sans-serif;
+           text-align: center; box-shadow: 0 0 0 2px rgba(0,0,0,.55); cursor: default; }
+    .legend { display: grid; grid-template-columns: repeat(auto-fit, minmax(310px, 1fr)); gap: 10px; margin: 14px 0 0; }
+    .legend-item { display: flex; gap: 10px; align-items: flex-start; background: #161616;
+                   border: 1px solid #242424; border-radius: 8px; padding: 10px 12px; font-size: 13px; }
+    .legend-item .n { flex: 0 0 20px; width: 20px; height: 20px; border-radius: 50%; background: var(--accent);
+                      color: #fff; font: 700 11px/20px sans-serif; text-align: center; }
+    .legend-item b { color: var(--text-strong); }
+    .legend-item .dim { color: var(--text-mut); }
+
+    .row-of { display: flex; gap: 28px; flex-wrap: wrap; align-items: flex-start; }
+    .frame { position: relative; width: fit-content; background: var(--bg); border: 1px solid #333; border-radius: 10px;
+             overflow: hidden; box-shadow: 0 12px 40px rgba(0,0,0,.5); }
+    .caption { color: var(--text-dim); font-size: 12px; margin: 8px 2px 0; max-width: 430px; }
+
+    /* ── сайдбар: строки без кнопок ── */
+    .sb { width: 240px; display: flex; flex-direction: column;
+          background: var(--surface-tabs); border-right: 1px solid var(--border-soft); }
+    .sb-search { padding: 8px 8px 6px; }
+    .sb-search input { width: 100%; padding: 4px 8px; font-size: var(--font-sm);
+        background: var(--surface-btn); border: 1px solid var(--border); border-radius: var(--radius);
+        color: var(--text-strong); outline: none; }
+    .sb-list { padding: 4px 0; font-size: var(--font-sm); position: relative; }
+    .fitem { display: flex; align-items: center; gap: 8px; width: 100%; padding: 6px 10px;
+             color: var(--text-mut); cursor: pointer; }
+    .fitem:hover { color: var(--text-strong); background: rgba(255,255,255,.03); }
+    .fitem.on { background: var(--accent-soft); color: var(--accent); }
+    .fdot { flex: 0 0 8px; width: 8px; height: 8px; border-radius: 50%; }
+    .fdot.mute { background: var(--text-dim); opacity: .5; }
+    .fname { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .fcount { font-size: var(--font-xs); color: var(--text-dim); }
+    .fstar { font-size: 9px; color: var(--accent); opacity: .8; }
+    .sect { padding: 8px 10px 2px; font-size: var(--label); text-transform: uppercase;
+            letter-spacing: .15em; color: var(--text-dim); }
+    .fhead { display: flex; align-items: center; justify-content: space-between; padding: 8px 8px 4px 10px; }
+    .flabel { font-size: var(--label); text-transform: uppercase; letter-spacing: .15em; color: var(--text-dim); }
+    .ftools { display: inline-flex; gap: 2px; }
+    .ftool { width: 22px; height: 22px; display: inline-flex; align-items: center; justify-content: center;
+             color: var(--text-dim); font-size: 10px; }
+    .ftool.add { color: var(--accent); }
+    .chev { flex: 0 0 14px; width: 14px; height: 14px; display: inline-flex; align-items: center;
+            justify-content: center; color: var(--text-dim); font-size: 9px; }
+    .chev.closed { transform: rotate(-90deg); }
+    .gkids { position: relative; }
+    .gkids::before { content: ''; position: absolute; left: 21px; top: 0; bottom: 2px; width: 1px; background: #2e2e2e; }
+    .gkids .frow, .gkids > .fitem { padding-left: 26px; }
+    .gname { font-weight: 600; }
+    .gtotal b { color: var(--text-mut); font-weight: 600; }
+    .frow.rc-menu { background: var(--surface-btn); color: var(--text-strong); outline: 1.5px dashed var(--accent-line); outline-offset: -1px; }
+    .sb-hint { padding: 8px 10px; border-top: 1px solid var(--border-soft);
+               font-size: 10px; color: var(--text-dim); }
+    .sb-hint b { color: var(--text-mut); font-weight: 600; }
+
+    /* ── тулбар с крошками и контекстным ⋯ ── */
+    .tb { display: flex; align-items: center; gap: 6px; padding: 6px 8px;
+          border-bottom: 1px solid var(--border-soft); background: var(--bg); }
+    .crumbs { display: flex; align-items: center; gap: 6px; flex: 1; min-width: 0; overflow: hidden; }
+    .crumb-chip { padding: 3px 10px; border-radius: 999px; background: var(--surface-btn);
+                  border: 1px solid var(--border-soft); color: var(--text-mut); font-size: var(--font-sm);
+                  white-space: nowrap; }
+    .crumb-chip:hover { color: var(--text-strong); }
+    .crumb-chip.cur { background: var(--accent-soft); border-color: var(--accent-line); color: var(--accent); }
+    .crumb-sep { color: var(--text-dim); font-size: 10px; }
+    .ctxbtn { flex: 0 0 26px; width: 26px; height: 26px; display: inline-flex; align-items: center; justify-content: center;
+              background: var(--surface-btn); border: 1px solid var(--border); border-radius: var(--radius);
+              color: var(--text-strong); font-size: 12px; letter-spacing: 1px; cursor: pointer; }
+    .ctxbtn:hover { border-color: var(--accent-line); color: var(--accent); }
+    .ctxbtn.disabled { opacity: .35; cursor: default; }
+    .ctxbtn.disabled:hover { border-color: var(--border); color: var(--text-strong); }
+    .tb-search { flex: 0 1 180px; min-width: 120px; }
+    .tb-search input { width: 100%; padding: 4px 8px; font-size: var(--font-sm);
+        background: var(--surface-btn); border: 1px solid var(--border); border-radius: var(--radius);
+        color: var(--text-strong); outline: none; }
+    .add-btn { display: inline-flex; align-items: center; gap: 6px; padding: 5px 11px;
+               background: var(--accent-soft); border: 1px dashed var(--accent-line); border-radius: var(--radius);
+               color: var(--accent); font-size: var(--font-sm); white-space: nowrap; }
+
+    /* ── контекстное меню ── */
+    .ctx { width: 210px; background: var(--surface-card); border: 1px solid var(--border);
+           border-radius: 10px; padding: 6px; box-shadow: 0 18px 60px rgba(0,0,0,.75); }
+    .ctx .grip { width: 36px; height: 4px; border-radius: 2px; background: #3a3a3a; margin: 2px auto 6px; }
+    .ctx .ct { font-size: var(--font-xs); color: var(--text-dim); text-align: center;
+               padding: 0 8px 6px; border-bottom: 1px solid var(--border-soft); margin-bottom: 4px;
+               overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .ci { display: flex; align-items: center; gap: 10px; width: 100%; padding: 8px 10px;
+          border: 0; border-radius: 6px; background: none; color: var(--text-strong);
+          font-size: var(--font-sm); cursor: pointer; text-align: left; }
+    .ci:hover { background: var(--surface-btn); }
+    .ci .ic { width: 16px; text-align: center; font-size: 12px; color: var(--text-mut); }
+    .ci.danger, .ci.danger .ic { color: var(--err); }
+    .ci.danger:hover { background: var(--err-soft); }
+    .ci .chk { margin-left: auto; color: var(--accent); font-size: 10px; }
+    .ci.on { color: var(--accent); }
+    .ci-group-label { font-size: var(--label); text-transform: uppercase; letter-spacing: .15em;
+                      color: var(--text-dim); padding: 6px 10px 2px; }
+
+    /* ── шит «переместить в…» ── */
+    .sheet { width: 250px; background: var(--surface-card); border: 1px solid var(--border);
+             border-radius: 8px; padding: 10px; box-shadow: 0 18px 60px rgba(0,0,0,.7); font-size: var(--font-sm); }
+    .sheet .st { font-weight: 600; margin-bottom: 8px; }
+    .sheet .srh { margin-bottom: 8px; }
+    .sheet .srh input { width: 100%; padding: 4px 8px; font-size: var(--font-xs); background: var(--surface-btn);
+                        border: 1px solid var(--border); border-radius: var(--radius); color: var(--text-strong); }
+    .srow { display: flex; align-items: center; gap: 8px; width: 100%; padding: 6px 8px;
+            border-radius: var(--radius); color: var(--text-mut); cursor: pointer; }
+    .srow:hover { background: var(--surface-btn); color: var(--text-strong); }
+    .srow.disabled { opacity: .4; cursor: default; }
+    .srow .fname { color: inherit; }
+
+    /* мобайл */
+    .phone { position: relative; width: 300px; height: 560px; background: var(--bg);
+             border: 1px solid #333; border-radius: 18px; overflow: hidden;
+             box-shadow: 0 12px 40px rgba(0,0,0,.5); display: flex; flex-direction: column; }
+    .phone .ptitle { padding: 10px 14px 8px; color: var(--text-dim); font-size: 12px;
+                     border-bottom: 1px solid #242424; background: #141414; }
+    .msearch { padding: 8px 10px; }
+    .msearch input { width: 100%; padding: 4px 8px; font-size: var(--font-sm); background: var(--surface-btn);
+                     border: 1px solid var(--border); border-radius: var(--radius); color: var(--text-strong); }
+    .mlist { flex: 1; overflow: hidden; position: relative; display: flex; flex-direction: column; }
+    .mitem { display: flex; align-items: center; gap: 8px; width: 100%; padding: 9px 12px;
+             border-bottom: 1px solid #202020; cursor: pointer; }
+    .mitem .fname { font-size: var(--font-sm); flex: 1; }
+    .mitem.dimmed { opacity: .45; }
+    .mitem.sel { background: var(--accent-soft); color: var(--accent); }
+    .collage { display: flex; gap: 2px; }
+    .cthumb { width: 18px; height: 24px; border-radius: 3px; }
+    .mbottom-sheet { margin-top: auto; background: var(--surface-card); border-top: 1px solid var(--border);
+                     border-radius: 14px 14px 0 0; padding: 8px 8px 12px; box-shadow: 0 -18px 60px rgba(0,0,0,.8); }
+    .mhint { margin-top: auto; padding: 8px 12px; font-size: 10px; color: var(--text-dim);
+             border-top: 1px solid #242424; }
+
+    table.tok { border-collapse: collapse; font-size: 13px; min-width: 800px; }
+    table.tok th, table.tok td { border: 1px solid #242424; padding: 6px 12px; text-align: left; vertical-align: top; }
+    table.tok th { color: var(--text-mut); font-weight: 600; background: #161616; }
+    table.tok td:first-child { color: var(--text-strong); white-space: nowrap; }
+    table.tok td:nth-child(2), table.tok td:nth-child(3) { color: var(--text-mut); }
+    .tok-scroll { overflow-x: auto; }
+    .obs { display: grid; grid-template-columns: repeat(auto-fit, minmax(330px, 1fr)); gap: 10px; }
+    .obs-item { background: #161616; border: 1px solid #242424; border-left: 3px solid var(--accent);
+                border-radius: 8px; padding: 10px 12px; font-size: 13px; color: var(--text-mut); }
+    .obs-item.warn { border-left-color: var(--err); }
+    .obs-item b { color: var(--text-strong); }
+</style>
+</head>
+<body>
+<div class="wrap">
+    <h1>Сайдбар — минимум кнопок <small>v2 · без пропадающих кнопок</small></h1>
+    <p class="sub">Правка по фидбеку: hover-«⋯» на строках выброшен. Теперь у меню папки <b>три входа</b>, ни один не мигает:
+    <b>① ПКМ</b> на любой строке (десктоп), <b>② долгий тап</b> (мобила — жест уже обучен на карточках),
+    <b>③ постоянная кнопка «⋯» в тулбаре</b>, привязанная к активной папке — тот же принцип контекста,
+    что у «＋ В „папка“». На строках — только данные, плюс одна статичная подсказка внизу сайдбара.</p>
+
+    <!-- ═══ F1: строки ═══ -->
+    <h2>Строки сайдбара — ноль кнопок</h2>
+    <div class="row-of">
+        <div>
+            <div class="frame"><div class="sb">
+                <div class="sb-search"><input placeholder="Поиск папок…"></div>
+                <div class="sb-list">
+                    <span class="pin" style="left:4px; top:-4px;">F1</span>
+                    <div class="frow"><div class="fitem">
+                        <span class="fdot mute"></span><span class="fname">Все карточки</span><span class="fcount">24</span>
+                    </div></div>
+                    <div class="frow"><div class="fitem">
+                        <span class="fdot mute"></span><span class="fname">Без папки</span><span class="fcount">3</span>
+                    </div></div>
+                    <div class="sect">Избранное</div>
+                    <div class="frow"><div class="fitem">
+                        <span class="fdot" style="background:#4a90d9"></span><span class="fname">Лицо Рады зимнее</span>
+                        <span class="fstar">★</span><span class="fcount">12</span>
+                    </div></div>
+                    <div class="fhead"><span class="flabel">Папки</span><span class="ftools">
+                        <span class="ftool add" title="Создать папку">＋</span>
+                        <span class="ftool" title="Вид списка">⋯</span>
+                    </span></div>
+                    <div class="frow"><div class="fitem">
+                        <span class="chev">▾</span><span class="fdot" style="background:#4a90d9"></span>
+                        <span class="fname gname">Лица</span><span class="fcount gtotal"><b>21</b></span>
+                    </div></div>
+                    <div class="gkids">
+                        <div class="frow"><div class="fitem on"><span class="fdot" style="background:#c94090"></span>
+                            <span class="fname">Мимика</span><span class="fcount">9</span></div></div>
+                        <div class="frow"><div class="fitem"><span class="fdot" style="background:#4a90d9"></span>
+                            <span class="fname">Лицо Рады</span><span class="fstar">★</span><span class="fcount">12</span></div></div>
+                    </div>
+                </div>
+                <div class="sb-hint"><b>ПКМ / долгий тап</b> — действия папки</div>
+            </div></div>
+            <div class="caption">Строка = маркер + имя (~150px) + статус-★ + счётчик. Hover даёт только подсветку —
+            как обычная ссылка. Шапка секции: «＋» (создать, контекстно-умный) и «⋯» (вид списка) — оба видны всегда.
+            Подсказка — одна строка внизу, статичная.</div>
+        </div>
+
+        <!-- ═══ F2: тулбар с контекстным ⋯ ═══ -->
+        <div>
+            <div class="frame" style="width:470px;">
+                <span class="pin" style="left:6px; top:64px;">F2</span>
+                <div class="tb">
+                    <div class="crumbs">
+                        <span class="crumb-chip">Все карточки</span><span class="crumb-sep">›</span>
+                        <span class="crumb-chip">Лица</span><span class="crumb-sep">›</span>
+                        <span class="crumb-chip cur">Мимика</span>
+                    </div>
+                    <span class="ctxbtn" title="Действия с «Мимика»">⋯</span>
+                    <div class="tb-search"><input placeholder="Поиск..."></div>
+                    <span class="add-btn">＋ Референс</span>
+                </div>
+                <div style="display:flex; gap:14px; padding:12px; align-items:flex-start;">
+                    <div style="flex:1; padding:6px; border:1px dashed #333; border-radius:6px; min-height:120px;
+                                color:var(--text-dim); font-size:11px; display:flex; align-items:center; justify-content:center;">
+                        сетка карточек папки «Мимика»
+                    </div>
+                    <div class="ctx">
+                        <div class="ct">Мимика · в «Лица»</div>
+                        <button class="ci"><span class="ic">★</span><span>В избранное</span></button>
+                        <button class="ci"><span class="ic">✎</span><span>Правка…</span></button>
+                        <button class="ci"><span class="ic">⇄</span><span>Переместить в…</span></button>
+                        <button class="ci danger"><span class="ic">🗑</span><span>Удалить…</span></button>
+                    </div>
+                </div>
+            </div>
+            <div class="caption">Вход ③: «⋯» живёт в тулбаре над сеткой, рядом с крошками — <b>всегда видно, всегда на месте</b>.
+            Действует на активную папку (что в крошках — то и в меню). Это тот же язык, что «＋ Референс»:
+            тулбар = «что у меня на экране». Открыто: меню активной папки.</div>
+        </div>
+
+        <!-- ═══ F3: выключенное состояние ═══ -->
+        <div>
+            <div class="frame" style="width:470px;">
+                <span class="pin" style="left:6px; top:64px;">F3</span>
+                <div class="tb">
+                    <div class="crumbs">
+                        <span class="crumb-chip cur">Все карточки</span>
+                    </div>
+                    <span class="ctxbtn disabled" title="Выберите конкретную папку">⋯</span>
+                    <div class="tb-search"><input placeholder="Поиск..."></div>
+                    <span class="add-btn">＋ Референс</span>
+                </div>
+                <div style="display:flex; gap:14px; padding:12px; align-items:flex-start;">
+                    <div style="flex:1; padding:6px; border:1px dashed #333; border-radius:6px; min-height:90px;
+                                color:var(--text-dim); font-size:11px; display:flex; align-items:center; justify-content:center;">
+                        сетка всех карточек
+                    </div>
+                    <div style="width:210px; font-size:11px; color:var(--text-mut); padding-top:8px;">
+                        «Все карточки» — не папка, действий нет. Кнопка <b>видна, но приглушена</b>:
+                        место меню стабильно, а не «появилось/исчезло». Действия над конкретной папкой —
+                        ПКМ по её строке в сайдбаре или клик по папке → ⋯.
+                    </div>
+                </div>
+            </div>
+            <div class="caption">Без активной папки «⋯» не прячется, а гаснет. Скрытая кнопка — потерянная кнопка;
+            выключенная честно говорит «здесь есть меню, сейчас не для чего».</div>
+        </div>
+    </div>
+
+    <div class="legend">
+        <div class="legend-item"><span class="n">F1</span><div><b>Строки — чистые данные.</b> <span class="dim">Ни одной кнопки, ни одного hover-элемента: подсветка как у ссылки. Все действия — жестом (ПКМ/долгий тап) или через тулбар. Имя сохранило +50px от убитых ★/✎.</span></div></div>
+        <div class="legend-item"><span class="n">F2</span><div><b>Тулбарный «⋯» — контекст активной папки.</b> <span class="dim">Крошки показывают, на что он подействует; меню то же самое, что по ПКМ. Один вход для мыши-без-правой-кнопки и для «я тут уже работаю».</span></div></div>
+        <div class="legend-item"><span class="n">F3</span><div><b>Нет контекста — кнопка гаснет, не исчезает.</b> <span class="dim">«Все карточки»/«Без папки» — виртуальные фильтры, действий у них нет. Disabled вместо hidden: позиция и смысл стабильны.</span></div></div>
+    </div>
+
+    <!-- ═══ F4: жест на строке ═══ -->
+    <h2>Жест на любой строке <span class="src">— то же меню, второй и третий вход</span></h2>
+    <p class="section-sub">ПКМ (десктоп) и долгий тап 500ms (мобила) на любой строке — папке, группе, даже без выбора папки.
+    Меню всплывает у курсора с клэмпом к краям. Это <b>то же меню</b>, что из тулбара — одна логика, три двери.</p>
+    <div class="row-of">
+        <div>
+            <div class="frame"><div class="sb">
+                <div class="sb-search"><input placeholder="Поиск папок…"></div>
+                <div class="sb-list">
+                    <span class="pin" style="left:4px; top:-4px;">F4</span>
+                    <div class="frow"><div class="fitem">
+                        <span class="chev closed">▸</span><span class="fdot" style="background:#c9a030"></span>
+                        <span class="fname gname">Юность</span><span class="fcount gtotal"><b>7</b></span>
+                    </div></div>
+                    <div class="frow rc-menu"><div class="fitem">
+                        <span class="chev">▾</span><span class="fdot" style="background:#4a90d9"></span>
+                        <span class="fname gname">Лица</span><span class="fcount gtotal"><b>21</b></span>
+                    </div></div>
+                </div>
+            </div></div>
+            <div class="caption">ПКМ по группе (пунктир = точка жеста).</div>
+        </div>
+        <div>
+            <div class="ctx" style="position:relative; top:0;">
+                <span class="pin" style="left:-8px; top:-8px;">F5</span>
+                <div class="ct">Группа «Лица» · 21</div>
+                <button class="ci"><span class="ic">＋</span><span>Новая подпапка</span></button>
+                <button class="ci"><span class="ic">✎</span><span>Правка…</span></button>
+                <button class="ci"><span class="ic">⇄</span><span>Переместить в…</span></button>
+                <button class="ci danger"><span class="ic">🗑</span><span>Удалить группу…</span></button>
+                <div style="border-top:1px solid var(--border-soft); margin-top:4px; padding-top:4px;">
+                    <div style="font-size:10px; color:var(--text-dim); padding:0 10px 4px;">удаление: папки поднимутся на верхний уровень, референсы не тронем</div>
+                </div>
+            </div>
+            <div class="caption">Меню группы — у курсора. «Правка…» открывает прежний инлайн-редактор (имя + палитра).</div>
+        </div>
+        <div>
+            <div class="ctx">
+                <span class="pin" style="left:-8px; top:-8px;">F6</span>
+                <div class="ct">Вид списка</div>
+                <div class="ci-group-label">Сортировка</div>
+                <button class="ci on"><span class="ic"></span><span>Своя</span><span class="chk">✓</span></button>
+                <button class="ci"><span class="ic"></span><span>По имени</span></button>
+                <button class="ci"><span class="ic"></span><span>По количеству</span></button>
+                <div style="border-top:1px solid var(--border-soft); margin-top:4px; padding-top:4px;">
+                    <button class="ci on"><span class="ic">◉</span><span>Скрывать пустые</span><span class="chk">✓</span></button>
+                    <button class="ci"><span class="ic">⑂</span><span>Управление папками…</span></button>
+                </div>
+            </div>
+            <div class="caption">Меню «⋯» в шапке секции «Папки» — вид списка, состояние галками. Тоже виден всегда.</div>
+        </div>
+    </div>
+
+    <!-- ═══ F7/F8 ═══ -->
+    <h2>«Переместить в…» и мобайл</h2>
+    <div class="row-of">
+        <div>
+            <div class="frame" style="padding:12px; width:300px;">
+                <span class="pin" style="left:6px; top:6px;">F7</span>
+                <div style="font-size:var(--font-sm); color:var(--text-mut); margin-bottom:10px;">
+                    ⇄ Переместить «Мимика»…</div>
+                <div class="sheet" style="width:100%;">
+                    <div class="st">Куда положить</div>
+                    <div class="srh"><input placeholder="Поиск группы…"></div>
+                    <div class="srow"><span class="fdot" style="background:#4a90d9"></span><span class="fname gname">Лица</span><span class="fcount">21</span></div>
+                    <div class="srow"><span class="fdot" style="background:#c9a030"></span><span class="fname gname">Юность</span><span class="fcount">7</span></div>
+                    <div class="srow"><span class="fdot" style="background:#3ab09e"></span><span class="fname gname">Сцены</span><span class="fcount">11</span></div>
+                    <div class="srow disabled"><span class="fdot" style="background:#4a90d9"></span><span class="fname">Лицо Рады</span><span class="fcount">12</span></div>
+                    <div class="srow" style="color:var(--text-dim)"><span class="fdot mute"></span><span class="fname">Без группы (верхний уровень)</span></div>
+                </div>
+            </div>
+            <div class="caption">Цели — только группы и «верхний уровень» (кап глубины 2). Подпапки видны приглушённо,
+            выбрать нельзя. Текущая группа — с галкой.</div>
+        </div>
+        <div>
+            <div class="phone">
+                <div class="ptitle">Мобайл · долгий тап по папке</div>
+                <div class="msearch"><input placeholder="Поиск папок..."></div>
+                <div class="mlist">
+                    <div class="mitem dimmed"><span class="fdot" style="background:#4a90d9"></span><span class="fname">Лицо Рады</span><span class="collage"><span class="cthumb"></span><span class="cthumb"></span><span class="cthumb"></span><span class="cthumb" style="opacity:.35;background:var(--surface-btn)"></span></span><span style="color:var(--text-dim)">›</span></div>
+                    <div class="mitem sel"><span class="fdot" style="background:#c94090"></span><span class="fname">Мимика</span><span class="fcount">9</span><span class="collage"><span class="cthumb"></span><span class="cthumb"></span><span class="cthumb"></span><span class="cthumb" style="opacity:.35;background:var(--surface-btn)"></span></span><span style="color:var(--text-dim)">›</span></div>
+                    <div class="mitem dimmed"><span class="fdot" style="background:#7a5cc9"></span><span class="fname">Одежда</span><span class="collage"><span class="cthumb"></span><span class="cthumb"></span><span class="cthumb"></span><span class="cthumb" style="opacity:.35;background:var(--surface-btn)"></span></span><span style="color:var(--text-dim)">›</span></div>
+                    <span class="pin" style="left:8px; top:-4px; z-index:60;">F8</span>
+                    <div class="mbottom-sheet">
+                        <div class="ctx" style="width:100%; border:0; box-shadow:none; padding:0;">
+                            <div class="ct">Мимика · в «Лица»</div>
+                            <button class="ci"><span class="ic">★</span><span>В избранное</span></button>
+                            <button class="ci"><span class="ic">✎</span><span>Правка…</span></button>
+                            <button class="ci"><span class="ic">⇄</span><span>Переместить в…</span></button>
+                            <button class="ci danger"><span class="ic">🗑</span><span>Удалить…</span></button>
+                        </div>
+                    </div>
+                </div>
+                <div class="mhint">Долгий тап по папке — действия. Тап — открыть.</div>
+            </div>
+            <div class="caption">Мобайл: тот же нижний лист. Подсказка жеста — строкой под списком (один раз видишь — запоминаешь).
+            Пины доступны с телефона впервые.</div>
+        </div>
+    </div>
+
+    <!-- ═══ Шаги ═══ -->
+    <h2>Цена действий <span class="src">— до → после (v2)</span></h2>
+    <div class="tok-scroll">
+    <table class="tok">
+        <tr><th>Действие</th><th>Сейчас (кнопки)</th><th>После (v2)</th><th>Частота</th><th>Итог</th></tr>
+        <tr><td>Открыть папку</td><td>1 тап</td><td>1 тап</td><td>постоянно</td><td>без изменений</td></tr>
+        <tr><td>Действия с активной папкой</td><td>hover → ★/✎</td><td>«⋯» в тулбаре — 1 клик, всегда на месте</td><td>часто</td><td>быстрее, чем было</td></tr>
+        <tr><td>Действия с любой другой папкой</td><td>hover → ★/✎</td><td>ПКМ по строке (1 жест) или клик → «⋯»</td><td>редко</td><td>чуть дороже, честно</td></tr>
+        <tr><td>Переименовать / цвет</td><td>hover → ✎</td><td>ПКМ → «Правка…» → прежний редактор</td><td>редко</td><td>та же цена</td></tr>
+        <tr><td>Переместить папку</td><td>— (нет)</td><td>ПКМ → «Переместить в…» → шит</td><td>редко</td><td>новое</td></tr>
+        <tr><td>Закрепить с телефона</td><td>— (нет ★ на мобиле)</td><td>долгий тап → «В избранное»</td><td>редко</td><td>новое</td></tr>
+        <tr><td>Прочитать список</td><td>имя ~100px, шум ★/✎</td><td>имя ~150px, ноль шума</td><td>постоянно</td><td>+50px и тишина</td></tr>
+    </table>
+    </div>
+
+    <h2>Открытые риски v2 <span class="src">— что осталось неидеальным</span></h2>
+    <div class="obs">
+        <div class="obs-item warn"><b>ПКМ-жест невидим, пока не знаешь.</b> Страховка тройная: статичная подсказка внизу сайдбара,
+        тулбарный «⋯» (виден всегда), и жест уже обучен на карточках сетки. Но если подсказка раздражает — её можно убрать,
+        тулбарный вход остаётся.</div>
+        <div class="obs-item warn"><b>Действия над «неактивной» папкой = 2 шага через тулбар</b> (клик по папке → «⋯»).
+        Для частых папок это не проблема (они и так активны), для дальних — есть ПКМ. Если и это окажется неудобно —
+        вернём пер-строчный «⋯», но уже как <b>постоянный</b>, не hover.</div>
+        <div class="obs-item warn"><b>Тулбар стал плотнее:</b> крошки + «⋯» + поиск + «＋ Референс» в одной строке. На узком окне
+        крошки обрежутся первыми (flex-ellipsis), поиск сожмётся до 120px. Точка перелома — примерно 600px контейнера,
+        дальше мобильный стек со своими экранами.</div>
+        <div class="obs-item warn"><b>Нюанс card-action-menu:</b> поповер vs нижний лист выбирается по ширине <b>окна</b> (768px), не контейнера.
+        В узком десктопном окне меню покажется листом — не ошибка, но знай, откуда.</div>
+    </div>
+
+    <p class="sub" style="margin-top:36px;">Код: <code>src/ui/card-action-menu.js</code> (bindCardContextMenu / openCardActionMenu — как есть) ·
+    <code>src/ui/tab-references.js</code> §_renderFolderList, §_renderToolbar · <code>src/ui/folder-picker.js</code> (openFolderSheet).
+    История: v1 этого макета — hover-«⋯» на строках, забраковано (пропадающая кнопка).</p>
+</div>
+<script>
+    const HUES = ['#3a4a5a', '#5a3a4a', '#3a5a46', '#5a523a'];
+    document.querySelectorAll('.cthumb').forEach((t, i) => { t.style.background = HUES[i % HUES.length]; });
+</script>
+</body>
+</html>

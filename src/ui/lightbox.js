@@ -19,7 +19,18 @@
  * Do NOT add lockBodyScroll here: PhotoSwipe runs its own scroll lock, and
  * two independent locks release in the wrong order, leaving <body> frozen.
  */
-import PhotoSwipe from '../vendor/photoswipe.esm.js';
+// PhotoSwipe (~200 КБ) грузится ЛЕНИВО — динамическим импортом при первом
+// открытии просмотра. Статический импорт парсил вендора на каждый старт ST,
+// даже если лайтбокс не открывался ни разу (Croppr/fzstd и так ленивые —
+// непоследовательно). Система модулей кэширует динамический импорт: две
+// гонки открытий получат один и тот же конструктор.
+let _photoSwipeCtor = null;
+async function loadPhotoSwipe() {
+    if (!_photoSwipeCtor) {
+        ({ default: _photoSwipeCtor } = await import('../vendor/photoswipe.esm.js'));
+    }
+    return _photoSwipeCtor;
+}
 import { copyItemText, cropGalleryImage, cropReference, saveAsReference, regenerate, deleteImage } from './gallery-actions.js';
 import { getCtx } from '../core.js';
 import { cardDimensions, ensureCardDimensions, FALLBACK_DIMENSIONS } from '../image-dimensions.js';
@@ -59,6 +70,10 @@ export async function showLightbox(items, index = 0, { chatId = null, root = nul
     if (!items?.length) return;
     const seq = ++_openSeq;
     _active?.close();
+    // Первым await'ом — ленивый импорт вендора: гонка открытий защищена
+    // seq-гардом ниже, а его позиция (после await'ов, до new PhotoSwipe)
+    // от добавления этого await не меняется.
+    const PhotoSwipe = await loadPhotoSwipe();
     const chatIdResolved = chatId ?? getCtx().chatId ?? null;
     const start = Math.max(0, Math.min(items.length - 1, index));
 
