@@ -4,6 +4,7 @@ import { state, fetchWithTimeout } from './core.js';
 import { resolveConnection } from './connections.js';
 import { resolveDispatchPlan } from './dispatch-plan.js';
 import { invokeImageProvider, validateImageProviderInvocation } from './image-provider-registry.js';
+import { serialize } from './serialize.js';
 import { isCorsProxyAvailable, isCorsOrNetworkError } from './proxy.js';
 import { deliveryHintFor, noteProbe } from './delivery-evidence.js';
 import { materializeImageResult, getCharacterImageFolder, makeThumbnailForPath } from './native-image-storage.js';
@@ -228,12 +229,22 @@ export async function generateImageRequest(imageConnId, request, onStatus, signa
     // платном POST, если это можно выяснить бесплатным GET-ом. После валидации,
     // чтобы невалидные запросы не зондировали сеть.
     await probeDeliveryBeforeFirstPost(conn, apiKey, route, signal).catch(() => {});
-    await updatePendingBrowserRequest(request.requestId, { status: 'dispatchingUnknown', error: null });
     onStatus?.('Generating image...');
 
     let result;
     try {
-        result = await invokeImageProvider(invocation);
+        // Глобальный семафор на провайдера: очередь, inline и мост сериализуют
+        // каждый сам по себе и не делят общий мьютекс — без этого guard'а две
+        // генерации одного коннекта из разных лейнов уходят в платный POST
+        // одновременно. Ключ — коннект: разные провайдеры не блокируют друг
+        // друга. Отменённый вызов получает ход и сразу выходит через AbortError
+        // адаптера, не занимая слот надолго.
+        // dispatchingUnknown ставится ВНУТРИ хода: стоящий в очереди запрос ещё
+        // ничего не отправил, и запись «исход неизвестен» на него не заводится.
+        result = await serialize(`uris-provider:${conn.id}`, async () => {
+            await updatePendingBrowserRequest(request.requestId, { status: 'dispatchingUnknown', error: null });
+            return invokeImageProvider(invocation);
+        });
     } catch (error) {
         // В INFO — только фактический результат, никаких промежуточных
         // статусов. Известный исход (отмена пользователем, ответ провайдера с

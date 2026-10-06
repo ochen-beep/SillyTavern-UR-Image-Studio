@@ -167,6 +167,7 @@ export const URIS_SCOPES = Object.freeze({
     netdump: 'Сетевой дамп',
     recovery: 'Recovery',
     ui: 'UI',
+    storage: 'Хранилище',
 });
 
 /**

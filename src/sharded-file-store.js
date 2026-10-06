@@ -37,7 +37,7 @@
  * first 404 and re-written (a store with no readable shards starts empty).
  */
 
-import { log, warn } from './core.js';
+import { log, warn, unrefTimer } from './core.js';
 import { recordDiagnosticEvent } from './diagnostic-events.js';
 import {
     KEEPALIVE_BODY_LIMIT, textToBase64, stHeaders, mergeServerValue,
@@ -84,6 +84,21 @@ async function uploadDoc(name, doc) {
     });
     if (!res.ok) throw new Error(`upload failed: ${res.status} ${await res.text().catch(() => '')}`);
     return json.length;
+}
+
+/**
+ * Server-side deletion through the official POST /api/files/delete route
+ * (ST ≥ 1.19; раньше считалось, что маршрута нет — опровергнуто, files.js:54).
+ * 404 считается успехом: файл уже исчез.
+ */
+async function deleteDocFile(name) {
+    const res = await fetch('/api/files/delete', {
+        method: 'POST',
+        headers: stHeaders(),
+        body: JSON.stringify({ path: `user/files/${name}` }),
+    });
+    if (res.ok || res.status === 404) return;
+    throw new Error(`delete failed: ${res.status} ${await res.text().catch(() => '')}`);
 }
 
 // ── Document shapes ──
@@ -331,7 +346,13 @@ export function createShardedFileStore(config) {
         const results = await Promise.all(rows.map(async row => {
             try {
                 const text = await readFile(shardFileName(row.id));
-                if (text === null) return { id: row.id, reason: 'missing' };
+                if (text === null) {
+                    // Пустой шард, удалённый официальным маршрутом (empty-shard
+                    // cleanup), легитимно отсутствует: строка с count 0 не
+                    // несёт данных — пропускаем вместо readonly.
+                    if (row.count === 0) return { id: row.id, reason: 'ok', records: [] };
+                    return { id: row.id, reason: 'missing' };
+                }
                 const parsed = parseShard(text, version);
                 if (parsed.reason === 'found' || parsed.reason === 'older') {
                     return { id: row.id, reason: 'ok', records: parsed.value };
@@ -506,7 +527,9 @@ export function createShardedFileStore(config) {
                 for (;;) {
                     const result = await detectAndLoadOnce();
                     if (result !== null) return result;
-                    await new Promise(resolve => setTimeout(resolve, PROBE_RETRY_MS));
+                    // unref: бесконечный probe-цикл не должен держать процесс Node
+                    // живым в тестах (см. unrefTimer в core.js).
+                    await new Promise(resolve => unrefTimer(setTimeout(resolve, PROBE_RETRY_MS)));
                 }
             })();
         }
@@ -769,14 +792,17 @@ export function createShardedFileStore(config) {
         let ok = true;
         let failed = null;
         const manifestBase = manifestBaseRows.map(row => ({ ...row }));
+        const deletionsThisRun = [];
         try {
             while (true) {
                 const id = dirtyShards.values().next().value;
                 if (id === undefined) break;
                 dirtyShards.delete(id);
                 if (emptyShards.has(id)) {
-                    // The shard lost every record: overwrite it empty (no
-                    // DELETE route) and drop it from the manifest.
+                    // The shard lost every record: neutralize it to records:[]
+                    // (гарантия от «воскрешения» сканом при неудаче delete),
+                    // drop it from the manifest; файл удаляется официальным
+                    // маршрутом после манифеста — см. deletionsThisRun ниже.
                     emptyShards.delete(id);
                     const started = Date.now();
                     try {
@@ -801,6 +827,14 @@ export function createShardedFileStore(config) {
                     shards = shards.filter(row => row.id !== id);
                     for (const [rid, sid] of recordShard) if (sid === id) recordShard.delete(rid);
                     manifestDirty = true;
+                    // Пустой файл больше не обязан гнить на диске: после
+                    // манифеста (без этой строки) файл удаляется официальным
+                    // маршрутом. Порядок важен — читатель, загрузивший старый
+                    // манифест до нашего DELETE, увидит файл (records: []) и
+                    // не упадёт в readonly; после нашего манифеста строка уже
+                    // не называет файл. Неудача DELETE — статус-кво (пустой
+                    // файл остаётся).
+                    deletionsThisRun.push(shardFileName(id));
                     continue;
                 }
                 try {
@@ -821,6 +855,22 @@ export function createShardedFileStore(config) {
                 } catch (cause) {
                     manifestDirty = true;
                     failed = { cause, shard: 'manifest' };
+                }
+            }
+            // Удаление пустых shard-файлов — строго ПОСЛЕ манифеста, который
+            // больше не называет их (см. комментарий в empty-ветке выше).
+            if (ok && !failed && deletionsThisRun.length) {
+                for (const name of deletionsThisRun) {
+                    try {
+                        await deleteDocFile(name);
+                        emit('store-write', { store: label, result: 'success', shard: name, entries: 0, deleted: true });
+                    } catch (cause) {
+                        // Статус-кво: пустой файл остаётся на диске (старое
+                        // поведение). Не проваливаем запись — данные уже
+                        // консистентны (манифест строку не называет).
+                        warn(`sharded-store[${label}]: empty shard delete failed (kept as records:[]): ${cause.message || cause}`);
+                        emit('store-write', { store: label, result: 'success', shard: name, entries: 0, deleted: false, level: 'warn' });
+                    }
                 }
             }
         } finally {

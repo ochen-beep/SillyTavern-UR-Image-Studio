@@ -58,7 +58,7 @@
  * docs/2026-10-03-sharded-file-store-design.md.
  */
 
-import { getCtx, log, warn } from './core.js';
+import { getCtx, log, warn, unrefTimer } from './core.js';
 import { recordDiagnosticEvent } from './diagnostic-events.js';
 
 /** Below this body size a keepalive unload flush is attempted (fetch keepalive cap ≈64KB). */
@@ -496,6 +496,11 @@ export function createFileStore(config) {
         });
         log(`file-store[${label}]: mode=file, loaded (${readResult}) — ${diagnostics.entries} entr(ies), ${diagnostics.bytes} bytes`);
 
+        // Правка >keepalive-пейлоада прошлой сессии дореплейтируется штатной
+        // записью (см. flushOnUnload): её данные не выбрасываются только потому,
+        // что не влезли в keepalive-запрос при выгрузке страницы.
+        replayStashedPayload();
+
         // A corrupt document is repaired with the empty mirror; a missing one
         // is not created until the first real mutation. An older-version
         // document was just adopted (lazy migration): rewrite it immediately so
@@ -517,7 +522,9 @@ export function createFileStore(config) {
                 for (;;) {
                     const result = await detectAndLoadOnce();
                     if (result !== null) return result;
-                    await new Promise(resolve => setTimeout(resolve, probeRetryMs));
+                    // unref: бесконечный probe-цикл не должен держать процесс Node
+                    // живым в тестах (см. unrefTimer в core.js).
+                    await new Promise(resolve => unrefTimer(setTimeout(resolve, probeRetryMs)));
                 }
             })();
         }
@@ -681,11 +688,65 @@ export function createFileStore(config) {
         return lastWriteOk;
     }
 
+    // ── Over-keepalive stash (unload → next session) ──
+
+    const STASH_PREFIX = 'uris_pending_write:';
+
+    /**
+     * Дореплей payload'а, отложенного прошлой сессией при выгрузке страницы
+     * (flushOnUnload: >keepaliveLimit не может ехать в keepalive-запросе).
+     * Ставится после загрузки зеркала: stash — это полное зеркало умирающей
+     * сессии, возвращается в него трёхсторонним слиянием (base = syncBase,
+     * server = текущее зеркало, local = stash — локальные правки умирающей
+     * сессии возвращаются, чужие параллельные записи выживают). Ключ в
+     * localStorage удаляется только после КОНФИРМЁННОЙ записи — сбой посреди
+     * реплея просто повторит его в следующей сессии (запись полнодокументная,
+     * идемпотентная).
+     */
+    function replayStashedPayload() {
+        if (typeof localStorage === 'undefined') return;
+        let raw = null;
+        try { raw = localStorage.getItem(`${STASH_PREFIX}${label}`); } catch { return; }
+        if (!raw) return;
+        try {
+            const stashed = JSON.parse(raw);
+            const dropStash = () => { try { localStorage.removeItem(`${STASH_PREFIX}${label}`); } catch { /* teardown */ } };
+            if (!stashed || stashed.name !== name || typeof stashed.data !== 'string') { dropStash(); return; }
+            const json = new TextDecoder().decode(Uint8Array.from(atob(stashed.data), c => c.charCodeAt(0)));
+            const doc = JSON.parse(json);
+            const stashedMirror = doc?.[key];
+            if (stashedMirror === undefined) { dropStash(); return; }
+            // null по контракту mergeServerValue = «слитый результат совпадает
+            // с local» — целевое состояние и есть stash (например, сервер
+            // пуст, а stash несёт чисто-локальные записи).
+            const merged = mergeServerValue(syncBase, clone(mirror), stashedMirror);
+            mirror = merged !== null ? merged : clone(stashedMirror);
+            syncBase = clone(mirror);
+            pendingPayload = buildPayload();
+            const job = writeJob || (writeJob = runWriteLoop());
+            void Promise.resolve(job).then(ok => {
+                if (ok) {
+                    dropStash();
+                    emit('store-unload-replay', { store: label, result: 'delivered', bytes: stashed.bytes ?? null });
+                } else {
+                    // stash остаётся — следующая сессия повторит реплей
+                    emit('store-unload-replay', { store: label, result: 'write-failed', level: 'warn' });
+                }
+            }).catch(() => { /* stash остаётся */ });
+        } catch (cause) {
+            // Битый stash — данные всё равно невосстановимы, убираем.
+            try { localStorage.removeItem(`${STASH_PREFIX}${label}`); } catch { /* teardown */ }
+            warn(`file-store[${label}]: stashed payload replay failed: ${cause?.message || cause}`);
+        }
+    }
+
     /**
      * Last-chance durability on page unload: re-send the newest unconfirmed
      * payload with `fetch keepalive` so the request may outlive the page. The
      * upload is a full-file atomic write, so this is idempotent. Bodies above
-     * the keepalive cap are skipped (logged, not silently dropped).
+     * the keepalive cap cannot ride keepalive: the full payload is stashed in
+     * localStorage и дореплейтируется следующей сессией (replayStashedPayload)
+     * — мутация больше не теряется только из-за размера.
      */
     function flushOnUnload() {
         if (mode !== 'file' || !pendingPayload) return;
@@ -698,8 +759,22 @@ export function createFileStore(config) {
         }
         const payload = pendingPayload;
         if (payload.data.length > keepaliveLimit) {
-            emit('store-unload-flush', { store: label, result: 'skipped', reason: 'over-keepalive-limit', bytes: payload.data.length });
-            warn(`file-store[${label}]: unload flush skipped, payload ${payload.data.length} bytes exceeds keepalive limit`);
+            // localStorage синхронен и переживает закрытие вкладки; ключ
+            // пер-стор (label). Квота: payload обычно ≤ несколько МБ.
+            let stashed = false;
+            try {
+                if (typeof localStorage !== 'undefined') {
+                    localStorage.setItem(`${STASH_PREFIX}${label}`, JSON.stringify({
+                        name: payload.name, data: payload.data, bytes: payload.bytes, at: Date.now(),
+                    }));
+                    stashed = true;
+                }
+            } catch { /* quota exceeded / disabled — fall through to old behavior */ }
+            emit('store-unload-flush', {
+                store: label, result: stashed ? 'stashed' : 'skipped',
+                reason: 'over-keepalive-limit', bytes: payload.data.length,
+            });
+            if (!stashed) warn(`file-store[${label}]: unload flush skipped, payload ${payload.data.length} bytes exceeds keepalive limit and stash failed`);
             return;
         }
         try {

@@ -50,6 +50,7 @@ import { ensureParamPresetStoreReady, flushParamPresetWrites } from './src/param
 import { ensureStudioStoreReady, flushStudioWrites } from './src/studio-scope.js';
 import { exportNetDump } from './src/netdump.js';
 import { activateBridge, deactivateBridge, markBridgeReady, markBridgeFailed } from './src/bridge.js';
+import { acquireSingletonLock, releaseSingletonLock } from './src/cross-tab.js';
 
 // ── Lifecycle hooks ──
 
@@ -105,6 +106,18 @@ async function init() {
     applyUiScale();
     applyFontScale();
     initNotifyUnlock();
+    // Кросс-табличный watchdog: сторы пишут файлы целиком без межвкладочной
+    // координации — вторая вкладка получает баннер о риске перетирания.
+    // Поддержки Web Locks нет — тихо продолжаем (старое поведение).
+    const lockState = await acquireSingletonLock();
+    if (lockState === 'busy') {
+        recordDiagnosticEvent({ event: 'cross-tab-lock-busy', level: 'warn', stage: 'storage' });
+        reportFailure({
+            scope: URIS_SCOPES.storage,
+            message: 'Расширение уже открыто в другой вкладке браузера. Изменения настроек, шаблонов и референсов могут перетирать друг друга — оставьте одну вкладку.',
+        });
+        toastr?.warning('UR Image Studio уже открыт в другой вкладке — возможна потеря правок. Подробности в ленте событий.', DISPLAY_NAME);
+    }
     await loadDiagnosticEvents();
     recordDiagnosticEvent({ event: 'session-start', details: { initialized: true } });
 
@@ -466,6 +479,7 @@ function bindSettingsPanel(host) {
  */
 function cleanup() {
     deactivateBridge();
+    releaseSingletonLock();
     unbindAbortUI();
     abortAllGenerations();
     if (state.queueAbort) state.queueAbort.abort();
