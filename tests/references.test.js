@@ -52,6 +52,8 @@ import {
     imageToDataUrl,
     loadReferenceImage,
     summarizeReference,
+    wireBodyBytes,
+    fitReferencesToWireBudget,
 } from '../src/references.js';
 import { ingestReferenceImage } from '../src/references.js';
 
@@ -521,3 +523,83 @@ test('loadReferenceImage reads a canonical native path without the CORS proxy', 
     }
 });
 
+
+// ── Wire-copy fitting for body-limited connections ──
+
+const pngRef = (kb, name = 'ref') => {
+    const data = 'A'.repeat(kb * 1024);
+    return { dataUrl: `data:image/png;base64,${data}`, mimeType: 'image/png', data, description: name };
+};
+const jpegRef = kb => {
+    const data = 'B'.repeat(kb * 1024);
+    return { dataUrl: `data:image/jpeg;base64,${data}`, mimeType: 'image/jpeg', data };
+};
+// Тестовый шов вместо canvas: JPEG-копия вдвое короче исходного data URL.
+const fakeFlatten = async reference => {
+    const data = reference.data.slice(0, Math.ceil(reference.data.length / 2));
+    return { ...reference, dataUrl: `data:image/jpeg;base64,${data}`, mimeType: 'image/jpeg', data };
+};
+
+test('wireBodyBytes sums data URL lengths, prompt bytes and the envelope slack', () => {
+    const refs = [pngRef(1), jpegRef(2)];
+    const total = wireBodyBytes(refs, 'ok');
+    // dataUrl считается целиком, с префиксом: 'data:image/png;base64,' = 22,
+    // 'data:image/jpeg;base64,' = 23. Итого 1046 + 2071 + 2 байта промпта + слак.
+    assert.equal(total, (22 + 1024) + (23 + 2048) + 2 + 4096);
+});
+
+test('fitReferencesToWireBudget returns null when the set already fits', async () => {
+    const refs = [pngRef(10)];
+    assert.equal(await fitReferencesToWireBudget(refs, 1024 * 1024, '', { flatten: fakeFlatten }), null);
+    assert.equal(await fitReferencesToWireBudget(refs, 0, '', { flatten: fakeFlatten }), null);
+    assert.equal(await fitReferencesToWireBudget([], 1024, '', { flatten: fakeFlatten }), null);
+    assert.equal(await fitReferencesToWireBudget(refs, null, '', { flatten: fakeFlatten }), null);
+});
+
+test('fit flattens the fattest PNG first and keeps the thin PNG transparent', async () => {
+    // 600KB + 400KB PNG + 4KB slack ≈ 1012KB — не влезает в 900KB, влезает
+    // после сплощивания самого жирного (→300KB ⇒ ~712KB).
+    const fat = pngRef(600, 'fat');
+    const thin = pngRef(400, 'thin');
+    const fitted = await fitReferencesToWireBudget([fat, thin], 900 * 1024, '', { flatten: fakeFlatten });
+    assert.ok(fitted, 'expected a fitted copy');
+    assert.equal(fitted[0].mimeType, 'image/jpeg', 'fattest ref flattened');
+    assert.equal(fitted[1].mimeType, 'image/png', 'thin ref kept as PNG with alpha');
+    assert.ok(fitted[0] !== fat, 'original ref object untouched');
+    assert.equal(wireBodyBytes(fitted, '') <= 900 * 1024, true);
+    // Каноничный стор не изменился.
+    assert.equal(fat.mimeType, 'image/png');
+});
+
+test('fit never flattens JPEG references and flattens all when nothing else fits', async () => {
+    const a = jpegRef(500);
+    const b = jpegRef(490);
+    const fitted = await fitReferencesToWireBudget([a, b], 500 * 1024, '', { flatten: fakeFlatten });
+    // JPEG сплощать нечего: лучшее усилие — вернуть копии как есть, без замен.
+    assert.deepEqual(fitted, [a, b]);
+});
+
+test('fit stops as soon as the budget is met, not after flattening everything', async () => {
+    const calls = [];
+    const countingFlatten = async reference => {
+        calls.push(reference.description);
+        return fakeFlatten(reference);
+    };
+    const refs = [pngRef(600, 'a'), pngRef(600, 'b'), pngRef(20, 'c')];
+    // 600+600+20КБ dataUrl-ов + slack ≈ 1253КБ > 950КБ; после сплощивания
+    // самого жирного (→300КБ) остаётся ≈ 946КБ — бюджет закрыт, остальные
+    // PNG остаются прозрачными.
+    const fitted = await fitReferencesToWireBudget(refs, 950 * 1024, '', { flatten: countingFlatten });
+    assert.deepEqual(calls, ['a'], 'only the fattest ref needed flattening');
+    assert.equal(fitted[0].mimeType, 'image/jpeg');
+    assert.equal(fitted[1].mimeType, 'image/png');
+    assert.equal(fitted[2].mimeType, 'image/png');
+});
+
+test('fit returns the fully flattened best effort when even that cannot fit', async () => {
+    const refs = [pngRef(600, 'a'), pngRef(600, 'b')];
+    const fitted = await fitReferencesToWireBudget(refs, 100 * 1024, '', { flatten: fakeFlatten });
+    assert.equal(fitted.length, 2);
+    assert.ok(fitted.every(r => r.mimeType === 'image/jpeg'), 'ceiling: everything flattened');
+    assert.ok(fitted.every(r => wireBodyBytes(fitted, '') > 100 * 1024), 'still over budget, but no further tier');
+});

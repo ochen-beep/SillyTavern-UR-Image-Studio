@@ -324,6 +324,81 @@ export async function optimizeReferenceImage(input, options = {}) {
     }
 }
 
+// ── Wire-copy fitting for body-limited connections ──
+//
+// Некоторые шлюзы держат API за nginx с дефолтным client_max_body_size 1 МиБ
+// (наблюдено байт-в-байт на apiddt.com 2026-10-06: тело 1048576 Б → 400,
+// 1048577 Б → 413). Референс в JSON-теле едет как data URL и стоит ×4/3 от
+// бинарного размера, поэтому один жирный PNG выталкивает тело за лимит, хотя
+// тот же рисунок JPEG'ом помещается с запасом.
+//
+// Подгонка — только WIRE-TIME: каноничный референс в сторе остаётся PNG с
+// альфой, и провайдеры без выученного лимита получают ровно то, что получали
+// раньше. ponytail: флаттен в JPEG — единственный ярус; даунскейл ниже maxEdge
+// добавляем, только если какой-то провайдер отвергнет полностью сплощённое тело.
+
+/** Slack JSON-конверта вокруг data URL (model/prompt/size/n/скобки). */
+const WIRE_FIT_OVERHEAD_BYTES = 4096;
+
+/**
+ * Оценка размера JSON-тела диспетча с этими референсами. data URL — это и есть
+ * base64-представление в теле, так что .length точен; промпт меряем байтами.
+ */
+export function wireBodyBytes(references, prompt = '') {
+    const promptBytes = new TextEncoder().encode(String(prompt || '')).length;
+    let bytes = WIRE_FIT_OVERHEAD_BYTES + promptBytes;
+    for (const reference of references || []) bytes += reference?.dataUrl?.length || 0;
+    return bytes;
+}
+
+/**
+ * Перекодировать один референс в JPEG на белой подложке. Потеря альфы здесь —
+ * сам смысл операции (платим прозрачностью за размер тела). Возвращает НОВЫЙ
+ * объект в форме parseDataUrl; вход нетронут.
+ */
+export async function flattenReferenceToJpeg(reference, { maxEdge = MAX_EDGE, quality = JPEG_QUALITY } = {}) {
+    const source = await inputToBlob(reference.dataUrl);
+    const decoded = await decodeBrowserBlob(source);
+    try {
+        const scale = Math.min(1, maxEdge / Math.max(decoded.width, decoded.height));
+        const width = Math.max(1, Math.round(decoded.width * scale));
+        const height = Math.max(1, Math.round(decoded.height * scale));
+        const canvas = nativeCanvas(width, height);
+        const context = canvas.getContext('2d');
+        context.fillStyle = '#ffffff';
+        context.fillRect(0, 0, width, height);
+        context.drawImage(decoded.image || decoded, 0, 0, width, height);
+        const blob = await canvasBlob(canvas, 'image/jpeg', quality);
+        const dataUrl = await blobToDataUrl(blob);
+        return { ...reference, dataUrl, mimeType: 'image/jpeg', data: dataUrlToBase64(dataUrl) };
+    } finally {
+        decoded.close?.();
+    }
+}
+
+/**
+ * Подогнать набор референсов под бюджет тела соединения, сплощая сначала
+ * самые тяжёлые PNG. Возвращает НОВЫЙ массив или null, когда набор и так
+ * влезает (частый случай: лимит не выучен или референсы мелкие). Альфа
+ * выживает на каждом референсе, которому флаттен не понадобился.
+ * `options.flatten` — тестовый шов, как в ingestReferenceImage.
+ */
+export async function fitReferencesToWireBudget(references, budgetBytes, prompt = '', { flatten = flattenReferenceToJpeg, maxEdge = MAX_EDGE } = {}) {
+    if (!Array.isArray(references) || !references.length) return null;
+    if (!Number.isSafeInteger(budgetBytes) || budgetBytes <= 0) return null;
+    if (wireBodyBytes(references, prompt) <= budgetBytes) return null;
+    const fitted = [...references];
+    const flattenOrder = fitted
+        .map((reference, index) => ({ reference, index }))
+        .filter(({ reference }) => reference?.mimeType === 'image/png')
+        .sort((a, b) => b.reference.dataUrl.length - a.reference.dataUrl.length);
+    for (const { index } of flattenOrder) {
+        if (wireBodyBytes(fitted, prompt) <= budgetBytes) break;
+        fitted[index] = await flatten(fitted[index], { maxEdge });
+    }
+    return fitted;
+}
+
 // ── Server upload ──
 
 export async function uploadReferenceImage(dataUrl, filename, subfolder = 'URIS_Refs') {

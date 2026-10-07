@@ -1,6 +1,7 @@
 // @ts-check
-import { trace } from '../core.js';
-import { summarizeReference } from '../references.js';
+import { trace, warn } from '../core.js';
+import { summarizeReference, fitReferencesToWireBudget, flattenReferenceToJpeg, wireBodyBytes } from '../references.js';
+import { wireBodyBudget, noteWireBodyLimit } from '../connection-evidence.js';
 import { imageResultFromValue, providerError, readJsonResponse, authProfileFor, referencesFor, requireInvocation, assertEncodedReferenceCount, diagnosticRequestOptions, ASPECT_SIZES } from './image-base.js';
 import { resolveEndpoint } from '../endpoint-utils.js';
 import { getProviderDescriptor } from '../provider-descriptors.js';
@@ -514,9 +515,37 @@ export async function generateOpenAIImage(input) {
   });
   const headers = { Authorization: `Bearer ${apiKey}` };
   if (references.length) {
-    // Цепочка диалектов редактирования (multipart → JSON → img2img) — уже
-    // возвращает разобранный payload с warnings.
-    return await dispatchEditWithDialectChain({ endpoint, route, request, references, transport, headers, signal, connection, diagnostic });
+    // Wire-copy подгонка под выученный лимит тела (HTTP 413): каноничные
+    // референсы в сторе не трогаем, уплотняется только копия для этого
+    // диспетча. Соединения без выученного лимита работают как раньше.
+    let wireReferences = references;
+    const budget = await wireBodyBudget(diagnostic?.connId);
+    if (budget) {
+      const fitted = await fitReferencesToWireBudget(references, budget, request?.prompt);
+      if (fitted) {
+        const flattened = fitted.filter((reference, index) => reference !== references[index]).length;
+        warn(`wire-body-limit: соединение ${diagnostic.connId}: тело ужато под бюджет ${budget} Б (${flattened} из ${references.length} референсов сплощено в JPEG, стор не тронут)`);
+        wireReferences = fitted;
+      }
+    }
+    try {
+      // Цепочка диалектов редактирования (multipart → JSON → img2img) — уже
+      // возвращает разобранный payload с warnings.
+      return await dispatchEditWithDialectChain({ endpoint, route, request, references: wireReferences, transport, headers, signal, connection, diagnostic });
+    } catch (error) {
+      // 413 — отказ шлюза ДО приложения (nginx client_max_body_size и родня):
+      // ничего не сгенерировано и не списано, поэтому ровно один ретрай с
+      // полностью сплощёнными референсами безопасен. Выученный бюджет затем
+      // держит все последующие диспетчи этого соединения под лимитом с старта.
+      if (error?.httpStatus !== 413) throw error;
+      const flattenedAll = await Promise.all(wireReferences.map(reference =>
+        reference.mimeType === 'image/png' ? flattenReferenceToJpeg(reference) : Promise.resolve(reference)));
+      if (flattenedAll.every((reference, index) => reference === wireReferences[index])) throw error;
+      const failedBytes = wireBodyBytes(wireReferences, request?.prompt);
+      warn(`wire-body-limit: HTTP 413 при теле ~${failedBytes} Б — бюджет выучен, референсы сплощены, отправка повторена один раз`);
+      if (diagnostic?.connId) noteWireBodyLimit(diagnostic.connId, failedBytes).catch(() => {});
+      return await dispatchEditWithDialectChain({ endpoint, route, request, references: flattenedAll, transport, headers, signal, connection, diagnostic });
+    }
   }
   const geometry = wireGeometry(route, request);
   const payload = generationBody(route, request, geometry);

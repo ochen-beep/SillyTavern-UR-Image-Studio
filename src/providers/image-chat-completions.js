@@ -1,6 +1,7 @@
 // @ts-check
-import { trace } from '../core.js';
-import { summarizeReference } from '../references.js';
+import { trace, warn } from '../core.js';
+import { summarizeReference, fitReferencesToWireBudget, flattenReferenceToJpeg, wireBodyBytes } from '../references.js';
+import { wireBodyBudget, noteWireBodyLimit } from '../connection-evidence.js';
 import { imageResultFromValue, providerError, readJsonResponse, authProfileFor, referencesFor, requireInvocation, assertEncodedReferenceCount, diagnosticRequestOptions } from './image-base.js';
 import { resolveEndpoint } from '../endpoint-utils.js';
 import { getProviderDescriptor } from '../provider-descriptors.js';
@@ -201,22 +202,35 @@ function paramWarnings({ mode, aspectRatio, imageSize, quality, prompt, unsuppor
   return warnings;
 }
 
-export async function generateChatCompletionImage(input) {
+export async function generateChatCompletionImage(input, { wireRetried = false } = {}) {
   const { endpoint, apiKey, route, request, transport, signal, connection = {}, diagnostic = null, parsedReferences } = requireInvocation(input);
+  const prompt = String(request?.prompt || '');
   const references = parsedReferences ?? referencesFor(request);
+  // Wire-copy подгонка под выученный лимит тела (HTTP 413): стор не трогаем,
+  // уплотняется только копия для этого диспетча. Соединения без выученного
+  // лимита работают как раньше — PNG с альфой уходит без изменений.
+  let wireReferences = references;
+  const budget = await wireBodyBudget(diagnostic?.connId);
+  if (references.length && budget) {
+    const fitted = await fitReferencesToWireBudget(references, budget, prompt);
+    if (fitted) {
+      const flattened = fitted.filter((reference, index) => reference !== references[index]).length;
+      warn(`wire-body-limit: соединение ${diagnostic.connId}: тело ужато под бюджет ${budget} Б (${flattened} из ${references.length} референсов сплощено в JPEG, стор не тронут)`);
+      wireReferences = fitted;
+    }
+  }
   const bindingText = (request?.referenceBindings || []).map(binding =>
     `Reference image ${binding.index} corresponds to "${binding.label}". Use it as the visual reference for that subject.`
   );
-  const prompt = String(request?.prompt || '');
   const content = [
     { type: 'text', text: prompt },
-    ...references.flatMap((reference, index) => [
+    ...wireReferences.flatMap((reference, index) => [
       ...(bindingText[index] ? [{ type: 'text', text: bindingText[index] }] : []),
       { type: 'image_url', image_url: { url: reference.dataUrl } },
     ]),
   ];
   const encodedReferences = content.filter(part => part?.type === 'image_url').length;
-  assertEncodedReferenceCount(references.length, encodedReferences, 'chat-image_url');
+  assertEncodedReferenceCount(wireReferences.length, encodedReferences, 'chat-image_url');
   const mode = route?.capabilities?.chatCompletionsImageConfig === 'openrouter' || route?.capabilities?.chatCompletionsImageConfig === 'new-api'
     ? route.capabilities.chatCompletionsImageConfig
     : null;
@@ -294,5 +308,20 @@ export async function generateChatCompletionImage(input) {
     bodyKind: 'json', wireFields, omittedFields, aspectChannel,
     ...(parameterSource ? { parameterSource } : {}),
   }), route, connection.timeoutMs);
-  return { ...parse(await readJsonResponse(response, 'Chat Completions', authProfileFor(route?.generationContract))), warnings };
+  try {
+    return { ...parse(await readJsonResponse(response, 'Chat Completions', authProfileFor(route?.generationContract))), warnings };
+  } catch (error) {
+    // 413 — отказ шлюза ДО приложения (nginx client_max_body_size и родня):
+    // ничего не сгенерировано и не списано, поэтому ровно один ретрай с
+    // полностью сплощёнными референсами безопасен. Выученный бюджет затем
+    // держит все последующие диспетчи этого соединения под лимитом с старта.
+    if (error?.httpStatus !== 413 || wireRetried || !wireReferences.length) throw error;
+    const flattenedAll = await Promise.all(wireReferences.map(reference =>
+      reference.mimeType === 'image/png' ? flattenReferenceToJpeg(reference) : Promise.resolve(reference)));
+    if (flattenedAll.every((reference, index) => reference === wireReferences[index])) throw error;
+    const failedBytes = wireBodyBytes(wireReferences, prompt);
+    warn(`wire-body-limit: HTTP 413 при теле ~${failedBytes} Б — бюджет выучен, референсы сплощены, отправка повторена один раз`);
+    if (diagnostic?.connId) noteWireBodyLimit(diagnostic.connId, failedBytes).catch(() => {});
+    return await generateChatCompletionImage({ ...input, parsedReferences: flattenedAll }, { wireRetried: true });
+  }
 }

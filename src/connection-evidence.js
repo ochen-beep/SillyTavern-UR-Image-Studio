@@ -63,3 +63,50 @@ export async function recordReferenceEvidence(input = {}) {
         return null;
     }
 }
+
+// ── Wire body budget (learned from HTTP 413) ──
+//
+// 413 от nginx/CDN — отказ ДО приложения: шлюз роняет тело раньше, чем
+// провайдер успевает что-то сгенерировать или списать (наблюдено байт-в-байт
+// на apiddt.com 2026-10-06). Факт принадлежит СОЕДИНЕНИЮ (фронтящий шлюз), а
+// не модели, поэтому живёт отдельным полем записи, а не в evidence[modelId],
+// у которого своя семантика dialect/refs.
+
+/** Запас под измеренным упавшим размером тела. */
+const WIRE_LIMIT_MARGIN = 0.9;
+
+/**
+ * Запомнить, что тело размером `bodyBytes` отвергнуто этим соединением с
+ * HTTP 413. Сохраняется 90 % упавшего размера как бюджет диспетча; бюджет
+ * только уменьшается: 413 — верхняя граница лимита провода, и повторное
+ * выучивание того же отказа не должно двигать бюджет вверх.
+ * Никогда не бросает — evidence не должен ломать генерацию.
+ */
+export async function noteWireBodyLimit(connectionId, bodyBytes) {
+    if (!connectionId || !Number.isSafeInteger(bodyBytes) || bodyBytes <= 0) return null;
+    try {
+        return await withLock(`evidence:${connectionId}`, async () => {
+            const conn = await getConnection(connectionId);
+            if (!conn) return null;
+            const limit = Math.floor(bodyBytes * WIRE_LIMIT_MARGIN);
+            const existing = conn.wireBodyLimitBytes;
+            if (Number.isSafeInteger(existing) && existing <= limit) return existing;
+            await saveConnection({ id: connectionId, wireBodyLimitBytes: limit });
+            return limit;
+        });
+    } catch {
+        return null;
+    }
+}
+
+/** Выученный бюджет тела для соединения, или null, если лимита нет. */
+export async function wireBodyBudget(connectionId) {
+    if (!connectionId) return null;
+    try {
+        const conn = await getConnection(connectionId);
+        const budget = conn?.wireBodyLimitBytes;
+        return Number.isSafeInteger(budget) && budget > 0 ? budget : null;
+    } catch {
+        return null;
+    }
+}
