@@ -1938,10 +1938,12 @@
 .uris-field-head { display: flex; align-items: center; justify-content: space-between; gap: 6px; margin-bottom: 2px; }
 .uris-field-head .uris-expand-btn { width: 22px; height: 22px; font-size: var(--uris-font-sm); }
 
-/* Контент popup-редактора (рендерится в ST-диалоге, не в нашем окне). */
-.uris-text-editor { display: flex; flex-direction: column; }
+/* Контент popup-редактора (рендерится в ST-диалоге, не в нашем окне).
+   Обёртка растягивается на .popup-content (аналог height100p у ядра в
+   chats.js), textarea добирает остаток высоты через flex: 1. */
+.uris-text-editor { display: flex; flex-direction: column; height: 100%; }
 .uris-text-editor-title { font-weight: 600; margin-bottom: 6px; }
-.uris-text-editor .maximized_textarea { width: 100%; min-height: 45vh; resize: vertical; }
+.uris-text-editor .maximized_textarea { width: 100%; flex: 1 1 auto; min-height: 45vh; resize: vertical; }
 
 /* ── Уведомления (вкладка «Настройки»): этап = тумблер + звук + ▶ ── */
 .uris-notify-row { display: flex; align-items: center; gap: 8px; margin: 4px 0; }
