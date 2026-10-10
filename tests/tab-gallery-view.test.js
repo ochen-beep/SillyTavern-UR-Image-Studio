@@ -91,9 +91,8 @@ test('клик по картинке карточки открывает про�
 });
 
 // v0.9.4: рендер галереи больше не сканирует ФС сервера — reconcile только
-// по явной кнопке «Обновить». Иначе каждое открытие вкладки = F+1 POST
-// /api/images/list (скан всех папок).
-test('рендер галереи не сканирует сервер; скан только по кнопке «Обновить»', async () => {
+// по явной кнопке. С v0.9.5 кнопка живёт в «Настройки → Данные и диагностика».
+test('рендер галереи не сканирует сервер; скан — кнопка «Обновить галерею» в настройках', async () => {
     const { document, root } = makeFakeDocument();
     globalThis.document = document;
     globalThis.document.body = root;
@@ -103,11 +102,18 @@ test('рендер галереи не сканирует сервер; скан
     await mod.render(root);
     assert.equal(root.querySelectorAll('.uris-card').length, 2, 'карточки приходят из индекса без скана');
     assert.deepEqual(listCalls, [], 'рендер не должен вызывать /api/images/list');
+    assert.equal(root.querySelector('#urisGalleryRefresh'), null, 'кнопки «Обновить» в тулбаре галереи больше нет');
 
-    root.querySelector('#urisGalleryRefresh').click();
+    // Кнопка переехала на вкладку настроек — скан запускается оттуда.
+    const { state } = await import('../src/core.js');
+    if (!state.settings) state.settings = { uiScale: 1, fontScale: 1 };
+    const settings = await import('../src/ui/tab-settings.js');
+    const sroot = document.createElement('div');
+    settings.render(sroot);
+    sroot.querySelector('#urisTabGalleryRefresh').click();
     await new Promise(resolve => setTimeout(resolve, 0));
     await new Promise(resolve => setTimeout(resolve, 0));
-    assert.ok(listCalls.length >= 1, 'кнопка «Обновить» запускает reconcile-скан');
+    assert.ok(listCalls.length >= 1, 'кнопка «Обновить галерею» в настройках запускает reconcile-скан');
 });
 
 // Подпись модели на миниатюре: карточка с modelId рендерит .uris-model-badge,

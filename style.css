@@ -667,7 +667,8 @@
 .uris-gallery-toolbar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 8px; }
 .uris-gallery-toolbar #urisGalleryCount { margin-right: auto; font-size: var(--uris-font); color: var(--uris-text-mut); }
 .uris-gallery-toolbar .uris-autosave-st { font-size: var(--uris-font); white-space: nowrap; }
-.uris-gallery-clear { width: auto; min-width: 0; min-height: 32px; margin-left: auto; flex: 0 0 auto; }
+/* Кнопки «Обновить/Очистить галерею» переехали в «Настройки → Данные и диагностика»
+   (.uris-settings-actions) — отдельных правил тулбара больше не нужно. */
 .uris-gallery-grid { display: grid; gap: 8px; grid-template-columns: repeat(3, 1fr); }
 .uris-card {
     border-radius: var(--uris-radius-card); overflow: hidden; position: relative;
@@ -737,14 +738,12 @@
     /* Кнопочные строки под плитками убраны: действия — долгим тапом по плитке
        (карточное меню, card-action-menu.js). Тап по плитке = просмотр. */
     .uris-card-actions { display: none; }
-    /* Тулбар — липкая компактная строка: счётчик слева, иконки 44px справа. */
+    /* Тулбар — липкая компактная строка со счётчиком (кнопки ушли в настройки). */
     .uris-gallery-toolbar {
         position: sticky; top: 0; z-index: 5;
         background: var(--uris-surface-card);
         margin-bottom: 0; padding: 4px 0;
     }
-    .uris-gallery-toolbar .uris-btn-label { display: none; }
-    .uris-gallery-toolbar .uris-btn { min-width: 44px; min-height: 44px; padding: 6px 10px; }
     /* Скроллтаб для 6+ вкладок на узком экране. Скроллбар скрыт, жест-подсказка
        не нужна: активная вкладка всегда автоматически доскролливается (tabs.js).
        scrollbar-width: none + ::-webkit-scrollbar — как у .uris-scroll-x. */
@@ -1887,31 +1886,6 @@
 }
 .uris-settings-actions { display: flex; flex-wrap: wrap; gap: 6px; }
 .uris-settings-actions .uris-btn { flex: 1 1 auto; }
-
-/* ── Панель «Хранилище» ──
-   Read-only отчёт: где какие данные лежат и сколько осталось в settings.json.
-   Позволяет проверить результат переезда без консоли. */
-.uris-store-list { display: flex; flex-direction: column; gap: 5px; margin-bottom: 8px; }
-.uris-store-row {
-    display: flex; align-items: baseline; gap: 8px;
-    font-size: var(--uris-font-sm); color: var(--uris-text-strong);
-}
-.uris-store-name {
-    flex: 1 1 auto; min-width: 0;
-    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-}
-.uris-store-mode {
-    flex: 0 0 auto; padding: 0 6px; border-radius: var(--uris-radius-pill);
-    border: 1px solid var(--uris-border-soft);
-    font-size: var(--uris-font-xs); text-transform: uppercase; letter-spacing: .04em;
-}
-.uris-store-mode-file { color: var(--uris-accent); border-color: var(--uris-accent); }
-.uris-store-mode-readonly { color: var(--uris-warn); border-color: var(--uris-warn); }
-.uris-store-mode-unknown { color: var(--uris-text-dim); opacity: var(--uris-o-70); }
-.uris-store-detail {
-    flex: 0 0 auto; font-size: var(--uris-font-xs); color: var(--uris-text-dim);
-    font-variant-numeric: tabular-nums;
-}
 
 /* ── Разворачиваемый редактор текста (кнопка у компактных полей) ──
    Паттерн ST: компактное поле + иконка fa-maximize -> большой popup-редактор

@@ -14,45 +14,13 @@ import { runExport, runImportInteractive } from '../data-port.js';
 import { exportDiagnosticDump, clearAllDiagnostics } from '../diagnostic-dump.js';
 import { exportNetDump } from '../netdump.js';
 import { reportFailure, URIS_SCOPES } from '../error-pool.js';
-import { listFileStores } from '../file-store.js';
+import { reconcileCards } from '../gallery-index.js';
+import { clearGallery } from '../storage.js';
+import { isStudioActive, resolveActiveChatId } from '../studio-scope.js';
 import { refreshActive, renderTabs } from './tabs.js';
 import { applyInlineRuntime } from './tab-media.js';
 
 const percent = (scale) => String(Math.round(scale * 100));
-
-/** Human-readable byte size for the storage panel. */
-function formatBytes(bytes) {
-    if (!Number.isFinite(bytes)) return '—';
-    if (bytes < 1024) return `${bytes} Б`;
-    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} КБ`;
-    return `${(bytes / (1024 * 1024)).toFixed(2)} МБ`;
-}
-
-const STORE_MODE_LABEL = { file: 'файл', readonly: 'только чтение', unknown: 'проверка…' };
-
-/**
- * Read-only storage report: where each data set lives (always a server file),
- * how big it is, and whether the last write landed. A 'readonly' badge is the
- * signal to act on — writes are being refused to protect data.
- */
-function storageRowsHtml() {
-    const row = (label, mode, detail) => `
-        <div class="uris-store-row">
-            <span class="uris-store-name">${escapeHtml(label)}</span>
-            <span class="uris-store-mode uris-store-mode-${escapeHtml(mode)}">${escapeHtml(STORE_MODE_LABEL[mode] || mode)}</span>
-            <span class="uris-store-detail">${escapeHtml(detail)}</span>
-        </div>`;
-
-    const rows = listFileStores().map(store => {
-        const parts = [];
-        if (Number.isFinite(store.entries)) parts.push(`${store.entries} зап.`);
-        parts.push(formatBytes(store.bytes));
-        if (store.lastWriteOk === false) parts.push('ошибка записи');
-        return row(store.label, store.mode, parts.join(' · '));
-    });
-
-    return rows.join('');
-}
 
 /**
  * Whether the engine supports standardized CSS zoom — the carrier of --uris-scale.
@@ -161,13 +129,10 @@ export function render(root) {
                     <button type="button" class="uris-btn uris-btn-outline" id="urisTabExportDiag"><i class="fa-solid fa-stethoscope"></i> Диагностика</button>
                     <button type="button" class="uris-btn uris-btn-outline" id="urisTabExportNet"><i class="fa-solid fa-network-wired"></i> Сетевой дамп</button>
                     <button type="button" class="uris-btn uris-btn-ghost" id="urisTabClearDiag"><i class="fa-solid fa-eraser"></i> Очистить</button>
+                    <button type="button" class="uris-btn uris-btn-outline" id="urisTabGalleryRefresh" title="Пересканировать папки на сервере: подхватить внешние добавления и пометить внешние удаления"><i class="fa-solid fa-rotate"></i> Обновить галерею</button>
+                    <button type="button" class="uris-btn uris-btn-danger" id="urisTabGalleryClear"><i class="fa-solid fa-trash"></i> Очистить галерею</button>
                 </div>
-                <small class="uris-hint">Диагностика содержит технические события и ошибки текущей сессии. Сетевой дамп выгружается отдельно и содержит только метаданные — без промптов и тел запросов/ответов; API-ключи и полные бинарные изображения не экспортируются.</small>
-            </section>
-            <section class="uris-settings-section">
-                <h3>Хранилище</h3>
-                <div class="uris-store-list" id="urisStoreList">${storageRowsHtml()}</div>
-                <small class="uris-hint">Данные (галерея, референсы, пресеты, шаблоны) лежат отдельными файлами на сервере SillyTavern — <code>data/&lt;user&gt;/user/files/</code>. В <code>settings.json</code> остаются только настройки. «Только чтение» означает отказ записи ради защиты данных — причина в диагностике.</small>
+                <small class="uris-hint">Диагностика содержит технические события и ошибки текущей сессии. Сетевой дамп выгружается отдельно и содержит только метаданные — без промптов и тел запросов/ответов; API-ключи и полные бинарные изображения не экспортируются. Рендер галереи сервер не сканирует — «Обновить галерею» запускает сверку с папками вручную; «Очистить галерею» удаляет генерации текущего чата (вне чата — студии).</small>
             </section>
         </div>`;
     bindScaleControls(root);
@@ -314,6 +279,33 @@ function bindDataActions(root) {
             error('exportNetDump:', e);
             reportFailure({ scope: URIS_SCOPES.netdump, message: e?.message || String(e), toast: true, toastText: 'Ошибка выгрузки сетевого дампа: ' + (e?.message || e), toastTitle: DISPLAY_NAME });
         });
+    });
+    // Галерея: reconcile только по явной кнопке (v0.9.4) — рендер вкладки
+    // галереи сервер не сканирует. refreshActive перерисовывает настройки
+    // с актуальным состоянием после действия.
+    root.querySelector('#urisTabGalleryRefresh')?.addEventListener('click', async () => {
+        try {
+            await reconcileCards();
+            toastr?.success('Галерея сверена с папками на сервере', DISPLAY_NAME);
+        } catch (e) {
+            error('reconcileCards:', e);
+            reportFailure({ scope: URIS_SCOPES.gallery, message: e?.message || String(e), toast: true, toastText: 'Обновление галереи: ' + (e?.message || e), toastTitle: DISPLAY_NAME });
+            return;
+        }
+        refreshActive();
+    });
+    root.querySelector('#urisTabGalleryClear')?.addEventListener('click', async () => {
+        const studio = isStudioActive();
+        if (!(await showConfirmModal(studio ? 'Очистить галерею студии?' : 'Очистить галерею этого чата?'))) return;
+        try {
+            await clearGallery(resolveActiveChatId());
+            toastr?.success(studio ? 'Галерея студии очищена' : 'Галерея чата очищена', DISPLAY_NAME);
+        } catch (e) {
+            error('clearGallery:', e);
+            reportFailure({ scope: URIS_SCOPES.gallery, message: e?.message || String(e), toast: true, toastText: 'Очистка галереи: ' + (e?.message || e), toastTitle: DISPLAY_NAME });
+            return;
+        }
+        refreshActive();
     });
     root.querySelector('#urisTabClearDiag')?.addEventListener('click', async () => {
         const confirmed = await showConfirmModal('Очистить всю диагностику?\n\nБудут удалены события, логи, ошибки, сетевой дамп и локальные recovery-записи. Recovery может описывать уже оплаченный запрос с неизвестным результатом; действие не отменяет запрос у провайдера.');

@@ -18,21 +18,16 @@ function ruleBodyFor(css, selector) {
     return match?.[1] || null;
 }
 
-test('gallery clear uses compact, right-aligned toolbar styling', () => {
-    const markup = read('src/ui/tab-gallery.js');
+test('gallery refresh/clear buttons live in settings «Данные и диагностика»', () => {
+    const gallery = read('src/ui/tab-gallery.js');
+    const settings = read('src/ui/tab-settings.js');
     const css = read('style.css');
-    const toolbar = ruleBodyFor(css, '.uris-gallery-toolbar');
-    const clear = ruleBodyFor(css, '.uris-gallery-clear');
-    const clearButton = markup.match(/<button\b[^>]*\bid="urisGalleryClear"[^>]*>/)?.[0];
-
-    assert.ok(clearButton);
-    assert.match(clearButton, /\buris-gallery-clear\b/);
-    assert.ok(toolbar);
-    assert.match(toolbar, /flex-wrap\s*:\s*wrap/);
-    assert.ok(clear);
-    assert.match(clear, /margin-left\s*:\s*auto/);
-    assert.match(clear, /min-height\s*:\s*32px/);
-    assert.match(clear, /flex\s*:\s*0\s+0\s+auto/);
+    // Кнопки переехали из тулбара галереи в раздел данных настроек (v0.9.5):
+    // тулбар остаётся счётчиком, старые классы/правила не должны оставаться.
+    assert.doesNotMatch(gallery, /urisGalleryRefresh|urisGalleryClear|uris-gallery-clear/);
+    assert.equal(ruleBodyFor(css, '.uris-gallery-clear'), null, 'мёртвое правило тулбара удалено');
+    assert.match(settings, /Данные и диагностика[\s\S]*id="urisTabGalleryRefresh"[\s\S]*id="urisTabGalleryClear"/,
+        'обе кнопки рендерятся в секции «Данные и диагностика», обновление раньше очистки');
 });
 
 test('gallery card loads the small variant lazily; grid renders in chunks', () => {

@@ -49,12 +49,13 @@ test('галерея: кнопочные строки карточек спря�
     assert.match(mobileRuleBody('.uris-card-actions'), /display:\s*none/);
 });
 
-test('галерея: тулбар липкий и компактный, подписи спрятаны', () => {
+test('галерея: тулбар липкий; кнопки ушли в настройки — мобильных правил кнопок нет', () => {
     const body = mobileRuleBody('.uris-gallery-toolbar');
     assert.match(body, /position:\s*sticky/);
     assert.match(body, /top:\s*0/);
-    assert.match(mobileRuleBody('.uris-gallery-toolbar .uris-btn-label'), /display:\s*none/);
-    assert.match(mobileRuleBody('.uris-gallery-toolbar .uris-btn'), /min-height:\s*44px/);
+    // Обновить/Очистить переехали в «Данные и диагностика» — компактные
+    // иконки-правила тулбара не должны оставаться мёртвыми.
+    assert.equal(css.includes('.uris-gallery-toolbar .uris-btn'), false);
 });
 
 test('карточное меню: шит снизу <768px, поповер без шита ≥768px', () => {
