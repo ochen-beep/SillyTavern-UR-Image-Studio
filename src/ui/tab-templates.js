@@ -29,7 +29,11 @@ async function renderActions(root) {
             // (unhandled promise rejection, no toast) and the feature looked dead.
             try {
                 if (button.dataset.createType === 'instruction') {
-                    await createInstructionTemplate({ name: 'Новый instruction' });
+                    // Refused write (readonly store) returns null instead of
+                    // throwing — surface it through the catch below, or the
+                    // click becomes a silent no-op.
+                    const created = await createInstructionTemplate({ name: 'Новый instruction' });
+                    if (!created) throw new Error('хранилище не сохранило шаблон (read-only сессия)');
                     refreshActive();
                 } else if (button.dataset.createType === 'description') {
                     await createTemplateFromDescription();
@@ -184,6 +188,7 @@ async function createTemplateFromDescription() {
     if (!parsed || typeof parsed.name !== 'string' || typeof parsed.instruction !== 'string') {
         throw new Error('Template description returned invalid JSON');
     }
-    await createInstructionTemplate({ name: parsed.name || 'Из описания', instruction: parsed.instruction });
+    const created = await createInstructionTemplate({ name: parsed.name || 'Из описания', instruction: parsed.instruction });
+    if (!created) throw new Error('хранилище не сохранило шаблон (read-only сессия)');
     refreshActive();
 }

@@ -2,7 +2,7 @@
 /**
  * Naistera image generation adapter.
  *
- * Contract (see docs/providers/naistera-contract.md):
+ * Contract (see docs/providers/naistera-api.md):
  *   POST /api/generate              { prompt, model, aspect_ratio, preset?, reference_objects? }
  *   GET  /api/generate/jobs/{job_id}   polling with the same bearer token
  *   `reference_objects`: `{ image: dataUrl, description? }[]` for image-capable models
