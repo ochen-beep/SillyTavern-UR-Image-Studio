@@ -419,6 +419,69 @@ test('gemini-native 200 OK without an image is a parse failure, whatever the sha
   }
 });
 
+test('gemini-interactions: input[] + response_format, refs in order, output_image parsed', async () => {
+  const transport = makeTransport(jsonResponse({ id: 'int_1', output_image: { mime_type: 'image/png', data: 'cG5n' } }));
+  const result = await invokeImageProvider({
+    endpoint: 'https://generativelanguage.googleapis.com/v1beta', apiKey: 'gem-key',
+    connection: { timeoutMs: 4300 },
+    route: route('gemini-interactions', 'gemini-nano-banana-2.1'),
+    request: { prompt: 'Combine', aspectRatio: '16:9', imageSize: '2K', references: [{ dataUrl: PNG }, { dataUrl: JPEG }] }, transport,
+  });
+
+  assert.deepEqual(result, { kind: 'dataUrl', value: 'data:image/png;base64,cG5n', mimeType: 'image/png', warnings: [] });
+  assert.equal(transport.calls[0].url, 'https://generativelanguage.googleapis.com/v1beta/interactions');
+  assert.equal(transport.calls[0].options.headers['x-goog-api-key'], 'gem-key');
+  // Майская схема 2026: модель в теле, store:false (латентность/приватность),
+  // геометрия в response_format — не в generationConfig.
+  assert.deepEqual(JSON.parse(transport.calls[0].options.body), {
+    model: 'gemini-nano-banana-2.1',
+    store: false,
+    input: [
+      { type: 'image', mime_type: 'image/png', data: 'cG5n' },
+      { type: 'image', mime_type: 'image/jpeg', data: 'anBlZw==' },
+      { type: 'text', text: 'Combine' },
+    ],
+    response_format: { type: 'image', aspect_ratio: '16:9', image_size: '2K' },
+  });
+  assert.equal(transport.calls[0].timeoutMs, 4300);
+});
+
+test('gemini-interactions: unsupported size dropped with warning; image found via steps', async () => {
+  // 2.1 знает 1K/2K/4K; 512 — эксклюзив 3.1-flash → параметр опускается.
+  const transport = makeTransport(jsonResponse({
+    id: 'int_2',
+    steps: [
+      { type: 'thought', summary: [{ type: 'text', text: 'thinking' }] },
+      { type: 'model_output', content: [{ type: 'image', mime_type: 'image/jpeg', data: 'anBlZw==' }] },
+    ],
+  }));
+  const result = await invokeImageProvider({
+    endpoint: 'https://relay.example', apiKey: 'k',
+    route: route('gemini-interactions', 'nano-banana-2.1'),
+    request: { prompt: 'Draw', imageSize: '512', references: [] }, transport,
+  });
+
+  assert.deepEqual(result, {
+    kind: 'dataUrl', value: 'data:image/jpeg;base64,anBlZw==', mimeType: 'image/jpeg',
+    warnings: [{ feature: 'Размер', details: 'размер 512 не поддерживается: модель nano-banana-2.1 поддерживает только 1K/2K/4K — параметр опущен.' }],
+  });
+  assert.deepEqual(JSON.parse(transport.calls[0].options.body).response_format, { type: 'image' });
+  // Базовый URL без /v1beta дополняется дескриптором.
+  assert.equal(transport.calls[0].url, 'https://relay.example/v1beta/interactions');
+});
+
+test('gemini-interactions: 200 OK without an image is a parse failure', async () => {
+  const transport = makeTransport(jsonResponse({ id: 'int_3', output_text: 'I cannot draw that.' }));
+  await assert.rejects(
+    invokeImageProvider({
+      endpoint: 'https://generativelanguage.googleapis.com/v1beta', apiKey: 'gem-key',
+      connection: {}, route: route('gemini-interactions', 'gemini-nano-banana-2.1'),
+      request: { prompt: 'Draw', references: [] }, transport,
+    }),
+    err => err.code === 'UPSTREAM_RESPONSE_INVALID' && /without an image/.test(err.message),
+  );
+});
+
 test('chat-completions sends multimodal content and parses message images', async () => {
   const transport = makeTransport(jsonResponse({ choices: [{ message: { images: [{ image_url: { url: PNG } }] } }] }));
   const result = await invokeImageProvider({

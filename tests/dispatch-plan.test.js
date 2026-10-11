@@ -118,7 +118,9 @@ test('dialectOrder: gemini-image on an openai gateway prefers chat-completions',
         dialectOrder('openai', MODEL_FAMILIES.GPT_IMAGE),
         ['openai-images', 'chat-completions'],
     );
-    assert.deepEqual(dialectOrder('gemini', MODEL_FAMILIES.GEMINI_IMAGE), ['gemini-native']);
+    // Второй рунг — interactions (NB 2.1+); первый диспатч остаётся
+    // gemini-native, рунг достижим только через evidence/override.
+    assert.deepEqual(dialectOrder('gemini', MODEL_FAMILIES.GEMINI_IMAGE), ['gemini-native', 'gemini-interactions']);
     assert.deepEqual(dialectOrder('openrouter', MODEL_FAMILIES.UNKNOWN), ['openrouter-images']);
 });
 

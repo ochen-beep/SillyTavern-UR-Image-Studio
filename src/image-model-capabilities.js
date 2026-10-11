@@ -30,6 +30,11 @@ const GEMINI_IMAGE_SIZE_TABLE = [
     [/flash[^/\s]*lite[^/\s]*image|image[^/\s]*lite/i, ['1K']],
     // 3.x pro: 1K/2K/4K.
     [/3[^/\s]*pro[^/\s]*image|nano[-_. ]?banana[-_. ]?pro/i, ['1K', '2K', '4K']],
+    // Nano Banana 2.1 (gemini-nano-banana-2.1, relay alias nano-banana-2.1):
+    // 1K/2K/4K — 512 остался эксклюзивом 3.1-flash (ai.google.dev, 2026-10).
+    // Правило стоит ВЫШЕ nano-banana-2: суффикс ".1" обязан матчиться раньше,
+    // иначе 2.1 унаследует несуществующий тир 512.
+    [/nano[-_. ]?banana[-_. ]?2[._-]?\d/i, ['1K', '2K', '4K']],
     // 3.x flash image (incl. the "nano banana 2" aliases): 512/1K/2K/4K.
     [/3[^/\s]*flash[^/\s]*image|nano[-_. ]?banana[-_. ]?2/i, ['512', '1K', '2K', '4K']],
     // 2.x generation: aspectRatio exists, imageSize does not (the tier was

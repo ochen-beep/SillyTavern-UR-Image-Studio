@@ -1,6 +1,6 @@
 // @ts-check
 import { generateChatCompletionImage } from './providers/image-chat-completions.js';
-import { generateGeminiImage } from './providers/image-gemini.js';
+import { generateGeminiImage, generateGeminiInteractionsImage } from './providers/image-gemini.js';
 import { generateOpenAIImage } from './providers/image-openai.js';
 import { generateOpenRouterImage } from './providers/image-openrouter.js';
 import { generatePollinationsImage } from './providers/image-pollinations.js';
@@ -12,6 +12,7 @@ import * as defaultTransport from './image-transport.js';
 const adapters = Object.freeze({
   'openai-images': generateOpenAIImage,
   'gemini-native': generateGeminiImage,
+  'gemini-interactions': generateGeminiInteractionsImage,
   'chat-completions': generateChatCompletionImage,
   'openrouter-images': generateOpenRouterImage,
   'pollinations-images': generatePollinationsImage,

@@ -31,6 +31,7 @@ const DIALECT_OPTIONS = [
     ['', 'Авто (рекомендуется)'],
     [CONTRACTS.CHAT_COMPLETIONS, 'chat-completions (image_url)'],
     [CONTRACTS.GEMINI_NATIVE, 'gemini-native (inlineData)'],
+    [CONTRACTS.GEMINI_INTERACTIONS, 'gemini-interactions (Nano Banana 2.1+)'],
     [CONTRACTS.OPENAI_IMAGES, 'openai-images (generations/edits)'],
     [CONTRACTS.OPENROUTER_IMAGES, 'openrouter-images'],
     [CONTRACTS.POLLINATIONS_IMAGES, 'Pollinations (sk_ token)'],

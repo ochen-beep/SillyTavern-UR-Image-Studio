@@ -301,9 +301,12 @@ export function classifyUrl(rawUrl) {
     if (/:generateContent/i.test(pathAndQuery)) {
         // Gemini text-LLM and image-LLM share the URL: distinguish by model name.
         // If the path contains "-image" → image-generation; otherwise text-LLM.
-        const imageModel = /-image\b|imagen|\bimage\b|flash-image|pro-image/i.test(pathAndQuery);
+        const imageModel = /-image\b|imagen|\bimage\b|flash-image|pro-image|nano[-_. ]?banana/i.test(pathAndQuery);
         return { skip: false, kind: imageModel ? 'image-gemini' : 'text-llm', url: scrubUrl(url), host };
     }
+    // Interactions API (Nano Banana 2.1+): модель уходит в теле, в URL только
+    // путь. Из этого расширения путь сегодня дёргает только image-адаптер.
+    if (/\/v1beta\/interactions/i.test(pathAndQuery)) return { skip: false, kind: 'image-gemini', url: scrubUrl(url), host };
     if (/\/v1\/chat\/completions/i.test(pathAndQuery)) return { skip: false, kind: 'text-llm', url: scrubUrl(url), host };
     if (/\/v1beta\/models\//i.test(pathAndQuery)) {
         // Default Gemini path — text-LLM (flash/pro without -image).

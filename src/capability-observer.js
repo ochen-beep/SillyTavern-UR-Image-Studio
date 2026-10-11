@@ -70,6 +70,8 @@ const REFERENCE_MODE_BY_CONTRACT = {
   'chat-completions': refs => refs.length ? 'multimodal-data-url' : 'none',
   // Gemini: references are inlineData inline base64.
   'gemini-native': refs => refs.length ? 'inline-data' : 'none',
+  // Gemini Interactions: references are input[] image items (base64).
+  'gemini-interactions': refs => refs.length ? 'inline-data' : 'none',
   // OpenRouter: references are input_references image_url with data URLs.
   'openrouter-images': refs => refs.length ? 'multimodal-data-url' : 'none',
   'pollinations-images': refs => refs.length ? 'unsupported' : 'none',
@@ -87,6 +89,7 @@ const OPERATION_BY_CONTRACT = {
   },
   'chat-completions': () => 'chat-image',
   'gemini-native': () => 'gemini-inline',
+  'gemini-interactions': () => 'gemini-interactions',
   'openrouter-images': () => 'openrouter-generate',
   'pollinations-images': () => 'pollinations-generate',
   'naistera': () => 'naistera-generate',

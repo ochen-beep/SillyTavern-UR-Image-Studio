@@ -95,6 +95,10 @@ test('classifyUrl: skip для /api/secrets и probe example.com', () => {
 test('classifyUrl: Gemini generateContent с -image → image-gemini; без → text-llm', () => {
     assert.equal(classifyUrl('https://relay.example/v1beta/models/gemini-3.1-flash-image:generateContent').kind, 'image-gemini');
     assert.equal(classifyUrl('https://relay.example/v1beta/models/gemini-3-pro:generateContent').kind, 'text-llm');
+    // Имя без слова «image» (Nano Banana 2.1) тоже классифицируется как image.
+    assert.equal(classifyUrl('https://relay.example/v1beta/models/gemini-nano-banana-2.1:generateContent').kind, 'image-gemini');
+    // Interactions API: модель в теле, классификация по пути.
+    assert.equal(classifyUrl('https://generativelanguage.googleapis.com/v1beta/interactions').kind, 'image-gemini');
 });
 
 test('classifyUrl: proxy-путь декодируется', () => {

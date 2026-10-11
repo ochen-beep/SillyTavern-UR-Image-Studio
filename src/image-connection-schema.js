@@ -4,6 +4,7 @@ import { normalizeReferenceCap } from './reference-limits.js';
 export const CONTRACTS = Object.freeze({
   OPENAI_IMAGES: 'openai-images',
   GEMINI_NATIVE: 'gemini-native',
+  GEMINI_INTERACTIONS: 'gemini-interactions',
   CHAT_COMPLETIONS: 'chat-completions',
   OPENROUTER_IMAGES: 'openrouter-images',
   POLLINATIONS_IMAGES: 'pollinations-images',
@@ -100,6 +101,7 @@ const SECRET_SHAPED_CAPABILITY_KEY = /(?:api[_-]?key|authorization|token|secret|
 const NULLABLE_CAPABILITY_FIELDS = new Set(['maxReferences', ...STRING_LIST_CAPABILITY_FIELDS]);
 const REMOTE_METADATA_FIELDS = Object.freeze({
   [CONTRACTS.GEMINI_NATIVE]: new Set(['geminiApiVersion', 'authStrategy', 'versionedBase']),
+  [CONTRACTS.GEMINI_INTERACTIONS]: new Set(['geminiApiVersion', 'authStrategy', 'versionedBase']),
   [CONTRACTS.OPENROUTER_IMAGES]: new Set(['providerTag', 'providerName', 'supportedParameters']),
   [CONTRACTS.POLLINATIONS_IMAGES]: new Set(['providerName', 'catalogSource', 'generationUnverified']),
   [CONTRACTS.NAISTERA]: new Set(['providerName', 'catalogSource', 'mediaKind', 'generationUnverified']),

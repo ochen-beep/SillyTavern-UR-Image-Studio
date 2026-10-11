@@ -132,7 +132,11 @@ const DIALECT_ORDER = {
     [API_SHAPES.NAISTERA]: { default: [CONTRACTS.NAISTERA] },
     [API_SHAPES.COMFYUI]: { default: [D.COMFYUI] },
     [API_SHAPES.GEMINI]: {
-        default: [D.GEMINI_NATIVE],
+        // Interactions — второй рунг (документированная поверхность NB 2.1+).
+        // Первый диспатч всегда gemini-native: generateContent остаётся
+        // поддерживаемым Google, а рунг ниже достижим только через evidence
+        // после структурного отказа первого или явный override пользователя.
+        default: [D.GEMINI_NATIVE, D.GEMINI_INTERACTIONS],
     },
     [API_SHAPES.OPENROUTER]: {
         default: [D.OPENROUTER_IMAGES],
@@ -293,6 +297,7 @@ export function resolveDispatchPlan(connection, options = {}) {
 
 const REFERENCE_ENCODINGS = Object.freeze({
     [CONTRACTS.GEMINI_NATIVE]: 'inlineData (gemini-native)',
+    [CONTRACTS.GEMINI_INTERACTIONS]: 'input[] image (gemini-interactions)',
     [CONTRACTS.CHAT_COMPLETIONS]: 'image_url-части (chat-completions)',
     [CONTRACTS.OPENAI_IMAGES]: 'images[] (openai-images)',
     [CONTRACTS.OPENROUTER_IMAGES]: 'input_references (openrouter)',

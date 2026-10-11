@@ -16,6 +16,7 @@ const NAISTERA_CONTRACT = 'naistera';
 const COMFYUI_CONTRACT = 'comfyui';
 const OPENAI_IMAGES_CONTRACT = 'openai-images';
 const GEMINI_NATIVE_CONTRACT = 'gemini-native';
+const GEMINI_INTERACTIONS_CONTRACT = 'gemini-interactions';
 const CHAT_COMPLETIONS_CONTRACT = 'chat-completions';
 const OPENROUTER_IMAGES_CONTRACT = 'openrouter-images';
 
@@ -136,6 +137,27 @@ export const PROVIDER_DESCRIPTORS = Object.freeze({
         auth: Object.freeze({
             // Стратегия выбирается пробой «Проверить» (x-goog-api-key у Google,
             // bearer у релеев); дескриптор требует только наличия материала.
+            required: true,
+            scheme: 'bearer|x-goog-api-key',
+        }),
+    }),
+    // Interactions API (v1beta/interactions) — документированная поверхность
+    // Nano Banana 2.1+: модель уходит в ТЕЛЕ (model), а не в пути; геометрия
+    // живёт в response_format, а не в generationConfig. Тот же normalize/base
+    // и та же двойная auth-стратегия, что у gemini-native.
+    [GEMINI_INTERACTIONS_CONTRACT]: Object.freeze({
+        id: GEMINI_INTERACTIONS_CONTRACT,
+        defaultEndpoint: 'https://generativelanguage.googleapis.com',
+        endpoint: Object.freeze({
+            normalize: raw => {
+                const base = stripTrailingSlashes(raw);
+                return base ? withVersionSuffix(base, '/v1beta', /\/v1(?:beta)?$/i) : null;
+            },
+            generationPath: '/interactions',
+            modelsPath: '/models',
+            invalidMessage: 'Gemini Interactions endpoint is required.',
+        }),
+        auth: Object.freeze({
             required: true,
             scheme: 'bearer|x-goog-api-key',
         }),

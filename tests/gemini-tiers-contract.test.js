@@ -25,6 +25,8 @@ const CANONICAL_GEMINI_IMAGE_MODELS = [
     'nano-banana',
     'nano-banana-2',
     'nano-banana-pro',
+    'gemini-nano-banana-2.1',
+    'nano-banana-2.1',
 ];
 
 test('таблицы реф-лимитов и size-тиров Gemini знают одни и те же поколения', () => {
@@ -50,6 +52,12 @@ test('согласованная семантика поколений: lite —
     const two = 'gemini-2.5-flash-image';
     assert.deepEqual(supportedImageSizesFor(two), [], '2.x: параметра размера нет');
     assert.equal(maxReferencesFor(two), 3);
+    // 2.1 (2026-10): 1K/2K/4K, без 512; новое правило не должно затенить
+    // предыдущее поколение — plain nano-banana-2 остаётся с 512.
+    const nb21 = 'gemini-nano-banana-2.1';
+    assert.deepEqual(supportedImageSizesFor(nb21), ['1K', '2K', '4K'], '2.1: без 512 — он эксклюзив 3.1-flash');
+    assert.equal(maxReferencesFor(nb21), 14, '2.1: 10 объектов + 4 персонажа');
+    assert.deepEqual(supportedImageSizesFor('nano-banana-2'), ['512', '1K', '2K', '4K']);
 });
 
 test('неизвестные модели не запираются ни одной таблицей (null = пермиссивно)', () => {
