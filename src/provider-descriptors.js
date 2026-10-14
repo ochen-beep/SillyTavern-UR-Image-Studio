@@ -19,6 +19,7 @@ const GEMINI_NATIVE_CONTRACT = 'gemini-native';
 const GEMINI_INTERACTIONS_CONTRACT = 'gemini-interactions';
 const CHAT_COMPLETIONS_CONTRACT = 'chat-completions';
 const OPENROUTER_IMAGES_CONTRACT = 'openrouter-images';
+const CLOUDFLARE_CONTRACT = 'cloudflare-workers-ai';
 
 export const PROVIDER_DESCRIPTORS = Object.freeze({
     [POLLINATIONS_CONTRACT]: Object.freeze({
@@ -194,6 +195,41 @@ export const PROVIDER_DESCRIPTORS = Object.freeze({
             invalidMessage: 'OpenRouter endpoint must be the official origin or end in /api/v1.',
         }),
         auth: Object.freeze({ required: true, scheme: 'bearer' }),
+    }),
+    // Cloudflare Workers AI (docs/providers/cloudflare-workers-ai.md): канонический
+    // base включает account ID — модель уходит в путь генерации (/ai/run/<model>),
+    // каталог — /ai/models/search. Ответ JSON (base64) или бинарный — решает
+    // адаптер по Content-Type + магическим байтам.
+    [CLOUDFLARE_CONTRACT]: Object.freeze({
+        id: CLOUDFLARE_CONTRACT,
+        defaultEndpoint: 'https://api.cloudflare.com/client/v4/accounts/',
+        endpoint: Object.freeze({
+            // Принимает: origin + /client/v4/accounts/<id> (с хвостами типа
+            // /ai/run/... — обрезаются до корня аккаунта). Без account ID —
+            // null → invalidMessage.
+            normalize: raw => {
+                const base = stripTrailingSlashes(raw);
+                if (!base) return null;
+                const match = /^(https?:\/\/[^/]+)\/client\/v4\/accounts\/([^/]+)/i.exec(base);
+                if (!match) return null;
+                return `${match[1]}/client/v4/accounts/${match[2]}`;
+            },
+            // generationPath заканчивается слэшем: адаптер дописывает model id
+            // БЕЗ интерполяции — id вида @cf/<org>/<name> содержат слэши.
+            generationPath: '/ai/run/',
+            modelsPath: '/ai/models/search',
+            invalidMessage: 'Cloudflare endpoint must include the account ID: https://api.cloudflare.com/client/v4/accounts/<ACCOUNT_ID>.',
+        }),
+        auth: Object.freeze({
+            required: true,
+            scheme: 'bearer',
+            statusCodes: Object.freeze({ 401: 'AUTH_INVALID', 403: 'AUTH_EXPIRED' }),
+            missingError: Object.freeze({
+                code: 'CLOUDFLARE_TOKEN_REQUIRED',
+                message: 'Cloudflare Workers AI requires an API token (with Workers AI permissions) in the connection Key field.',
+            }),
+        }),
+        parameters: Object.freeze({}),
     }),
 });
 

@@ -9,7 +9,7 @@ A [SillyTavern](https://docs.sillytavern.app/) extension that generates images f
 ## Features
 
 - Two-stage pipeline: a scene-first image prompt built from the chat by a text LLM, then image generation — plus a manual mode where only your prompt is used.
-- Image sources (browser-side connections): OpenAI Images (DALL·E / gpt-image), Gemini native, OpenRouter Images, image-capable Chat Completions gateways (both the OpenRouter-style `image_config` and the `new-api` `extra_body` dialect used by most relay gateways), Pollinations, Naistera, and a local ComfyUI server (workflow-based: built-in txt2img/img2img graphs or your own «Export (API)» JSON with `%prompt%`/`%seed%`/`%model%`/`%width%`/`%height%` placeholders; references are uploaded via `/upload/image` into `LoadImage` nodes).
+- Image sources (browser-side connections): OpenAI Images (DALL·E / gpt-image), Gemini native, OpenRouter Images, image-capable Chat Completions gateways (both the OpenRouter-style `image_config` and the `new-api` `extra_body` dialect used by most relay gateways), Pollinations, Naistera, Cloudflare Workers AI (free daily quota of 10,000 neurons — dozens of FLUX.1-schnell images a day), and a local ComfyUI server (workflow-based: built-in txt2img/img2img graphs or your own «Export (API)» JSON with `%prompt%`/`%seed%`/`%model%`/`%width%`/`%height%` placeholders; references are uploaded via `/upload/image` into `LoadImage` nodes).
 - Stage 1 sources: a Connection Manager profile (routed through the ST server — no CORS hassle) or a custom OpenAI-compatible / Gemini endpoint.
 - Reference images: a pool with folders and chat binding, batch upload, crop, per-generation send mode, and provider reference caps.
 - Gallery: images are stored in SillyTavern's native gallery with a server-side metadata index; a full-screen viewer (PhotoSwipe) with crop, "send to references" and copy actions.
@@ -80,7 +80,7 @@ Stage 1 (`src/text-api.js`) calls the text LLM with a template-built instruction
 
 #### Image connections and contracts
 
-A connection states its contract explicitly (`src/image-connection-schema.js`): `openai-images`, `gemini-native`, `openrouter-images`, `chat-completions` (with the optional `image_config` dialect), `pollinations-images`, `naistera`. A model name does not prove a protocol: the same model can want multipart on one gateway and JSON on another, so the edits protocol is stated per connection too. The probe (`Проверить`) records what the endpoint actually supports; capability facts (`src/capability-observer.js`) turn "model rejected the request" into human-readable constraints instead of generic errors. Secret fields are stripped from every export and dump.
+A connection states its contract explicitly (`src/image-connection-schema.js`): `openai-images`, `gemini-native`, `openrouter-images`, `chat-completions` (with the optional `image_config` dialect), `pollinations-images`, `naistera`, `cloudflare-workers-ai`. A model name does not prove a protocol: the same model can want multipart on one gateway and JSON on another, so the edits protocol is stated per connection too. The probe (`Проверить`) records what the endpoint actually supports; capability facts (`src/capability-observer.js`) turn "model rejected the request" into human-readable constraints instead of generic errors. Secret fields are stripped from every export and dump.
 
 #### Storage
 

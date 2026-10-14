@@ -112,6 +112,24 @@ test('comfyui: хвостовой /api снимается, порт сохран
     assert.throws(() => resolveEndpoint(d, ''), e => e.code === 'INVALID_ENDPOINT' && /ComfyUI endpoint is required\./.test(e.message));
 });
 
+test('cloudflare-workers-ai: base обязан включать account ID, хвосты /ai/run обрезаются', () => {
+    const d = D('cloudflare-workers-ai');
+    assertSame(d, [
+        ['https://api.cloudflare.com/client/v4/accounts/abc123', 'https://api.cloudflare.com/client/v4/accounts/abc123'],
+        ['https://api.cloudflare.com/client/v4/accounts/abc123/', 'https://api.cloudflare.com/client/v4/accounts/abc123'],
+        ['https://api.cloudflare.com/client/v4/accounts/abc123///', 'https://api.cloudflare.com/client/v4/accounts/abc123'],
+        // Полный run-URL вставили в поле адреса — обрезается до корня аккаунта.
+        ['https://api.cloudflare.com/client/v4/accounts/abc123/ai/run/@cf/x/y', 'https://api.cloudflare.com/client/v4/accounts/abc123'],
+    ]);
+    // Без account ID — отказ с подсказкой.
+    for (const raw of ['', 'https://api.cloudflare.com', 'https://api.cloudflare.com/client/v4']) {
+        assert.throws(() => resolveEndpoint(d, raw), e => e.code === 'INVALID_ENDPOINT' && /account ID/.test(e.message));
+    }
+    const base = resolveEndpoint(d, 'https://api.cloudflare.com/client/v4/accounts/abc123');
+    assert.equal(`${base}${d.endpoint.generationPath}@cf/x/y`, 'https://api.cloudflare.com/client/v4/accounts/abc123/ai/run/@cf/x/y');
+    assert.equal(`${base}${d.endpoint.modelsPath}?task=Text-to-Image`, 'https://api.cloudflare.com/client/v4/accounts/abc123/ai/models/search?task=Text-to-Image');
+});
+
 test('grep-инвариант (пункт 2.3): регэксп /pollinations|naistera/i по display name удалён из image-base', async () => {
     const src = await readFile(new URL('../src/providers/image-base.js', import.meta.url), 'utf8');
     assert.doesNotMatch(src, /pollinations\|naistera/i, 'isBearerContract больше не матчит display name');

@@ -17,7 +17,7 @@ import { modelFailureStreak } from '../capability-observer.js';
 import { getProviderDescriptor } from '../provider-descriptors.js';
 import { validatePollinationsToken } from '../providers/image-pollinations.js';
 import { validateNaisteraToken } from '../providers/image-naistera.js';
-import { COMFYUI_DEFAULT_WORKFLOW_TXT2IMG, COMFYUI_DEFAULT_WORKFLOW_IMG2IMG, summarizeWorkflow } from '../providers/image-comfyui.js';
+import { COMFYUI_DEFAULT_WORKFLOW_TXT2IMG, COMFYUI_DEFAULT_WORKFLOW_IMG2IMG, summarizeWorkflow, readWorkflowFile } from '../providers/image-comfyui.js';
 import { getVisibleModelChoices, partitionLikelyImageModels } from '../dispatch-plan.js';
 import { reportFailure, URIS_SCOPES } from '../error-pool.js';
 import { showConfirmModal, log, escapeHtml } from '../core.js';
@@ -37,6 +37,7 @@ const DIALECT_OPTIONS = [
     [CONTRACTS.POLLINATIONS_IMAGES, 'Pollinations (sk_ token)'],
     [CONTRACTS.NAISTERA, 'Naistera (токен из Telegram-бота)'],
     [CONTRACTS.COMFYUI, 'ComfyUI (локальный workflow)'],
+    [CONTRACTS.CLOUDFLARE_WORKERS_AI, 'Cloudflare Workers AI (API token)'],
 ];
 
 function modelPartition(draft) {
@@ -212,7 +213,7 @@ export function renderServerConnectionForm(draft = {}, options = {}) {
         </div>
         <div class="uris-preset-card-body">
             <div class="uris-row"><label>Адрес</label><input class="text_pole uris-server-endpoint" type="url" value="${escapeHtml(endpoint)}" placeholder="https://api.example.com/v1"></div>
-            <div class="uris-row"><label>Ключ</label><input class="text_pole uris-server-api-key" type="password" value="${escapeHtml(draft.apiKey || '')}" placeholder="${escapeHtml(overrides.dialect === CONTRACTS.POLLINATIONS_IMAGES ? 'sk_...' : overrides.dialect === CONTRACTS.NAISTERA ? 'Токен из Telegram-бота' : overrides.dialect === CONTRACTS.COMFYUI ? 'не требуется' : 'Ключ API')}"></div>
+            <div class="uris-row"><label>Ключ</label><input class="text_pole uris-server-api-key" type="password" value="${escapeHtml(draft.apiKey || '')}" placeholder="${escapeHtml(overrides.dialect === CONTRACTS.POLLINATIONS_IMAGES ? 'sk_...' : overrides.dialect === CONTRACTS.NAISTERA ? 'Токен из Telegram-бота' : overrides.dialect === CONTRACTS.CLOUDFLARE_WORKERS_AI ? 'API token (Workers AI)' : overrides.dialect === CONTRACTS.COMFYUI ? 'не требуется' : 'Ключ API')}"></div>
             <div class="uris-server-probe-row">
                 <button class="uris-btn uris-btn-confirm uris-server-probe" type="button">Проверить</button>
                 <span class="uris-server-facts">${escapeHtml(factsLine(draft))}</span>
@@ -222,7 +223,7 @@ export function renderServerConnectionForm(draft = {}, options = {}) {
             <div class="uris-row uris-server-manual-row" ${manualMode ? '' : 'hidden'}><label>ID модели</label><input class="text_pole uris-server-manual-model" value="${escapeHtml(manualMode ? current : '')}" placeholder="${escapeHtml(manualModelPlaceholder(draft))}"></div>
             ${overrides.dialect === CONTRACTS.COMFYUI ? `
             <div class="uris-row"><label>Workflow (API-формат)</label><textarea class="text_pole uris-server-comfy-workflow" rows="8" spellcheck="false" placeholder="Пусто — встроенный txt2img (с референсами — img2img). Свой граф: Export (API) из ComfyUI. Плейсхолдеры: %model%, %prompt%, %seed%, %width%, %height%">${escapeHtml(draft.workflowJson || '')}</textarea><div class="uris-server-comfy-summary uris-server-facts"></div></div>
-            <div class="uris-row uris-server-comfy-defaults"><button class="uris-btn uris-btn-ghost uris-server-comfy-default" data-kind="txt2img" type="button">Вставить встроенный txt2img</button><button class="uris-btn uris-btn-ghost uris-server-comfy-default" data-kind="img2img" type="button">img2img (референс)</button></div>
+            <div class="uris-row uris-server-comfy-defaults"><button class="uris-btn uris-btn-ghost uris-server-comfy-upload" type="button" title="Файл из ComfyUI: JSON в формате «Export (API)» или PNG результата (правый клик по картинке → Save) — workflow достанется из метаданных">Загрузить из файла…</button><button class="uris-btn uris-btn-ghost uris-server-comfy-default" data-kind="txt2img" type="button">Вставить встроенный txt2img</button><button class="uris-btn uris-btn-ghost uris-server-comfy-default" data-kind="img2img" type="button">img2img (референс)</button></div>
             <div class="uris-server-warning">Запустите ComfyUI с --enable-cors-header "*" или включите «Через CORS-прокси ST» в «Расширенных» (прокси не переносит multipart — с прокси референсы работать не будут). Референсы ложатся в ноды LoadImage по возрастанию ID.</div>` : ''}
             <details class="uris-advanced uris-server-advanced" ${advancedOpen ? 'open' : ''}>
                 <summary>Расширенные</summary>
@@ -246,8 +247,24 @@ export function renderServerConnectionForm(draft = {}, options = {}) {
     </div>`;
 }
 
-function parseExtraBody(text) {
-    const raw = String(text || '').trim();
+/** Скрытый input[type=file] → выбранный File или null (отмена диалога). */
+function defaultPickWorkflowFile() {
+    return new Promise(resolve => {
+        const input = document.createElement('input');
+        input.type = 'file';
+        input.accept = '.json,.png,application/json,image/png';
+        input.style.display = 'none';
+        input.addEventListener('change', () => {
+            const file = input.files?.[0] || null;
+            input.remove();
+            resolve(file);
+        });
+        document.body.appendChild(input);
+        input.click();
+    });
+}
+
+function parseExtraBody(text) {    const raw = String(text || '').trim();
     if (!raw) return { value: {} };
     try {
         const parsed = JSON.parse(raw);
@@ -520,6 +537,28 @@ export function bindServerConnectionForm(form, draft, dependencies = {}) {
             onChange();
         });
     }
+
+    // Загрузка workflow файлом (У7): JSON «Export (API)» или PNG результата —
+    // из PNG workflow достаётся из метаданных (чанк prompt), что обходит
+    // ловушку Dev Mode (обычный Save даёт UI-формат, который сервер не
+    // исполняет — такой файл вставляется в поле, но с пояснением).
+    const pickWorkflowFile = dependencies.pickWorkflowFile || defaultPickWorkflowFile;
+    form.querySelector('.uris-server-comfy-upload')?.addEventListener('click', async () => {
+        if (!workflowArea) return;
+        try {
+            const file = await pickWorkflowFile();
+            if (!file) return;
+            const loaded = await readWorkflowFile(file);
+            workflowArea.value = loaded.text;
+            renderWorkflowSummary();
+            onChange();
+            if (loaded.format === 'ui') {
+                notifyError(new Error(`«${loaded.name}» — это UI-формат («Save» из ComfyUI), сервер его не исполняет. Вставлен для справки: нужен «Export (API)» (включается Dev Mode в настройках ComfyUI) или PNG результата.`));
+            } else {
+                notifySuccess(`Workflow загружен из «${loaded.name}»${loaded.format === 'unknown' ? ' (не JSON — проверьте сводку под полем)' : ''}. Не забудьте плейсхолдеры: %prompt%, %seed%, %model%.`);
+            }
+        } catch (error) { notifyError(error); }
+    });
 
     form.querySelector('.uris-server-probe')?.addEventListener('click', async () => {
         log('probe: click', draft?.id || draft?.draftId, 'endpoint=', draft?.endpoint, 'runtime=', 'catalog-v3');

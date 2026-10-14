@@ -77,6 +77,8 @@ const REFERENCE_MODE_BY_CONTRACT = {
   'pollinations-images': refs => refs.length ? 'unsupported' : 'none',
   // Naistera: reference_objects carry data URLs plus optional descriptions.
   'naistera': refs => refs.length ? 'json-reference-objects' : 'none',
+  // Cloudflare Workers AI: img2img-референс уходит как image_b64 (SDXL-семейство).
+  'cloudflare-workers-ai': refs => refs.length ? 'json-image-b64' : 'none',
 };
 
 const OPERATION_BY_CONTRACT = {
@@ -93,6 +95,7 @@ const OPERATION_BY_CONTRACT = {
   'openrouter-images': () => 'openrouter-generate',
   'pollinations-images': () => 'pollinations-generate',
   'naistera': () => 'naistera-generate',
+  'cloudflare-workers-ai': () => 'cloudflare-generate',
 };
 
 /**
@@ -172,6 +175,10 @@ const INVALID_REQUEST_CODES = new Set([
   'NAISTERA_TOKEN_REQUIRED',
   'NAISTERA_TOKEN_INVALID',
   'NAISTERA_VIDEO_UNSUPPORTED',
+  'CLOUDFLARE_TOKEN_REQUIRED',
+  'CLOUDFLARE_TOKEN_INVALID',
+  'CLOUDFLARE_MODEL_UNSUPPORTED',
+  'CLOUDFLARE_MODEL_BROKEN',
   'AUTH_REQUIRED',
   'AUTH_INVALID',
   'AUTH_EXPIRED',

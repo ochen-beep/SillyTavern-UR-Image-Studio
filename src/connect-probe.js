@@ -19,6 +19,9 @@ import { catalogRequest, buildVersionedUrl, buildPollinationsModelsUrl, buildNai
 import { proxiedFetch as defaultProxiedFetch } from './proxy.js';
 import { validatePollinationsToken } from './providers/image-pollinations.js';
 import { validateNaisteraToken } from './providers/image-naistera.js';
+import { validateCloudflareToken, classifyCloudflareModel } from './providers/image-cloudflare.js';
+import { getProviderDescriptor } from './provider-descriptors.js';
+import { resolveEndpoint } from './endpoint-utils.js';
 import { normalizeModelCatalog } from './model-catalog.js';
 import { recordDiagnosticEvent } from './diagnostic-events.js';
 import { noteProbe } from './delivery-evidence.js';
@@ -187,6 +190,55 @@ async function runProbeConnection(input = {}) {
     const endpointText = String(endpoint);
     if (dialect === CONTRACTS.COMFYUI) {
         return probeComfyConnection({ endpoint: endpointText, timeoutMs, signal, fetcher, proxiedFetch, corsMode });
+    }
+    // Cloudflare Workers AI: host api.cloudflare.com или явный пин диалекта.
+    // Каталог токен-скопленный (GET /ai/models/search доказывает ключ),
+    // поэтому generationUnverified не ставится (прецедент naistera).
+    if (dialect === CONTRACTS.CLOUDFLARE_WORKERS_AI || endpointHostname(endpointText) === 'api.cloudflare.com') {
+        const descriptor = getProviderDescriptor(CONTRACTS.CLOUDFLARE_WORKERS_AI);
+        const token = String(apiKey || '').trim();
+        validateCloudflareToken(token);
+        // Бросает INVALID_ENDPOINT с подсказкой про account ID, если адрес
+        // введён без /client/v4/accounts/<id>.
+        const base = resolveEndpoint(descriptor, endpointText);
+        const url = `${base}${descriptor.endpoint.modelsPath}?task=Text-to-Image`;
+        const { payload, delivery } = await fetchCatalogPayload({
+            url, apiKey: token, timeoutMs, signal, corsMode, fetcher, proxiedFetch,
+            errorPrefix: 'Не удалось получить каталог моделей Cloudflare',
+        });
+        const list = Array.isArray(payload?.result) ? payload.result : null;
+        if (!list) throw new Error('Cloudflare returned an unexpected /ai/models/search shape (expected a result array).');
+        const shaped = [];
+        for (const item of list) {
+            const name = String(item?.name || '').trim();
+            if (!name) continue;
+            // Клиентская страховка поверх ?task=Text-to-Image.
+            if (item?.task && String(item.task?.name || '').toLowerCase() !== 'text-to-image') continue;
+            const kind = classifyCloudflareModel(name);
+            // multipart-only и известно-сломанные модели из браузера мертвы —
+            // в каталог не включаем (см. classifyCloudflareModel, факты 2026-10-13).
+            if (kind.input !== 'json') continue;
+            shaped.push({
+                id: name,
+                imageGeneration: true,
+                references: kind.references,
+                ...(kind.maxReferences > 0 ? { maxReferences: kind.maxReferences } : {}),
+            });
+        }
+        if (!shaped.length) throw new Error('Cloudflare returned an empty Text-to-Image catalog (после исключения multipart-only моделей).');
+        // normalizeModelCatalog — граница персистенции (bounded, secret-stripped).
+        const { entries } = normalizeModelCatalog(shaped, { source: 'cloudflare-ai-models', provider: 'cloudflare' });
+        return {
+            apiShape: 'cloudflare',
+            auth: 'bearer',
+            delivery,
+            modelIds: entries.map(entry => entry.modelId),
+            modelMetadata: entries,
+            catalogSource: 'cloudflare-ai-models',
+            catalogUrl: diagnosticCatalogUrl(url),
+            metadataCount: entries.length,
+            checkedAt: new Date().toISOString(),
+        };
     }
     const isPollinationsHost = /(?:^|\.)pollinations\.ai(?:\/|$)/i.test(endpointText);
     const isNaisteraHost = /(?:^|[/.\-])naistera\.org(?:\/|$)/i.test(endpointText);

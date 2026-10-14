@@ -15,6 +15,20 @@
 | `pollinations-images` | `pollinations-api.md`, `pollinations-openapi.json` |
 | `naistera` | `naistera-api.md` |
 | `comfyui` | `comfyui-local-api.md`, `comfyui-readme.md` |
+| `cloudflare-workers-ai` | `cloudflare-workers-ai.md` |
+
+## Кандидаты из плана 2026-10-13 (доки скачаны, реализация — по плану
+[../research/2026-10-13-new-image-providers-plan.md](../research/2026-10-13-new-image-providers-plan.md))
+
+| Провайдер | Файлы здесь |
+|---|---|
+| A1111/Forge/SD.Next (SD WebUI API) | `sd-webui-a1111-api.md` |
+| Stability Platform v2beta | `stability-platform-api.md` |
+| BFL FLUX | `bfl-flux-api.md` |
+| fal.ai | `fal-ai-api.md` |
+| Replicate | `replicate-api.md` |
+| BytePlus Seedream | `seedream-byteplus.md` |
+| HuggingFace Inference | `huggingface-inference.md` (free закрыт, проверено вживую 2026-10-13 — 402) |
 
 ## Описания файлов
 
@@ -50,6 +64,12 @@
 - **comfyui-local-api.md** — официальные примеры `script_examples/` из репозитория
   ComfyUI: `POST /prompt` → `GET /history/{id}` → `GET /view`, websocket-вариант.
 - **comfyui-readme.md** — README ComfyUI (установка, запуск сервера, аргументы).
+- **cloudflare-workers-ai.md** — Cloudflare Workers AI REST: `POST /client/v4/accounts/{id}/ai/run/{model}`,
+  каталог `/ai/models/search`, биллинг в Neurons (10 000/день бесплатно).
+  Включает раздел «Проверено вживую (2026-10-13)»: у SDXL-моделей Content-Type
+  врёт (заявлен png, байты JPEG — MIME по магическим байтам), flux-2-klein
+  требует multipart (из браузера недоступен), sdxl-base-1.0 сломан (408),
+  CORS закрыт (трафик идёт через ST-прокси).
 
 ## Ограничения окружения при скачивании
 

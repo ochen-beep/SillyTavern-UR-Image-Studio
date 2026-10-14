@@ -285,15 +285,19 @@ export function classifyUrl(rawUrl) {
     // download by extension — image as URL (.png/.webp/.jpg).
     if (/\.(png|webp|jpe?g|gif|bmp|avif|heic)(\?|$)/i.test(pathAndQuery)) return { skip: false, kind: 'download', url: scrubUrl(url), host };
     // model list. Pollinations uses the unversioned /image/models path,
-    // Naistera the unversioned /api/models, OpenRouter /v1/images/models.
+    // Naistera the unversioned /api/models, OpenRouter /v1/images/models,
+    // Cloudflare Workers AI /ai/models/search.
     if ((/\/v1(?:beta)?\/models(\b|\/|\?|$)/i.test(pathAndQuery)
         || /\/image\/models(\b|\/|\?|$)/i.test(pathAndQuery)
         || /\/api\/models(\b|\/|\?|$)/i.test(pathAndQuery)
-        || /\/images\/models(\b|\/|\?|$)/i.test(pathAndQuery))
+        || /\/images\/models(\b|\/|\?|$)/i.test(pathAndQuery)
+        || /\/ai\/models\/search(\b|\?|$)/i.test(pathAndQuery))
         && !/:generateContent|:generateImage/i.test(pathAndQuery)) {
         return { skip: true, kind: 'models', url: scrubUrl(url), host };
     }
     if (/\/images\/(generations|edits)/i.test(pathAndQuery)) return { skip: false, kind: 'image', url: scrubUrl(url), host };
+    // Cloudflare Workers AI: платный POST /ai/run/<model>.
+    if (/\/ai\/run\//i.test(pathAndQuery)) return { skip: false, kind: 'image', url: scrubUrl(url), host };
     // Naistera generation: the paid POST and its read-only job polling GETs.
     if (/\/api\/generate(\/jobs\/[^/?#]+)?(\b|\/|\?|$)/i.test(pathAndQuery)) return { skip: false, kind: 'image', url: scrubUrl(url), host };
     if (/pollinations\.ai/i.test(host)) return { skip: false, kind: 'image', url: scrubUrl(url), host };

@@ -171,9 +171,11 @@ export async function generateImageRequest(imageConnId, request, onStatus, signa
             ? 'upload/image (LoadImage)'
             : route?.generationContract === 'naistera'
                 ? 'reference_objects'
-                : (route?.generationContract === 'gemini-native' || route?.generationContract === 'gemini-interactions'
-                    ? 'inlineData'
-                    : (conn.editProtocol === 'json' ? 'image_url' : 'multipart:image')),
+                : route?.generationContract === 'cloudflare-workers-ai'
+                    ? 'image_b64'
+                    : (route?.generationContract === 'gemini-native' || route?.generationContract === 'gemini-interactions'
+                        ? 'inlineData'
+                        : (conn.editProtocol === 'json' ? 'image_url' : 'multipart:image')),
         materialization: ref?.dataUrl ? 'ready' : 'missing',
     }));
     const diagnostic = {
