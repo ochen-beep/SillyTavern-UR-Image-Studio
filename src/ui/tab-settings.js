@@ -89,6 +89,8 @@ export function render(root) {
                 <small class="uris-hint">Глобальные значения используются только если в текущем чате параметр не задан.</small>
                 <label class="checkbox_label"><input type="checkbox" id="uris_inline_enabled" ${state.settings.inlineEnabled ? 'checked' : ''}><span>Инлайн-генерация в чате (вкладка «Медиа»)</span></label>
                 <small class="uris-hint">[[тип: описание]] в ответах персонажа и 📷-кнопка превращаются в картинки. Профили триггеров и тестовый стенд — вкладка «Медиа».</small>
+                <label class="checkbox_label"><input type="checkbox" id="uris_inline_chips" ${state.settings.inlineChips === true ? 'checked' : ''}><span>Компакт-режим инлайна (чипы вместо картинок)</span></label>
+                <small class="uris-hint">На месте маркера — чип «📷 тип»; клик раскрывает картинку, ⌃ сворачивает обратно. Удобно, когда картинок в посте много.</small>
                 <label class="checkbox_label"><input type="checkbox" id="uris_auto_retry_ambiguous" ${state.settings.autoRetryAmbiguous === true ? 'checked' : ''}><span>Авто-повтор при неоднозначной доставке (очередь)</span></label>
                 <small class="uris-hint">Если прямой запрос к шлюзу ушёл «без ответа», задача один раз переотправится сама — следующая попытка пойдёт через прокси. Выключено по умолчанию: повтор возможной уже оплаченной генерации — на вашей совести.</small>
             </section>
@@ -259,6 +261,13 @@ function bindBehaviorToggles(root) {
         applyInlineRuntime();
         // Вкладка «Медиа» появляется/исчезает из полосы сразу.
         renderTabs();
+    });
+    root.querySelector('#uris_inline_chips')?.addEventListener('change', e => {
+        state.settings.inlineChips = e.target.checked === true;
+        saveSettings();
+        // Форма готовых/ожидающих оболочек входит в keep-гейт реконсиляции —
+        // переключение перестраивает их на месте следующим проходом.
+        try { window.dispatchEvent(new CustomEvent('uris:inline-update', {})); } catch { /* node */ }
     });
 }
 

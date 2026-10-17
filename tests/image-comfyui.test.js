@@ -14,6 +14,8 @@ const {
     viewUrlFor,
     extractHistoryOutcome,
     summarizeWorkflow,
+    extractWorkflowFromPng,
+    readWorkflowFile,
     generateComfyUIImage,
 } = await import('../src/providers/image-comfyui.js');
 const { reducedRatio } = await import('../src/aspect-ratio.js');
@@ -465,6 +467,124 @@ test('summarizeWorkflow: битый JSON — ok false, но чипы плейс�
     assert.equal(s.placeholders.prompt, true);
     assert.equal(s.hasOutput, null);
     assert.equal(s.loadImageCount, null);
+});
+
+// ── Загрузка workflow файлом: PNG-метаданные и JSON (У7) ──
+
+const pngSignature = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
+
+function pngChunk(type, data) {
+    const enc = new TextEncoder();
+    const chunk = new Uint8Array(12 + data.length);
+    const view = new DataView(chunk.buffer);
+    view.setUint32(0, data.length);
+    chunk.set(enc.encode(type), 4);
+    chunk.set(data, 8);
+    // CRC не проверяется экстрактором — оставляем нули.
+    return chunk;
+}
+
+function textChunkPng(keyword, text) {
+    const enc = new TextEncoder();
+    const kw = enc.encode(keyword);
+    const body = enc.encode(text);
+    const data = new Uint8Array(kw.length + 1 + body.length);
+    data.set(kw, 0);
+    data.set(body, kw.length + 1);
+    return pngChunk('tEXt', data);
+}
+
+function itextChunkPng(keyword, text, { compressed = false } = {}) {
+    const enc = new TextEncoder();
+    const kw = enc.encode(keyword);
+    const body = enc.encode(text);
+    const data = new Uint8Array(kw.length + 5 + body.length);
+    data.set(kw, 0);
+    data[kw.length + 1] = compressed ? 1 : 0; // compression flag
+    data[kw.length + 2] = 0; // compression method
+    // пустые language tag и translated keyword — по одному NUL каждый
+    data.set(body, kw.length + 5);
+    return pngChunk('iTXt', data);
+}
+
+function makePng(...chunks) {
+    const total = 8 + chunks.reduce((sum, chunk) => sum + chunk.length, 0);
+    const out = new Uint8Array(total);
+    out.set(pngSignature, 0);
+    let offset = 8;
+    for (const chunk of chunks) { out.set(chunk, offset); offset += chunk.length; }
+    return out;
+}
+
+const API_PROMPT_JSON = '{"6":{"class_type":"CLIPTextEncode","inputs":{"text":"%prompt%"}},"9":{"class_type":"SaveImage","inputs":{"images":[]}}}';
+const UI_WORKFLOW_JSON = '{"nodes":[],"links":[],"version":0.4}';
+
+test('extractWorkflowFromPng: чанк prompt (tEXt) отдаёт API-формат', () => {
+    const png = makePng(pngChunk('IHDR', new Uint8Array(13)), textChunkPng('prompt', API_PROMPT_JSON), pngChunk('IEND', new Uint8Array(0)));
+    const found = extractWorkflowFromPng(png);
+    assert.equal(found.format, 'api');
+    assert.equal(found.text, API_PROMPT_JSON);
+});
+
+test('extractWorkflowFromPng: iTXt с русским текстом (UTF-8) читается', () => {
+    const json = JSON.stringify({ '6': { class_type: 'CLIPTextEncode', inputs: { text: 'кот в шляпе' } } });
+    const png = makePng(itextChunkPng('prompt', json));
+    const found = extractWorkflowFromPng(png);
+    assert.equal(found.format, 'api');
+    assert.equal(JSON.parse(found.text)['6'].inputs.text, 'кот в шляпе');
+});
+
+test('extractWorkflowFromPng: prompt важнее workflow; только workflow — это UI-формат', () => {
+    const both = makePng(textChunkPng('workflow', UI_WORKFLOW_JSON), textChunkPng('prompt', API_PROMPT_JSON));
+    assert.equal(extractWorkflowFromPng(both).format, 'api');
+    const onlyUi = makePng(textChunkPng('workflow', UI_WORKFLOW_JSON));
+    const found = extractWorkflowFromPng(onlyUi);
+    assert.equal(found.format, 'ui');
+    assert.equal(found.text, UI_WORKFLOW_JSON);
+});
+
+test('extractWorkflowFromPng: без метаданных, не-PNG и сжатый iTXt — null', () => {
+    assert.deepEqual(extractWorkflowFromPng(makePng(pngChunk('IHDR', new Uint8Array(13)), pngChunk('IEND', new Uint8Array(0)))), { format: null, text: null });
+    assert.deepEqual(extractWorkflowFromPng(new Uint8Array([1, 2, 3, 4])), { format: null, text: null });
+    assert.deepEqual(extractWorkflowFromPng(makePng(itextChunkPng('prompt', API_PROMPT_JSON, { compressed: true }))), { format: null, text: null });
+    // Обрезанный чанк не должен ронять разбор.
+    const truncated = makePng(textChunkPng('prompt', API_PROMPT_JSON)).slice(0, 20);
+    assert.deepEqual(extractWorkflowFromPng(truncated), { format: null, text: null });
+});
+
+function fakeFile(name, content, type = '') {
+    const bytes = content instanceof Uint8Array ? content : new TextEncoder().encode(content);
+    return {
+        name,
+        type,
+        text: async () => new TextDecoder().decode(bytes),
+        arrayBuffer: async () => bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength),
+    };
+}
+
+test('readWorkflowFile: PNG с чанком prompt отдаёт читаемый API-JSON', async () => {
+    const png = makePng(textChunkPng('prompt', API_PROMPT_JSON));
+    const loaded = await readWorkflowFile(fakeFile('ComfyUI_00001_.png', png, 'image/png'));
+    assert.equal(loaded.format, 'api');
+    assert.match(loaded.text, /\n {2}"/); // пересобран с отступами
+    assert.equal(JSON.parse(loaded.text)['9'].class_type, 'SaveImage');
+});
+
+test('readWorkflowFile: PNG без метаданных — понятная ошибка', async () => {
+    const png = makePng(pngChunk('IHDR', new Uint8Array(13)), pngChunk('IEND', new Uint8Array(0)));
+    await assert.rejects(readWorkflowFile(fakeFile('plain.png', png)), /нет метаданных workflow/);
+});
+
+test('readWorkflowFile: JSON Export (API) — api; UI-формат «Save» — ui; битый/с плейсхолдерами — сырой текст', async () => {
+    const api = await readWorkflowFile(fakeFile('wf.json', API_PROMPT_JSON));
+    assert.equal(api.format, 'api');
+    assert.match(api.text, /\n {2}"/);
+    const ui = await readWorkflowFile(fakeFile('wf.json', UI_WORKFLOW_JSON));
+    assert.equal(ui.format, 'ui');
+    const withPlaceholders = '{"3":{"inputs":{"seed":%seed%}},"6":{"inputs":{"text":"%prompt%"}}}';
+    const raw = await readWorkflowFile(fakeFile('wf.json', withPlaceholders));
+    assert.equal(raw.format, 'unknown');
+    assert.equal(raw.text, withPlaceholders, 'текст с голыми плейсхолдерами возвращается как есть');
 });
 
 // ── class_type-фолбэк в ошибках (У3) ──

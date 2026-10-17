@@ -5,6 +5,10 @@
  * по всем картинкам сообщения (showLightbox, с рабочими галерейными
  * действиями), реролл = замена (старая остаётся в галерее).
  *
+ * Позиция оболочки — сразу после абзаца, содержащего маркер (фото держится
+ * у своей прозы); не нашли блок (plain-текст, markdown расщепил raw) — в
+ * конец .mes_text.
+ *
  * Реконсиляция идемпотентна: оболочка помечена data-uris-inl="<key>"
  * (idx|type|descHash) и data-uris-status; при том же ключе и статусе — keep,
  * при смене статуса (pending→ready/error, аменда 1) — замена узла. Оболочки,
@@ -22,6 +26,7 @@ import { showSingleImage, showLightbox } from '../ui/lightbox.js';
 const SHELL_ATTR = 'data-uris-inl';
 const STATUS_ATTR = 'data-uris-status';
 const HIDDEN_ATTR = 'data-uris-inl-hidden';
+const FORM_ATTR = 'data-uris-form';
 const DEBOUNCE_MS = 250;
 
 let _observer = null;
@@ -29,6 +34,19 @@ let _onInlineEvent = null;
 let _onManual = null;
 let _reroll = null;
 let _debounceId = null;
+
+/** Раскрытые из чипов оболочки (компакт-режим). Рантайм, не настройка:
+ * переключение настройки перестраивает оболочки следующим проходом. */
+const _expanded = new Set();
+
+/** Форма оболочки (компакт-режим state.settings.inlineChips): ready/pending —
+ * чип, пока не раскрыт кликом; остальное и всегда при выключенном режиме —
+ * полная. Входит в keep-гейт реконсиляции через FORM_ATTR. */
+function formFor(status, key) {
+    if (state.settings?.inlineChips !== true) return 'full';
+    if (status !== 'ready' && status !== 'pending') return 'full';
+    return _expanded.has(key) ? 'full' : 'chip';
+}
 
 // Test-only viewer seam (same pattern as tab-gallery.js): fake-dom tests cannot
 // load PhotoSwipe, so the click regression test swaps the viewer for a stub.
@@ -72,6 +90,7 @@ export function shutdownRender() {
     _onInlineEvent = null;
     _reroll = null;
     _onManual = null;
+    _expanded.clear();
     removeManualButtons();
 }
 
@@ -171,9 +190,11 @@ export function reconcileVisible({ only = null } = {}) {
         const plan = computeShellPlan({ msgId, markers, items, hashFn: stableHash, existingKeys, inFlight });
         for (const entry of plan) {
             const cur = shellEls.find(el => el.getAttribute(SHELL_ATTR) === entry.key) || null;
-            // keep только при совпадении и статуса: pending→ready обновится (аменда 1)
+            // keep только при совпадении статуса и формы (чип↔картинка):
+            // pending→ready обновится (аменда 1), смена compact-режима — тоже.
             if (entry.domAction === 'keep' && cur && cur.getAttribute(STATUS_ATTR) === entry.status
-                && cur.getAttribute('data-uris-image') === String(entry.item?.imagePath || '')) continue;
+                && cur.getAttribute('data-uris-image') === String(entry.item?.imagePath || '')
+                && cur.getAttribute(FORM_ATTR) === formFor(entry.status, entry.key)) continue;
             mountShell(textEl, entry, cur);
         }
         pruneStaleShells(textEl, plan, items, shellEls);
@@ -220,27 +241,78 @@ export function computeShellPlan({ msgId, markers, items, hashFn = stableHash, e
     return plan;
 }
 
-/** DOM по статусу (см. план задачи: ready/pending/button/changed/error). */
+/** DOM по статусу (см. план задачи: ready/pending/button/changed/error).
+ * Компакт-режим (formFor): ready — чип «📷 тип», клик раскрывает картинку;
+ * pending — компактный чип со спиннером и ✕; у раскрытой картинки — ⌃ свернуть. */
 function shellFor(msgId, entry) {
     const el = document.createElement('div');
     el.classList.add('uris-inl-shell');
     el.setAttribute(SHELL_ATTR, entry.key);
     el.setAttribute(STATUS_ATTR, entry.status);
     el.setAttribute('data-uris-image', String(entry.item?.imagePath || ''));
+    el.setAttribute(FORM_ATTR, formFor(entry.status, entry.key));
     if (entry.status === 'ready') {
         const profile = profileFor(entry.type);
+        const label = profile?.name || entry.type;
+        if (el.getAttribute(FORM_ATTR) === 'chip') {
+            const chip = document.createElement('button');
+            chip.classList.add('uris-inl-chip');
+            chip.setAttribute('title', `Показать ${label}`);
+            chip.textContent = `📷 ${label}`;
+            chip.addEventListener('click', () => {
+                _expanded.add(entry.key);
+                try { el.replaceWith(shellFor(entry.msgId, entry)); } catch { /* узел уже снят */ }
+            });
+            el.appendChild(chip);
+            return el;
+        }
         const img = document.createElement('img');
         img.setAttribute('src', `/${String(entry.item?.imagePath || '').replace(/^\/+/, '')}`);
         img.setAttribute('loading', 'lazy');
-        img.setAttribute('alt', entry.desc || profile?.name || entry.type);
-        img.setAttribute('title', `${profile?.name || entry.type} — клик: просмотр всех картинок поста`);
+        img.setAttribute('alt', entry.desc || label);
+        img.setAttribute('title', `${label} — клик: просмотр всех картинок поста`);
         img.addEventListener('click', () => { void openMessageLightbox(msgId, entry); });
         el.appendChild(img);
-        el.appendChild(badge(profile?.name || entry.type));
+        el.appendChild(badge(label));
+        if (state.settings?.inlineChips === true) {
+            const fold = document.createElement('button');
+            fold.classList.add('uris-inl-collapse');
+            fold.setAttribute('title', 'Свернуть в чип');
+            fold.textContent = '⌃';
+            fold.addEventListener('click', (ev) => {
+                try { ev?.stopPropagation?.(); } catch { /* fake-dom */ }
+                _expanded.delete(entry.key);
+                try { el.replaceWith(shellFor(entry.msgId, entry)); } catch { /* узел уже снят */ }
+            });
+            el.appendChild(fold);
+        }
         return el;
     }
     if (entry.status === 'pending') {
         const profile = profileFor(entry.type);
+        const label = profile?.name || entry.type;
+        const cancel = document.createElement('button');
+        cancel.classList.add('uris-inl-cancel');
+        cancel.setAttribute('data-uris-cancel', '1');
+        cancel.setAttribute('title', 'Отменить генерацию');
+        cancel.textContent = '✕';
+        cancel.addEventListener('click', (ev) => {
+            try { ev?.stopPropagation?.(); } catch { /* fake-dom */ }
+            cancelPending(entry);
+        });
+        if (el.getAttribute(FORM_ATTR) === 'chip') {
+            const chip = document.createElement('span');
+            chip.classList.add('uris-inl-chip');
+            const spin = document.createElement('i');
+            spin.classList.add('fa-solid');
+            spin.classList.add('fa-spinner');
+            spin.classList.add('fa-spin');
+            chip.appendChild(spin);
+            chip.appendChild(document.createTextNode(` ${label}`));
+            chip.appendChild(cancel);
+            el.appendChild(chip);
+            return el;
+        }
         const frame = document.createElement('div');
         frame.classList.add('uris-inl-pending');
         // Аспект динамический (зависит от профиля) — единственный inline-стиль,
@@ -251,21 +323,12 @@ function shellFor(msgId, entry) {
         spin.classList.add('fa-spinner');
         spin.classList.add('fa-spin');
         frame.appendChild(spin);
-        const label = document.createElement('span');
-        label.textContent = `Генерирую ${profile?.name || entry.type}…`;
-        frame.appendChild(label);
-        const cancel = document.createElement('button');
-        cancel.classList.add('uris-inl-cancel');
-        cancel.setAttribute('data-uris-cancel', '1');
-        cancel.setAttribute('title', 'Отменить генерацию');
-        cancel.textContent = '✕';
-        cancel.addEventListener('click', (ev) => {
-            try { ev?.stopPropagation?.(); } catch { /* fake-dom */ }
-            cancelPending(entry);
-        });
+        const labelEl = document.createElement('span');
+        labelEl.textContent = `Генерирую ${label}…`;
+        frame.appendChild(labelEl);
         frame.appendChild(cancel);
         el.appendChild(frame);
-        el.appendChild(badge(profile?.name || entry.type));
+        el.appendChild(badge(label));
         return el;
     }
     // button / changed / error — кликабельная строка
@@ -449,16 +512,95 @@ function insideHiddenWrapper(node) {
     return false;
 }
 
-/** mount: спрятать raw маркера + создать/заменить оболочку (в конец .mes_text). */
+/** mount: спрятать raw маркера + создать/заменить оболочку. Замена (смена
+ * статуса) сохраняет позицию через replaceWith; новая оболочка встаёт сразу
+ * после абзаца с маркером (markerContainer), иначе — в конец .mes_text. */
 function mountShell(textEl, entry, cur) {
     if (!textEl) return;
+    if (cur && cur.parentNode) {
+        hideMarkerText(textEl, entry.marker?.raw);
+        const shell = shellFor(entry.msgId, entry);
+        try { cur.replaceWith(shell); } catch { textEl.appendChild(shell); }
+        return;
+    }
+    // Ищем блок ДО hideMarkerText: спрятанный raw collectTextNodes не видит.
+    const container = markerContainer(textEl, entry.marker?.raw);
     hideMarkerText(textEl, entry.marker?.raw);
     const shell = shellFor(entry.msgId, entry);
-    if (cur && cur.parentNode) {
-        try { cur.replaceWith(shell); } catch { textEl.appendChild(shell); }
-    } else {
-        textEl.appendChild(shell);
+    if (!container || container === textEl) { textEl.appendChild(shell); return; }
+    // Несколько маркеров в одном абзаце: встаём после уже стоящих там
+    // оболочек, чтобы порядок совпадал с порядком маркеров в тексте.
+    let tail = container;
+    for (;;) {
+        const next = nextElementOf(tail);
+        if (!isShellEl(next)) break;
+        tail = next;
     }
+    if (!insertAfter(tail, shell)) textEl.appendChild(shell);
+}
+
+/**
+ * Прямой ребёнок textEl, внутри которого лежит raw-маркер: текстовый узел
+ * (raw ещё виден) или display:none-обёртка спрятанного. Сам textEl, если raw
+ * не найден или лежит прямо в нём (plain-текст без абзацев) — оболочка тогда
+ * идёт в конец, как раньше. Первое вхождение выигрывает: два одинаковых
+ * маркера в посте ставят обе оболочки к первому.
+ * # ponytail: nth-occurrence матч, если дубли когда-нибудь станут заметны.
+ */
+function markerContainer(textEl, raw) {
+    if (!textEl || !raw) return textEl;
+    const nodes = [];
+    for (const { node } of collectTextNodes(textEl)) nodes.push(node);
+    try {
+        for (const wrap of textEl.querySelectorAll(`[${HIDDEN_ATTR}]`)) {
+            if (String(wrap.textContent ?? '') === raw) nodes.push(wrap);
+        }
+    } catch { /* fake-dom без querySelectorAll */ }
+    for (const node of nodes) {
+        if (!String(node.textContent ?? '').includes(raw)) continue;
+        let el = node;
+        while (el && el.parentNode && el.parentNode !== textEl) el = el.parentNode;
+        return (el && el.nodeType === 1 && el.parentNode === textEl) ? el : textEl;
+    }
+    return textEl;
+}
+
+function isShellEl(el) {
+    try { return !!el && typeof el.getAttribute === 'function' && el.getAttribute(SHELL_ATTR) != null; }
+    catch { return false; }
+}
+
+/** Следующий элемент-сосед: в реальном DOM — nextElementSibling, в fake-dom
+ * (children — массив) — вручную. */
+function nextElementOf(el) {
+    try {
+        if (el && typeof el.nextElementSibling !== 'undefined') return el.nextElementSibling || null;
+    } catch { /* fallthrough в ручной обход */ }
+    const sibs = el?.parentNode?.children;
+    if (!Array.isArray(sibs)) return null;
+    const i = sibs.indexOf(el);
+    return i >= 0 ? (sibs[i + 1] || null) : null;
+}
+
+/** Вставить el сразу после ref; false — вызывающий падает в appendChild.
+ * Реальный DOM — insertAdjacentElement, fake-dom — splice (как в
+ * hideMarkerText). */
+function insertAfter(ref, el) {
+    try {
+        if (ref && typeof ref.insertAdjacentElement === 'function') {
+            ref.insertAdjacentElement('afterend', el);
+            return true;
+        }
+    } catch { return false; }
+    const parent = ref?.parentNode;
+    if (!parent || !Array.isArray(parent.children) || !Array.isArray(parent.childNodes)) return false;
+    const ci = parent.children.indexOf(ref);
+    const cci = parent.childNodes.indexOf(ref);
+    if (ci === -1 || cci === -1) return false;
+    parent.children.splice(ci + 1, 0, el);
+    parent.childNodes.splice(cci + 1, 0, el);
+    el.parentNode = parent;
+    return true;
 }
 
 /** Оболочки вне текущего плана снимаются («реролл = замена», маркер удалён —
@@ -507,7 +649,8 @@ function reconcileManualShells(mesEl, textEl, items, { inFlight = null, now = Da
             if (!live && !fresh) { computedStatus = 'error'; orphaned = true; }
         }
         if (computedStatus !== 'ready' && computedStatus !== 'error') continue; // живой/свежий pending — оболочка уже показана
-        if (el.getAttribute(SHELL_ATTR) === key && el.getAttribute(STATUS_ATTR) === computedStatus) continue;
+        if (el.getAttribute(SHELL_ATTR) === key && el.getAttribute(STATUS_ATTR) === computedStatus
+            && el.getAttribute(FORM_ATTR) === formFor(computedStatus, key)) continue;
         const desc = el.getAttribute('data-uris-desc') || '';
         const entry = {
             msgId, idx: item.idx, type: item.type, desc, descHash: item.descHash,

@@ -256,6 +256,7 @@ export const defaultSettings = Object.freeze({
     // ── Inline generation in chat (markers / keywords / 📷 button) ──
     inlineEnabled: false,      // инлайн-генерация в чате (маркеры/ключевые слова/кнопка)
     inlineListenUser: false,   // дефолт реагировать на ключевые слова в сообщениях юзера
+    inlineChips: false,        // компакт-режим: готовые/ожидающие картинки — чипами, клик раскрывает
     inlineTriggers: null,      // профили; null → sanitizeTriggerList(DEFAULT_TRIGGERS) в потребителях
 
     // ── Text-LLM source (for building the image prompt) ──
@@ -496,6 +497,7 @@ export function loadSettings() {
     // а не в [img] — иначе нормализация стёрла бы дефолтные selfie/scene.
     s.inlineEnabled = s.inlineEnabled === true;
     s.inlineListenUser = s.inlineListenUser === true;
+    s.inlineChips = s.inlineChips === true;
     s.inlineTriggers = sanitizeTriggerList(Array.isArray(s.inlineTriggers) ? s.inlineTriggers : DEFAULT_TRIGGERS);
     s.uiScale = normalizeUiScale(s.uiScale);
     s.fontScale = normalizeFontScale(s.fontScale);

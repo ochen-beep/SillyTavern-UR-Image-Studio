@@ -179,6 +179,102 @@ export function parseAndValidateWorkflow(text) {
 }
 
 /**
+ * Workflow из PNG, сохранённого ComfyUI (правый клик по картинке → Save, или
+ * файл из output/): метаданные лежат в текстовых чанках — `prompt` это
+ * API-формат (исполняемый сервером, то что нужно), `workflow` — UI-формат
+ * редактора (ноды/линки, сервером не исполняется). Pillow пишет латинский
+ * текст чанком tEXt, а строки с нелатинскими символами (русский промпт) —
+ * несжатым iTXt в UTF-8; оба разбираются. Сжатые iTXt и zTXt ComfyUI не
+ * создаёт — пропускаются. CRC не проверяется: чанк с битым контролем
+ * отловится JSON.parse на следующем шаге.
+ * @returns {{ format: 'api'|'ui'|null, text: string|null }} — format null,
+ * если метаданных workflow в файле нет (или это не PNG).
+ */
+export function extractWorkflowFromPng(bytes) {
+    const view = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
+    const signature = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
+    if (view.length < 8 || signature.some((byte, index) => view[index] !== byte)) {
+        return { format: null, text: null };
+    }
+    const decoder = new TextDecoder('utf-8');
+    const found = new Map();
+    let offset = 8;
+    while (offset + 12 <= view.length) {
+        const length = ((view[offset] << 24) | (view[offset + 1] << 16) | (view[offset + 2] << 8) | view[offset + 3]) >>> 0;
+        const type = String.fromCharCode(view[offset + 4], view[offset + 5], view[offset + 6], view[offset + 7]);
+        const dataStart = offset + 8;
+        const dataEnd = dataStart + length;
+        if (dataEnd > view.length) break; // обрезанный файл
+        if (type === 'IEND') break;
+        if (type === 'tEXt' || type === 'iTXt') {
+            const data = view.subarray(dataStart, dataEnd);
+            const nul = data.indexOf(0);
+            if (nul > 0) {
+                const keyword = decoder.decode(data.subarray(0, nul));
+                if (!found.has(keyword)) {
+                    // iTXt: keyword\0 flag(1) method(1) lang\0 translated\0 text.
+                    // Читаем только несжатый (flag 0) — именно его пишет Pillow.
+                    let textStart = nul + 1;
+                    if (type === 'iTXt') {
+                        if (data[textStart] !== 0) { offset = dataEnd + 4; continue; }
+                        textStart += 2;
+                        const langEnd = data.indexOf(0, textStart);
+                        if (langEnd < 0) { offset = dataEnd + 4; continue; }
+                        const translatedEnd = data.indexOf(0, langEnd + 1);
+                        if (translatedEnd < 0) { offset = dataEnd + 4; continue; }
+                        textStart = translatedEnd + 1;
+                    }
+                    found.set(keyword, decoder.decode(data.subarray(textStart)));
+                }
+            }
+        }
+        offset = dataEnd + 4; // + CRC
+    }
+    if (found.has('prompt')) return { format: 'api', text: found.get('prompt') };
+    if (found.has('workflow')) return { format: 'ui', text: found.get('workflow') };
+    return { format: null, text: null };
+}
+
+/**
+ * Прочитать workflow из выбранного пользователем файла (кнопка «Загрузить из
+ * файла» на карточке подключения). Принимает .json (Export (API) из ComfyUI)
+ * и .png (метаданные ComfyUI, чанк `prompt`). Валидный JSON пересобирается с
+ * отступами для читаемости в textarea; текст, который не парсится (обычно
+ * из-за голых плейсхолдеров %seed%), возвращается как есть — его разберут
+ * сводка и предотправочная валидация.
+ * @returns {Promise<{ format: 'api'|'ui'|'unknown', text: string, name: string }>}
+ */
+export async function readWorkflowFile(file) {
+    const name = String(file?.name || 'файл');
+    const isPng = /\.png$/i.test(name) || file?.type === 'image/png';
+    if (isPng) {
+        const bytes = new Uint8Array(await file.arrayBuffer());
+        const found = extractWorkflowFromPng(bytes);
+        if (!found.format) {
+            throw new Error(`В «${name}» нет метаданных workflow — это не PNG из ComfyUI (подойдёт картинка из output/ ComfyUI или «Save» в контекстном меню результата).`);
+        }
+        return { format: found.format, text: prettifyWorkflowJson(found.text), name };
+    }
+    const raw = await file.text();
+    let parsed = null;
+    try { parsed = JSON.parse(raw); } catch { /* ниже вернём сырой текст */ }
+    if (!parsed || typeof parsed !== 'object') {
+        return { format: 'unknown', text: raw, name };
+    }
+    const format = Array.isArray(parsed.nodes) && Array.isArray(parsed.links) ? 'ui' : 'api';
+    return { format, text: JSON.stringify(parsed, null, 2), name };
+}
+
+/** JSON → читаемый вид для textarea; не-JSON (плейсхолдеры) возвращается как есть. */
+function prettifyWorkflowJson(text) {
+    try {
+        return JSON.stringify(JSON.parse(text), null, 2);
+    } catch {
+        return String(text ?? '');
+    }
+}
+
+/**
  * Разложить загруженные файлы по нодам LoadImage. Порядок — возрастание ID
  * нод (целочисленные ключи JS-объекта всегда перебираются численно, т.е.
  * детерминированно): первая референса → LoadImage с наименьшим ID.

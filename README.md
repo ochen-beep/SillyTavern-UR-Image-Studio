@@ -28,6 +28,12 @@ A [SillyTavern](https://docs.sillytavern.app/) extension that generates images f
 - A Stage 2 source: any supported image endpoint (each needs its own key/token; Pollinations requires an `sk_` access token; a local ComfyUI needs none).
 - A Stage 1 source: a Connection Manager profile or a custom text endpoint.
 
+## CORS proxy & security
+
+- Image providers are reached **from the browser**: direct first, and through the **built-in SillyTavern CORS proxy** (`/proxy/`) when an endpoint doesn't send CORS headers (e.g. `api.cloudflare.com`, ComfyUI without a CORS launch flag). Endpoints that allow browser calls (OpenRouter, Gemini, Pollinations) never touch the proxy. No third-party relays are used, ever — the only proxy is your own ST server.
+- Enable it in `config.yaml` (`enableCorsProxy: true`) and restart ST; the «auto» delivery mode picks the path per endpoint on its own. Details: [docs/cors-proxy-setup.md](docs/cors-proxy-setup.md).
+- If ST is reachable from other devices, spend two minutes on server hygiene: a `cors.origin` list instead of `"*"`, a narrow `whitelist`, `allowKeysExposure: false`, and `basicAuthMode: true` for anything beyond the LAN. Same doc, section «Гигиена»; official reference: [config.yaml](https://docs.sillytavern.app/administration/config-yaml), [Remote Connections](https://docs.sillytavern.app/usage/remoteconnections/).
+
 ## Installation
 
 ### From a git repository

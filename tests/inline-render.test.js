@@ -274,6 +274,141 @@ test('reconcileVisible: маркер убрали из сообщения → у
     assert.equal(textEl.querySelectorAll('[data-uris-inl]').length, 0, 'оболочка удалена');
 });
 
+// ── Позиция оболочки: на месте маркера, не в конце поста ──
+
+/** Два абзаца в .mes_text, маркер во втором. */
+function buildTwoParagraphs() {
+    const chatEl = doc.createElement('div');
+    chatEl.id = 'chat';
+    const mesEl = doc.createElement('div');
+    mesEl.classList.add('mes');
+    mesEl.setAttribute('mesid', '0');
+    const textEl = doc.createElement('div');
+    textEl.classList.add('mes_text');
+    textEl.innerHTML = '<p>первый абзац</p><p>второй [[img: a]] конец</p>';
+    const buttonsEl = doc.createElement('div');
+    buttonsEl.classList.add('mes_buttons');
+    mesEl.appendChild(textEl);
+    mesEl.appendChild(buttonsEl);
+    chatEl.appendChild(mesEl);
+    root.appendChild(chatEl);
+    return { textEl };
+}
+
+test('reconcileVisible: оболочка встаёт после абзаца с маркером', () => {
+    const { textEl } = buildTwoParagraphs();
+    upsertItem(0, readyItem());
+    reconcileVisible();
+    const kids = textEl.children;
+    assert.equal(kids.length, 3, 'p1, p2, оболочка');
+    assert.equal(kids[1].tagName, 'p');
+    assert.ok(kids[1].querySelector('[data-uris-inl-hidden]'), 'маркер спрятан внутри своего абзаца');
+    assert.equal(kids[2].getAttribute('data-uris-inl'), `0|img|${HASH_A}`, 'оболочка сразу после абзаца с маркером');
+});
+
+test('reconcileVisible: два маркера в одном абзаце — оболочки в порядке текста', () => {
+    const { textEl } = buildTwoParagraphs();
+    chatArr[0].mes = 'раз [[img: a]] два [[selfie: b]]';
+    textEl.innerHTML = '<p>раз [[img: a]] два [[selfie: b]] три</p>';
+    upsertItem(0, readyItem());
+    upsertItem(0, { idx: 1, type: 'selfie', descHash: stableHash('selfie|b'), status: 'ready', imagePath: 'b.png' });
+    reconcileVisible();
+    const kids = textEl.children;
+    assert.equal(kids.length, 3, 'p, оболочка img, оболочка selfie');
+    assert.equal(kids[1].getAttribute('data-uris-inl'), `0|img|${HASH_A}`);
+    assert.equal(kids[2].getAttribute('data-uris-inl'), `1|selfie|${stableHash('selfie|b')}`);
+});
+
+test('reconcileVisible: pending→ready сохраняет позицию после абзаца', () => {
+    const { textEl } = buildTwoParagraphs();
+    upsertItem(0, { idx: 0, type: 'img', descHash: HASH_A, status: 'pending', requestId: 'r1', createdAt: Date.now() });
+    reconcileVisible();
+    upsertItem(0, { idx: 0, type: 'img', descHash: HASH_A, status: 'ready', imagePath: 'p.png', requestId: 'r1' });
+    reconcileVisible();
+    const kids = textEl.children;
+    assert.equal(kids.length, 3);
+    assert.equal(kids[2].getAttribute('data-uris-status'), 'ready');
+    assert.equal(kids[2].getAttribute('data-uris-inl'), `0|img|${HASH_A}`, 'замена статуса не утащила оболочку в конец');
+});
+
+test('reconcileVisible: raw маркера в DOM не найден — фолбэк в конец .mes_text', () => {
+    const { textEl } = buildTwoParagraphs();
+    textEl.innerHTML = '<p>маркера в рендере нет</p>';
+    upsertItem(0, readyItem());
+    reconcileVisible();
+    const kids = textEl.children;
+    assert.equal(kids.length, 2, 'p, оболочка в конце');
+    assert.equal(kids[1].getAttribute('data-uris-inl'), `0|img|${HASH_A}`);
+});
+
+// ── Компакт-режим (inlineChips): чипы вместо картинок, клик раскрывает ──
+
+test('compact: готовая картинка — чип; клик раскрывает, ⌃ сворачивает', () => {
+    const { textEl } = buildChatDOM();
+    state.settings.inlineChips = true;
+    upsertItem(0, readyItem());
+    reconcileVisible();
+    let shell = textEl.querySelector('[data-uris-inl]');
+    assert.equal(shell.getAttribute('data-uris-form'), 'chip');
+    assert.ok(!shell.querySelector('img'), 'картинки нет, пока чип');
+    const chip = shell.querySelector('.uris-inl-chip');
+    assert.ok(chip && chip.tagName === 'button', 'чип-кнопка на месте');
+    chip.click();
+    shell = textEl.querySelector('[data-uris-inl]');
+    assert.equal(shell.getAttribute('data-uris-form'), 'full', 'клик по чипу раскрыл картинку');
+    assert.equal(shell.querySelector('img').getAttribute('src'), '/p.png');
+    assert.ok(shell.querySelector('.uris-inl-collapse'), '⌃ сворачивание на месте');
+    // Реконсиляция не схлопывает раскрытое обратно.
+    reconcileVisible();
+    assert.equal(textEl.querySelector('[data-uris-inl]').getAttribute('data-uris-form'), 'full');
+    textEl.querySelector('.uris-inl-collapse').click();
+    shell = textEl.querySelector('[data-uris-inl]');
+    assert.equal(shell.getAttribute('data-uris-form'), 'chip', '⌃ свернул обратно в чип');
+    reconcileVisible();
+    assert.equal(textEl.querySelector('[data-uris-inl]').getAttribute('data-uris-form'), 'chip');
+});
+
+test('compact: pending — компактный чип со спиннером и рабочей ✕', () => {
+    const { textEl } = buildChatDOM();
+    state.settings.inlineChips = true;
+    upsertItem(0, { idx: 0, type: 'img', descHash: HASH_A, status: 'pending', requestId: 'r1', createdAt: Date.now() });
+    reconcileVisible();
+    const shell = textEl.querySelector('[data-uris-inl]');
+    assert.equal(shell.getAttribute('data-uris-form'), 'chip');
+    assert.ok(shell.querySelector('.fa-spinner'), 'спиннер в чипе');
+    assert.ok(shell.querySelector('[data-uris-cancel]'), 'отмена на месте');
+    // Готовность → чип с кнопкой раскрытия (форма чипа сохраняется).
+    upsertItem(0, { idx: 0, type: 'img', descHash: HASH_A, status: 'ready', imagePath: 'p.png', requestId: 'r1' });
+    reconcileVisible();
+    const readyShell = textEl.querySelector('[data-uris-inl]');
+    assert.equal(readyShell.getAttribute('data-uris-form'), 'chip');
+    const chipBtn = readyShell.querySelector('.uris-inl-chip');
+    assert.ok(chipBtn && chipBtn.tagName === 'button', 'готовый чип-кнопка на месте');
+});
+
+test('compact: переключение настройки перестраивает готовые оболочки следующим проходом', () => {
+    const { textEl } = buildChatDOM();
+    upsertItem(0, readyItem());
+    reconcileVisible();
+    assert.equal(textEl.querySelector('[data-uris-inl]').getAttribute('data-uris-form'), 'full');
+    state.settings.inlineChips = true;
+    reconcileVisible();
+    assert.equal(textEl.querySelector('[data-uris-inl]').getAttribute('data-uris-form'), 'chip');
+    state.settings.inlineChips = false;
+    reconcileVisible();
+    assert.equal(textEl.querySelector('[data-uris-inl]').getAttribute('data-uris-form'), 'full');
+});
+
+test('compact: без чип-режима — прежнее поведение (img сразу, без ⌃)', () => {
+    const { textEl } = buildChatDOM();
+    upsertItem(0, readyItem());
+    reconcileVisible();
+    const shell = textEl.querySelector('[data-uris-inl]');
+    assert.equal(shell.getAttribute('data-uris-form'), 'full');
+    assert.ok(shell.querySelector('img'));
+    assert.ok(!shell.querySelector('.uris-inl-collapse'), 'сворачивания нет без компакт-режима');
+});
+
 // ── ensureManualButtons (📷 в .mes_buttons) ──
 
 test('ensureManualButtons: 📷 у AI-сообщения; клик → reroll job + ручная оболочка', () => {

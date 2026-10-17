@@ -573,3 +573,102 @@ test('comfy: «Проверить» передаёт диалект подклю
     assert.equal(probes.length, 1);
     assert.equal(probes[0].dialect, 'comfyui');
 });
+
+// ── comfy: загрузка workflow файлом (У7) ──
+
+function pngWithPromptChunk(promptJson) {
+    const enc = new TextEncoder();
+    const kw = enc.encode('prompt');
+    const body = enc.encode(promptJson);
+    const data = new Uint8Array(kw.length + 1 + body.length);
+    data.set(kw, 0);
+    data.set(body, kw.length + 1);
+    const chunk = new Uint8Array(12 + data.length);
+    new DataView(chunk.buffer).setUint32(0, data.length);
+    chunk.set(enc.encode('tEXt'), 4);
+    chunk.set(data, 8);
+    const png = new Uint8Array(8 + chunk.length);
+    png.set([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a], 0);
+    png.set(chunk, 8);
+    return png;
+}
+
+function fakeWorkflowFile(name, content) {
+    const bytes = content instanceof Uint8Array ? content : new TextEncoder().encode(content);
+    return {
+        name,
+        text: async () => new TextDecoder().decode(bytes),
+        arrayBuffer: async () => bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength),
+    };
+}
+
+function bindComfyUpload(draft, extra = {}) {
+    const form = mount(draft);
+    const notes = { success: [], error: [] };
+    bindServerConnectionForm(form, draft, {
+        saveConnection: async input => input,
+        setConnectionApiKey: async () => {},
+        rerender: () => {},
+        saveDebounceMs: 20,
+        notifySuccess: message => notes.success.push(String(message)),
+        notifyError: error => notes.error.push(String(error?.message || error)),
+        ...extra,
+    });
+    return { form, notes };
+}
+
+test('comfy: «Загрузить из файла» достаёт workflow из PNG и обновляет сводку и драфт', async () => {
+    const draft = baseDraft({ overrides: { dialect: 'comfyui' } });
+    const apiJson = '{"6":{"class_type":"CLIPTextEncode","inputs":{"text":"%prompt%"}},"9":{"class_type":"SaveImage","inputs":{"images":[]}}}';
+    const { form, notes } = bindComfyUpload(draft, {
+        pickWorkflowFile: async () => fakeWorkflowFile('ComfyUI_00001_.png', pngWithPromptChunk(apiJson)),
+    });
+    const area = form.querySelector('.uris-server-comfy-workflow');
+    const summary = form.querySelector('.uris-server-comfy-summary');
+    assert.match(summary.textContent, /Пусто/);
+    form.querySelector('.uris-server-comfy-upload').dispatchEvent({ type: 'click' });
+    await flush(30);
+    assert.equal(JSON.parse(area.value)['9'].class_type, 'SaveImage');
+    assert.match(summary.textContent, /Промпт ✓/);
+    assert.match(summary.textContent, /Выход ✓/);
+    assert.equal(draft.workflowJson, area.value, 'onChange синкнул драфт');
+    assert.equal(notes.error.length, 0);
+    assert.ok(notes.success.some(message => /ComfyUI_00001_\.png/.test(message)));
+});
+
+test('comfy: UI-формат вставляется в поле, но с пояснением про Export (API)', async () => {
+    const draft = baseDraft({ overrides: { dialect: 'comfyui' } });
+    const uiJson = '{"nodes":[],"links":[],"version":0.4}';
+    const { form, notes } = bindComfyUpload(draft, {
+        pickWorkflowFile: async () => fakeWorkflowFile('workflow.json', uiJson),
+    });
+    const area = form.querySelector('.uris-server-comfy-workflow');
+    const summary = form.querySelector('.uris-server-comfy-summary');
+    form.querySelector('.uris-server-comfy-upload').dispatchEvent({ type: 'click' });
+    await flush(30);
+    assert.equal(JSON.parse(area.value).version, 0.4);
+    assert.match(summary.textContent, /Промпт ✗/);
+    assert.ok(notes.error.some(message => /UI-формат/.test(message) && /Export \(API\)/.test(message)));
+    assert.equal(notes.success.length, 0);
+});
+
+test('comfy: отмена диалога и битый файл не трогают textarea', async () => {
+    const draft = baseDraft({ overrides: { dialect: 'comfyui' } });
+    const { form, notes } = bindComfyUpload(draft, { pickWorkflowFile: async () => null });
+    const area = form.querySelector('.uris-server-comfy-workflow');
+    area.value = '{"9":{"class_type":"SaveImage","inputs":{"images":[]}}}';
+    form.querySelector('.uris-server-comfy-upload').dispatchEvent({ type: 'click' });
+    await flush(30);
+    assert.match(area.value, /SaveImage/);
+    assert.equal(notes.error.length, 0);
+    assert.equal(notes.success.length, 0);
+
+    const plainPng = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+    const { form: form2, notes: notes2 } = bindComfyUpload(baseDraft({ overrides: { dialect: 'comfyui' } }), {
+        pickWorkflowFile: async () => fakeWorkflowFile('plain.png', plainPng),
+    });
+    form2.querySelector('.uris-server-comfy-upload').dispatchEvent({ type: 'click' });
+    await flush(30);
+    assert.equal(form2.querySelector('.uris-server-comfy-workflow').value, '');
+    assert.ok(notes2.error.some(message => /нет метаданных workflow/.test(message)));
+});
