@@ -131,8 +131,11 @@ test('контракт писателей: журнал пишут продюс�
     const fs = await import('node:fs/promises');
     const read = (p) => fs.readFile(new URL(p, import.meta.url), 'utf8');
     // Контракт про КОД: комментарии вырезаем (упоминания note* в пояснениях
-    // допустимы, вызовы — нет).
+    // допустимы, вызовы — нет). CRLF свежего checkout (autocrlf) сначала
+    // нормализуем: `.` в per-line-регулярке не матчит \r, и хвостовой \r
+    // мешал `$` — хвостовые слова комментария оставались в «коде».
     const stripComments = (src) => src
+        .replace(/\r\n?/g, '\n')
         .replace(/\/\*[\s\S]*?\*\//g, '')
         .split('\n')
         .map(line => line.replace(/(^|[^:])\/\/.*$/, '$1'))

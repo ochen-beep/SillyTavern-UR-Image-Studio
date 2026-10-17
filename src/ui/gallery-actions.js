@@ -13,6 +13,8 @@ import { runStage2 } from '../pipeline.js';
 import { createRef, createReferenceFromGalleryCard, listRefs, updateRef, persistPoolOrThrow, releaseRefImage } from '../refs-library.js';
 import { imageToDataUrl, ingestReferenceImage, blobToDataUrl } from '../references.js';
 import { openCropDialog } from './crop-dialog.js';
+import { openFolderSheet } from './folder-picker.js';
+import { createGalleryFolder, listGalleryFolders } from '../gallery-folders.js';
 import { reportFailure, URIS_SCOPES } from '../error-pool.js';
 
 import { canonicalizeNativeImagePath } from '../native-image-path.js';
@@ -97,6 +99,57 @@ export async function copyItemText(item, deps = {}) {
     });
 }
 
+/**
+ * Избранное: карточка закрепляется наверху сетки (в обоих режимах — «Все» и
+ * «Папки»). Возвращает новое состояние. Просмотрщик НЕ закрывается: действие
+ * безопасное и обратимое — контракт «закрывать только при успехе деструктивных
+ * действий» на него не распространяется, сетка под вьювером перерисовывается.
+ */
+export async function toggleFavorite(item, root) {
+    if (!item?.id) return false;
+    const wanted = !(item.favorite === true);
+    try {
+        const updated = await updateCard(item.id, { favorite: wanted });
+        if (updated) item.favorite = updated.favorite === true;
+    } catch (err) {
+        reportFailure({ scope: URIS_SCOPES.gallery, message: 'Избранное: ' + (err?.message || err), toast: true, toastText: 'Не удалось изменить избранное' });
+    }
+    if (root) refreshRoot(root);
+    return item.favorite === true;
+}
+
+/**
+ * «Папки…»: мульти-лист папок галереи (openFolderSheet, создание по запросу
+ * без совпадений). Переключение применяется сразу — autosave-семантика поля
+ * «Папка» в редакторе референса. По закрытию листа сетка перерисовывается:
+ * счётчики чипов и активный фильтр должны увидеть новые составы.
+ */
+export async function assignGalleryFolders(item, root) {
+    if (!item?.id) return;
+    let mutated = false;
+    const folders = await listGalleryFolders();
+    openFolderSheet({
+        title: 'Папки картинки',
+        folders,
+        selectedIds: Array.isArray(item.folders) ? item.folders : [],
+        onCreate: name => createGalleryFolder(name),
+        onToggle: async (folder, isOn) => {
+            const set = new Set(Array.isArray(item.folders) ? item.folders : []);
+            if (isOn) set.add(folder.id); else set.delete(folder.id);
+            const next = [...set];
+            try {
+                await updateCard(item.id, { folders: next });
+                item.folders = next;
+                mutated = true;
+            } catch (err) {
+                reportFailure({ scope: URIS_SCOPES.gallery, message: 'Папки: ' + (err?.message || err), toast: true, toastText: 'Не удалось обновить папки' });
+            }
+        },
+        onDone: () => { if (mutated && root) refreshRoot(root); },
+        onCancel: () => { if (mutated && root) refreshRoot(root); },
+    });
+}
+
 export async function saveAsReference(item) {
     if (!item) return;
     try {
@@ -148,8 +201,10 @@ const _regenInFlight = new Set();
  * Regenerate a gallery card from its stored prompt. Returns true only when a new
  * image was actually produced — the lightbox keeps the viewer open on cancel,
  * abort or failure (close-on-failure used to hide the error context under the toast).
+ * `overrides.prompt` — правленый промпт вместо сохранённого («Отредактировать
+ * промпт» из контекстного меню лайтбокса); хранимый на карточке промпт не меняет.
  */
-export async function regenerate(item, root, regenBtn) {
+export async function regenerate(item, root, regenBtn, overrides = {}) {
     // While a generation is in flight the regen button is repurposed as a stop
     // button: a second click cancels it instead of starting a competing one.
     if (regenBtn?.dataset.urisStopMode === '1') {
@@ -182,7 +237,7 @@ export async function regenerate(item, root, regenBtn) {
             );
         }
         if (regenBtn) regenBtn.disabled = true;
-        const instr = { prompt: item.prompt, aspectRatio: item.aspectRatio, imageSize: item.imageSize, quality: item.quality };
+        const instr = { prompt: overrides.prompt || item.prompt, aspectRatio: item.aspectRatio, imageSize: item.imageSize, quality: item.quality };
         let opts = {};
         if (useSameRefs && snapshot) {
             const refs = await rebuildRefsFromSnapshot(snapshot);
@@ -220,6 +275,20 @@ export async function regenerate(item, root, regenBtn) {
         }
     }
     return ok;
+}
+
+/**
+ * «Отредактировать промпт» (контекстное меню лайтбокса): текущий промпт в
+ * инпуте, подтверждение — перегенерация с правленым текстом. Отмена, пустой
+ * или неизменённый ввод — без действий и без платной постановки (false).
+ */
+export async function editPromptAndRegenerate(item, root) {
+    const current = String(item?.prompt || '');
+    const edited = await showInputModal('Промпт для перегенерации:', current);
+    if (edited == null) return false;
+    const prompt = String(edited).trim();
+    if (!prompt || prompt === current) return false;
+    return regenerate(item, root, null, { prompt });
 }
 
 /** Delete a gallery card. Returns false on cancel/failure — the lightbox keeps the viewer open. */

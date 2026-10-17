@@ -705,6 +705,46 @@
 /* Сентинел чанковой догрузки: нулевую высоту IntersectionObserver ловит плохо. */
 .uris-gallery-sentinel { height: 1px; }
 
+/* ── Галерея: режим «Все / Папки» + избранное ── */
+/* Переключатель режимов справа от счётчика (счётчик держит margin-right:auto). */
+.uris-gallery-viewswitch {
+    display: inline-flex; flex: 0 0 auto;
+    border: 1px solid var(--uris-border-soft); border-radius: 8px; overflow: hidden;
+}
+.uris-viewswitch-btn {
+    background: none; border: 0; cursor: pointer; padding: 4px 12px;
+    color: var(--uris-text-mut); font-size: var(--uris-font-sm);
+}
+.uris-viewswitch-btn + .uris-viewswitch-btn { border-left: 1px solid var(--uris-border-soft); }
+.uris-viewswitch-btn:hover { color: var(--uris-text-strong); }
+.uris-viewswitch-btn-on { color: var(--uris-text-strong); background: var(--uris-accent-soft); }
+/* Лента папок режима «Папки»: горизонтальный скролл чипов (скроллбар скрыт). */
+.uris-gf-bar {
+    display: flex; gap: 6px; align-items: center;
+    overflow-x: auto; padding: 2px 0 8px; scrollbar-width: none;
+}
+.uris-gf-bar::-webkit-scrollbar { display: none; }
+.uris-gf-chip {
+    flex: 0 0 auto; display: inline-flex; align-items: center; gap: 6px;
+    border: 1px solid var(--uris-border-soft); border-radius: 999px;
+    background: var(--uris-surface-card); color: var(--uris-text-mut);
+    padding: 3px 10px; cursor: pointer; font-size: var(--uris-font-sm);
+}
+.uris-gf-chip:hover { color: var(--uris-text-strong); }
+.uris-gf-chip-on { color: var(--uris-text-strong); border-color: var(--uris-accent-line); background: var(--uris-accent-soft); }
+.uris-gf-name { white-space: nowrap; max-width: 140px; overflow: hidden; text-overflow: ellipsis; }
+.uris-gf-count { opacity: .6; }
+/* Избранное: звезда на миниатюре слева (💾-бейдж занял правый угол), лёгкая
+   подсветка карточки и золотая кнопка/звезда в активном состоянии. */
+.uris-fav-badge {
+    position: absolute; top: 4px; left: 4px; color: #f5b83d;
+    font-size: var(--uris-font-sm);
+    filter: drop-shadow(0 1px 2px rgba(0, 0, 0, .7));
+}
+.uris-card-fav { border-color: color-mix(in srgb, #f5b83d 45%, transparent); }
+.uris-card-btn-fav-on { color: #f5b83d; }
+.uris-pswp-fav-on { color: #f5b83d !important; }
+
 /* ── Lightbox убран ── просмотрщик галереи переехал на PhotoSwipe:
    вендорный CSS .pswp-* и адаптация .pswp.uris-pswp — в конце файла. */
 
@@ -2652,6 +2692,9 @@ div.pswp__img--placeholder,
    остаётся единственным inline-стилем (aspect-ratio в render.js). */
 .uris-inl-pending {
     max-width: 100%;
+    /* Кап = max-height готовой картинки (uris-inl-shell img): 9:16-заглушка
+       не раздувает пост на ~750px и при готовности не даёт layout-скачок. */
+    max-height: 420px;
     border: 1px dashed var(--SmartThemeBorderColor, #666);
     border-radius: var(--uris-radius-card);
     display: flex; flex-direction: column; align-items: center; justify-content: center;
@@ -2673,6 +2716,28 @@ div.pswp__img--placeholder,
     border: 1px solid var(--SmartThemeBorderColor, #666);
     background: transparent; color: inherit; cursor: pointer;
     font-size: small; line-height: 1.4;
+}
+
+/* Компакт-режим (inlineChips): чип на месте маркера. Готовый — кнопка
+   (клик раскрывает картинку), ожидающий — span со спиннером и ✕. */
+.uris-inl-chip {
+    display: inline-flex; align-items: center; gap: 6px;
+    margin: 4px 0; padding: 3px 10px;
+    border-radius: var(--uris-radius-pill);
+    border: 1px dashed var(--SmartThemeBorderColor, #666);
+    background: transparent; color: inherit;
+    font-size: small; line-height: 1.4;
+}
+button.uris-inl-chip { cursor: pointer; }
+.uris-inl-chip .uris-inl-cancel { margin: 0; padding: 0 6px; }
+/* ⌃ на раскрытой из чипа картинке (верхний правый угол, бейдж — слева). */
+.uris-inl-collapse {
+    position: absolute; top: 6px; right: 6px; z-index: 2;
+    width: 22px; height: 22px; padding: 0; line-height: 1;
+    border-radius: var(--uris-radius-pill);
+    border: 1px solid var(--SmartThemeBorderColor, #666);
+    background: rgba(0, 0, 0, 0.55); color: #fff;
+    cursor: pointer; font-size: 12px;
 }
 
 /* ── Studio scope (генерация вне чата, welcome screen) ── */

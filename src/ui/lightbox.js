@@ -6,7 +6,9 @@
  * close, wheel zoom, keyboard) are PhotoSwipe's; this module maps gallery
  * items to the dataSource and wires the four gallery actions as custom
  * toolbar buttons. All actions stay in gallery-actions.js — single source of
- * truth shared with the grid.
+ * truth shared with the grid. ПКМ/long-press по картинке открывает
+ * контекстное меню (правка промпта, «ещё») — тот же жест, что у карточек
+ * сетки (card-action-menu.js).
  *
  * Behavior parity with the previous hand-rolled viewer:
  * - copy prompt / save as reference keep the viewer open (ST dialogs are
@@ -31,7 +33,8 @@ async function loadPhotoSwipe() {
     }
     return _photoSwipeCtor;
 }
-import { copyItemText, cropGalleryImage, cropReference, saveAsReference, regenerate, deleteImage } from './gallery-actions.js';
+import { copyItemText, cropGalleryImage, cropReference, saveAsReference, regenerate, editPromptAndRegenerate, deleteImage, toggleFavorite, assignGalleryFolders } from './gallery-actions.js';
+import { bindCardContextMenu, openCardActionMenu } from './card-action-menu.js';
 import { getCtx } from '../core.js';
 import { cardDimensions, ensureCardDimensions, FALLBACK_DIMENSIONS } from '../image-dimensions.js';
 
@@ -162,9 +165,11 @@ export async function showLightbox(items, index = 0, { chatId = null, root = nul
         }, 400);
     });
 
-    registerActionButtons(pswp, { items, chatId: chatIdResolved, root });
+    const syncFavUi = registerActionButtons(pswp, { items, chatId: chatIdResolved, root });
     pswp.init();
     localizeDefaultUi(pswp);
+    registerContextMenu(pswp, { items, root, syncFavUi });
+    syncFavUi?.();
 
     // Fill in real dimensions for the remaining slides; entries update before
     // the user typically reaches them, and probes persist on the cards.
@@ -187,16 +192,35 @@ function collectThumbElements(root, items) {
 
 /**
  * Wire the toolbar buttons. Two modes: gallery items get the full set
- * (copy / crop → new card / save-as-ref / regen / delete); reference items
- * (actions: 'ref', from References and Generation) get copy + crop — regen and
- * delete make no sense for a reference and the record lives in the editor.
+ * (favorite / copy / crop → new card / save-as-ref / regen / delete);
+ * reference items (actions: 'ref', from References and Generation) get
+ * copy + crop — regen and delete make no sense for a reference and the record
+ * lives in the editor.
+ *
+ * Returns the favorite-button state sync (noop in ref mode): the toggle lives
+ * on the CURRENT slide, so the icon must follow swipe ('change') and the user's
+ * own toggle (run calls it again after gallery-actions mutated the item).
  */
 function registerActionButtons(pswp, ctx) {
     const refMode = ctx.items.some(item => item.__actions === 'ref');
+    const syncFavUi = () => {
+        const btn = pswp.element?.querySelector('.uris-pswp-fav');
+        if (!btn) return;
+        const item = ctx.items[pswp.currIndex];
+        // Одиночные превью без карточки (id нет) — избранного не существует.
+        btn.style.display = item?.id ? '' : 'none';
+        const on = item?.favorite === true;
+        btn.classList.toggle('uris-pswp-fav-on', on);
+        const title = on ? 'Убрать из избранного' : 'В избранное';
+        btn.title = title;
+        btn.setAttribute('aria-label', title);
+    };
     const buttons = refMode ? [
         { name: 'uris-copy', order: 30, icon: 'fa-copy', title: 'Копировать текст', danger: false, run: item => copyItemText(item) },
         { name: 'uris-crop', order: 31, icon: 'fa-crop-simple', title: 'Обрезать референс', danger: false, run: async item => { if (await cropReference(item)) pswp.close(); } },
     ] : [
+        { name: 'uris-fav', order: 29, icon: 'fa-star', title: 'В избранное', danger: false,
+            run: async item => { await toggleFavorite(item, ctx.root); syncFavUi(); } },
         { name: 'uris-copy', order: 30, icon: 'fa-copy', title: 'Копировать текст', danger: false, run: item => copyItemText(item) },
         { name: 'uris-crop', order: 31, icon: 'fa-crop-simple', title: 'Обрезать (в новую карточку)', danger: false, run: async item => { if (await cropGalleryImage(item, ctx.chatId, ctx.root)) pswp.close(); } },
         { name: 'uris-save-ref', order: 32, icon: 'fa-bookmark', title: 'Сохранить как референс', danger: false, run: item => saveAsReference(item) },
@@ -210,7 +234,7 @@ function registerActionButtons(pswp, ctx) {
                 order: button.order,
                 isButton: true,
                 tagName: 'button',
-                className: 'uris-pswp-act' + (button.danger ? ' uris-pswp-act-danger' : ''),
+                className: 'uris-pswp-act' + (button.name === 'uris-fav' ? ' uris-pswp-fav' : '') + (button.danger ? ' uris-pswp-act-danger' : ''),
                 title: button.title,
                 ariaLabel: button.title,
                 html: `<i class="fa-solid ${button.icon}" aria-hidden="true"></i>`,
@@ -222,11 +246,50 @@ function registerActionButtons(pswp, ctx) {
             });
         }
     });
+    if (!refMode) pswp.on('change', syncFavUi);
+    return refMode ? null : syncFavUi;
+}
+
+/**
+ * Контекстное меню по картинке в просмотрщике: ПКМ (десктоп) и long-press
+ * (тач) — bindCardContextMenu, тот же жест, что у карточек сетки. Пункты —
+ * «Отредактировать промпт» и «Сгенерировать ещё»: правка промпта в тулбаре
+ * недоступна в принципе, «ещё» дублирует реген одним жестом без прицеливания
+ * в мелкую кнопку. Жест отвечает только на самой картинке (.pswp__img) —
+ * ПКМ по тулбару/стрелкам/фону меню не открывает; у референсов
+ * (__actions: 'ref') промпта нет — меню не открывается вовсе.
+ */
+function registerContextMenu(pswp, ctx) {
+    bindCardContextMenu(pswp.element, (pos) => {
+        if (pos.target?.closest?.('.pswp__img') == null) return;
+        const item = ctx.items[pswp.currIndex];
+        if (!item || item.__actions === 'ref') return;
+        // Контракт тулбара: вьювер закрывается только при фактическом успехе —
+        // отмена/ошибка остаются на экране вместе с тостом о причине.
+        const closeOnOk = (promise) => { void Promise.resolve(promise).then(ok => { if (ok) pswp.close(); }); };
+        // Контекст карточки (избранное/папки) существует только у картинок
+        // с карточкой в галерее; одиночные превью получают только генерацию.
+        const menuItems = item.id ? [
+            { id: 'uris-ctx-fav', icon: item.favorite === true ? 'fa-star-half-stroke' : 'fa-star',
+                label: item.favorite === true ? 'Убрать из избранного' : 'В избранное',
+                onSelect: () => { void Promise.resolve(toggleFavorite(item, ctx.root)).then(() => ctx.syncFavUi?.()); } },
+            { id: 'uris-ctx-folders', icon: 'fa-folder', label: 'Папки…',
+                onSelect: () => { void assignGalleryFolders(item, ctx.root); } },
+        ] : [];
+        menuItems.push(
+            { id: 'uris-ctx-edit', icon: 'fa-pen', label: 'Отредактировать промпт…', onSelect: () => closeOnOk(editPromptAndRegenerate(item, ctx.root)) },
+            { id: 'uris-ctx-more', icon: 'fa-rotate-right', label: 'Сгенерировать ещё', onSelect: () => closeOnOk(regenerate(item, ctx.root, null)) },
+        );
+        openCardActionMenu({
+            title: item.prompt ? String(item.prompt).slice(0, 80) : 'Изображение',
+            x: pos.x, y: pos.y,
+            items: menuItems,
+        });
+    });
 }
 
 /** Stock UI titles are English; ST users get Russian. */
-function localizeDefaultUi(pswp) {
-    const titles = [
+function localizeDefaultUi(pswp) {    const titles = [
         ['.pswp__button--close', 'Закрыть (Esc)'],
         ['.pswp__button--arrow--prev', 'Предыдущее (←)'],
         ['.pswp__button--arrow--next', 'Следующее (→)'],

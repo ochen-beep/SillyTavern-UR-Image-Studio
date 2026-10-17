@@ -55,6 +55,10 @@ const ALLOWED = [
     // the lightbox always opens the full imagePath.
     'thumbPath',
     'hidden',
+    // Избранное (карточка закрепляется наверху сетки) и принадлежность папкам
+    // галереи (id определений из gallery-folders.js, у карточки — массив).
+    'favorite',
+    'folders',
 ];
 
 const galleryStore = createShardedFileStore({
@@ -154,6 +158,8 @@ export function sanitizeGalleryCard(input = {}, existing = null) {
     out.generationContract = cleanText(out.generationContract, existing?.generationContract || '');
     out.status = out.status === 'missing' ? 'missing' : 'ready';
     out.hidden = out.hidden === true ? true : false;
+    out.favorite = out.favorite === true;
+    out.folders = Array.isArray(out.folders) ? out.folders.filter(id => typeof id === 'string') : (existing?.folders || []);
     out.referenceIds = Array.isArray(out.referenceIds) ? out.referenceIds.filter(id => typeof id === 'string') : (existing?.referenceIds || []);
     for (const key of ['provenance', 'style', 'refs', 'refsSig', 'stage2Snapshot']) {
         if (Object.hasOwn(out, key)) out[key] = sanitizeMetadata(out[key]);
@@ -192,6 +198,25 @@ export async function removeCard(id) {
         if (position === -1) return false;
         list.splice(position, 1);
         return true;
+    });
+}
+
+/**
+ * Отстегнуть id удалённой папки от всех карточек (один mutate — один шард-раунд
+ * на задетый шард). Возвращает число затронутых карточек; ноль изменений —
+ * записи на сервер не переписываются.
+ */
+export async function detachFolderFromCards(folderId) {
+    if (!folderId) return 0;
+    return galleryStore.mutate(list => {
+        let affected = 0;
+        for (let i = 0; i < list.length; i++) {
+            const folders = list[i]?.folders;
+            if (!Array.isArray(folders) || !folders.includes(folderId)) continue;
+            list[i] = sanitizeGalleryCard({ ...list[i], folders: folders.filter(id => id !== folderId) }, list[i]);
+            affected += 1;
+        }
+        return affected;
     });
 }
 

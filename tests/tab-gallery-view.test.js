@@ -166,7 +166,7 @@ test('contextmenu по карточке открывает меню действ
     assert.ok(overlay, 'меню открыто');
     // fake-dom не понимает составных селекторов — берём пункты и читаем текст целиком
     const labels = [...overlay.querySelectorAll('.uris-action-menu-item')].map(b => b.textContent.trim());
-    assert.deepEqual(labels, ['Регенерировать', 'Копировать промпт', 'Сохранить как референс', 'Удалить…'],
+    assert.deepEqual(labels, ['В избранное', 'Регенерировать', 'Копировать промпт', 'Папки…', 'Сохранить как референс', 'Удалить…'],
         'без «К посту-источнику»: у тестовых карточек нет sourceMsgId');
     const del = overlay.querySelectorAll('.uris-action-menu-item').find(b => b.dataset.id === 'del');
     assert.ok(del.classList.contains('uris-action-menu-item-danger'), 'удаление помечено опасным');
@@ -183,5 +183,11 @@ test('galleryMenuItems: «К посту-источнику» появляетс�
     const withMsg = mod.galleryMenuItems({ id: 'x', sourceMsgId: 7 }, { chatId: 'c', root });
     assert.equal(without.some(i => i.id === 'goto'), false);
     assert.equal(withMsg.some(i => i.id === 'goto'), true);
-    assert.equal(withMsg.at(-1).danger, true, 'удаление — последний и опасный');
+    // Избранное и папки — всегда в меню; подпись избранного зависит от состояния.
+    assert.equal(without.some(i => i.id === 'fav'), true);
+    assert.equal(without.some(i => i.id === 'folders'), true);
+    assert.equal(without.find(i => i.id === 'fav').label, 'В избранное');
+    assert.equal(mod.galleryMenuItems({ id: 'x', favorite: true }, { chatId: 'c', root }).find(i => i.id === 'fav').label,
+        'Убрать из избранного');
+    assert.equal(withMsg.at(-1).danger, true, 'удаление — последнее и опасное');
 });
