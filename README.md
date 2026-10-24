@@ -1,133 +1,105 @@
 # UR Image Studio
 
-A [SillyTavern](https://docs.sillytavern.app/) extension that generates images from the current chat scene. A text LLM first distills the recent posts into an image prompt (Stage 1), then an image model renders it (Stage 2) — or skip Stage 1 and write the prompt yourself. The chat text is never modified: images land in the extension gallery, and inline previews can appear under the posts that requested them.
+Студия генерации картинок для [SillyTavern](https://docs.sillytavern.app/). Расширение читает сцену из чата: текстовая модель (Шаг 1) превращает последние посты в промпт для картинки, а модель-рисовальщик (Шаг 2) рисует по нему. Можно пропустить Шаг 1 и написать промпт самому. Текст чата не меняется — картинки складываются в галерею расширения, а в посты вставляются превью.
 
-**English** · [Русский](USER_GUIDE.md) ЗАЛЕТАЙ :)
+> Расширение работает со SillyTavern только через публичные API расширений и пользовательских файлов и не содержит кода SillyTavern.
+>
+> Подробный гайд со всеми нюансами — [USER_GUIDE.md](USER_GUIDE.md).
 
-> This extension interacts with [SillyTavern](https://github.com/SillyTavern/SillyTavern) through its public extension and user-files APIs and contains no SillyTavern code.
+## Что умеет
 
-## Features
+### Генерация
 
-- Two-stage pipeline: a scene-first image prompt built from the chat by a text LLM, then image generation — plus a manual mode where only your prompt is used.
-- Image sources (browser-side connections): OpenAI Images (DALL·E / gpt-image), Gemini native, OpenRouter Images, image-capable Chat Completions gateways (both the OpenRouter-style `image_config` and the `new-api` `extra_body` dialect used by most relay gateways), Pollinations, Naistera, Cloudflare Workers AI (free daily quota of 10,000 neurons — dozens of FLUX.1-schnell images a day), and a local ComfyUI server (workflow-based: built-in txt2img/img2img graphs or your own «Export (API)» JSON with `%prompt%`/`%seed%`/`%model%`/`%width%`/`%height%` placeholders; references are uploaded via `/upload/image` into `LoadImage` nodes).
-- Stage 1 sources: a Connection Manager profile (routed through the ST server — no CORS hassle) or a custom OpenAI-compatible / Gemini endpoint.
-- Reference images: a pool with folders and chat binding, batch upload, crop, per-generation send mode, and provider reference caps.
-- Gallery: images are stored in SillyTavern's native gallery with a server-side metadata index; a full-screen viewer (PhotoSwipe) with crop, "send to references" and copy actions.
-- Inline engine: `[[тип: описание]]` markers in posts become images — automatic mode with a queue cap, a manual camera button on every post, live pending/error shells, and the shared viewer for results.
-- Studio scope: generate on the welcome screen with no chat open; the studio keeps its own config, reference binding and gallery provenance.
-- Prompt templates (Stage 1 instructions) and parameter presets, stored server-side.
-- External bridge (experimental): `globalThis.URIS` lets other extensions run URIS generations headlessly; all automatic jobs (inline + bridge) share one serialized lane, so only one paid request runs at a time.
-- Completion notifications: short synthesized tones via Web Audio — no audio assets, nothing to upload.
-- Storage: image metadata, templates, presets and the gallery index live in server-side user files, not in `settings.json`; the export/import dump strips API keys and secrets by design.
-- Diagnostics: a rolling network dump (last 50 requests), a persistent event log, a browser-side error pool, and a one-click diagnostic export that never contains prompts, keys, or raw responses.
-- A floating desktop window (drag, resize, wheel-scrollable tab bar) and a full-screen mobile layout.
+- Три режима запуска: **«Вручную»** (только ваш промпт), **«Строить промпт»** (Шаг 1, результат можно поправить до оплаты Шага 2) и **«Полный pipeline»** (оба шага одной кнопкой).
+- Параметры на каждый чат: соотношение сторон (от 1:1 до 21:9), размер (512 / 1K / 2K / 4K), качество, модель, шаблон и пресеты параметров.
+- Навигатор постов: стрелки «предыдущий / следующий пост» и режим «следить за последним».
+- «Флоу генерации» — чьи посты брать для сцены: только персонаж, только вы, все сообщения или ручной выбор.
+- Очередь генераций: задачи становятся в очередь, у каждой видно состояние (ждёт / выполняется / готово), ожидающие можно отменить, неудачные — повторить одной кнопкой. Отдельная лента событий собирает ошибки и платные запросы с неясным исходом.
+- Студия: генерация прямо на приветственном экране, без открытого чата — со своим текстом сцены, своими настройками и своей галереей.
 
-## Requirements
+### Источники картинок
 
-- SillyTavern **1.19.0** — developed and tested against this version.
-- A Stage 2 source: any supported image endpoint (each needs its own key/token; Pollinations requires an `sk_` access token; a local ComfyUI needs none).
-- A Stage 1 source: a Connection Manager profile or a custom text endpoint.
+- **OpenAI Images** (gpt-image / DALL·E), **Gemini** (Nano Banana — включая новый Interactions API), **OpenRouter Images**, **шлюзы Chat Completions** (оба диалекта настроек картинки: OpenRouter и new-api), **Pollinations** (нужен `sk_`-токен), **Naistera** (токен из Telegram-бота), **Cloudflare Workers AI** (бесплатно 10 000 нейронов в день — десятки картинок FLUX), **локальный ComfyUI** (ключ не нужен).
+- ComfyUI: встроенные графы txt2img / img2img или свой workflow «Export (API)» с плейсхолдерами `%prompt%` / `%seed%` / `%model%` / `%width%` / `%height%`. Workflow можно загрузить из JSON — или просто из PNG-картинки, которую сохранил ComfyUI. Кнопка «Проверить» подтягивает список моделей с сервера.
+- Кнопка «Проверить» у каждого подключения: бесплатно проверяет ключ, список image-моделей и путь доставки (напрямую или через прокси).
+- У каждого подключения: режим референсов (авто / всегда / никогда), лимит референсов, таймаут, дополнительные параметры запроса, клонирование, сброс выученного о шлюзе.
 
-## CORS proxy & security
+### Референсы (на кого опираться)
 
-- Image providers are reached **from the browser**: direct first, and through the **built-in SillyTavern CORS proxy** (`/proxy/`) when an endpoint doesn't send CORS headers (e.g. `api.cloudflare.com`, ComfyUI without a CORS launch flag). Endpoints that allow browser calls (OpenRouter, Gemini, Pollinations) never touch the proxy. No third-party relays are used, ever — the only proxy is your own ST server.
-- Enable it in `config.yaml` (`enableCorsProxy: true`) and restart ST; the «auto» delivery mode picks the path per endpoint on its own. Details: [docs/cors-proxy-setup.md](docs/cors-proxy-setup.md).
-- If ST is reachable from other devices, spend two minutes on server hygiene: a `cors.origin` list instead of `"*"`, a narrow `whitelist`, `allowKeysExposure: false`, and `basicAuthMode: true` for anything beyond the LAN. Same doc, section «Гигиена»; official reference: [config.yaml](https://docs.sillytavern.app/administration/config-yaml), [Remote Connections](https://docs.sillytavern.app/usage/remoteconnections/).
+- Пул карточек с папками (два уровня вложенности), избранными папками, поиском и управлением папками: переименовать, перекрасить, слить, удалить.
+- У карточки: имя, алиасы (по ним сцена сопоставляется с персонажем; поддерживают `{{char}}` / `{{user}}`), описание, обрезка, замена картинки, клонирование. Есть режим «только описание» — текстовый референс без картинки.
+- Автоподбор по сцене: упоминания персонажа в тексте находят подходящие карточки — Шаг 1 и Шаг 2 показывают, что именно распознано; спорные упоминания разрешаются кнопками «Включить / Исключить».
+- Whitelist на чат: можно явно задать, какие карточки и папки разрешены в этом чате; разрешённые карточки переносятся в генерацию перетаскиванием.
+- Пакетная загрузка с обрезкой.
 
-## Installation
+### Инлайн в чате
 
-### From a git repository
+- Маркеры `[[тип: описание]]` в постах превращаются в картинки: авто-режим (не больше трёх на сообщение, платные запросы — по одному за раз), кнопка камеры 📷 на любом посте персонажа и слова-триггеры в ваших сообщениях. Исходный маркер в тексте прячется.
+- Триггер-профили: встроенные «Картинка», «Селфи» и «Сцена» плюс свои типы — у каждого алиасы, формат, префикс / суффикс промпта и политика референсов.
+- Компакт-режим: вместо картинки в посте — чип «📷 тип», клик раскрывает изображение обратно.
+- Пока картинка рисуется — заглушка с кнопкой отмены; ошибка превращается в кнопку «повторить». Готовые картинки открываются в общем просмотрщике.
+- Результаты хранятся в метаданных чата и уезжают вместе с его экспортом. Тестовый стенд и лента последних инлайн-картинок — на вкладке «Медиа».
 
-> Repository URL: **https://github.com/ochen-beep/SillyTavern-UR-Image-Studio**
+### Галерея
 
-1. Open **Extensions → Manage Extensions** in SillyTavern.
-2. Paste the repository URL into the *Install extension* field and press **Install**.
-3. Reload SillyTavern and make sure **UR Image Studio** is enabled in the extensions list.
+- Картинки хранятся в родной галерее SillyTavern (видны и в её Show Gallery), карточки с промптом и моделью — в галерее расширения, отдельно на каждый чат и студию.
+- Два режима: «Все» — одной лентой, «Папки» — с фильтром по папкам (создать, переименовать, перекрасить, удалить; картинка может лежать в нескольких папках).
+- Избранное: звёздочка на карточке и в просмотрщике, избранные закрепляются сверху ленты.
+- Действия с картинкой: перегенерировать (в том числе с теми же референсами), копировать промпт, перейти к посту-источнику, сохранить как референс, скачать, разложить по папкам, удалить — с выбором, стереть файл насовсем или только спрятать карточку.
+- Просмотрщик на весь экран: зум, свайпы, обрезка (в новую карточку или в референс), правка промпта с перегенерацией.
 
-### Manual
+### Окно, уведомления
 
-1. Copy the release package contents (`manifest.json`, `index.js`, `style.css`, `src/`, `USER_GUIDE.md`) into a new folder under `data/<user-handle>/extensions/`.
-2. Restart SillyTavern, then enable **UR Image Studio** in **Manage Extensions**.
+- Плавающее окно: перетаскивается, растягивается, положение запоминается; на мобильных — во весь экран. Кнопку запуска можно выбрать: плавающая, в quick-reply баре или обе. Во время генерации кнопка пульсирует.
+- Настраиваемый масштаб интерфейса и размер шрифта.
+- Звуки готовности для Шага 1 и Шага 2: выбор сигнала, громкость, режим «только когда вкладка не в фокусе». Всё синтезируется в браузере — ничего загружать не нужно.
 
-### First-time setup
+### Данные и диагностика
 
-1. Click the floating launcher button to open the studio window.
-2. On the **API** tab, add an image connection (pick the contract that matches your endpoint, fill in URL and key) and choose the Stage 1 source — a Connection Manager **profile** or a **custom** endpoint.
-3. On the **Generate** tab, press the button: in the default mode Stage 1 builds the prompt from the chat, Stage 2 renders it, and the result appears in the **Gallery**.
+- Экспорт / импорт бэкапа: подключения, шаблоны, пресеты, референсы и папки. API-ключи в бэкап не входят — на новой машине их вводят заново. Ключи вообще хранятся только в браузере.
+- Сетевой дамп (последние 50 запросов, только метаданные), журнал событий и экспорт диагностики — без промптов, ключей и содержимого ответов.
+- «Обновить галерею» — сверка галереи с папками на сервере.
 
-## Usage
+### Мост для других расширений (эксперимент)
 
-- The floating launcher button opens the studio window (position is remembered; on mobile the studio takes the full screen). Generation progress pulses right on the launcher.
-- The launch mode dropdown on the Generate tab: **manual** uses only your prompt; **build prompt** runs Stage 1 and lets you edit the result before paying for Stage 2; **full pipeline** does both in one click.
-- Aspect ratio ("Стороны"), size, quality, model, template and parameter presets are per-chat settings; the studio (welcome screen) keeps a separate set.
-- Inline: write `[[img: ...]]` / `[[селфи: ...]]` in a post (or let the model write them) and the engine renders an image shell in place. The camera button in a post's menu generates an image for that post manually. Trigger profiles (type names, aliases, aspect ratio) are editable in settings.
-- References: bind a folder to the chat and matched references are attached to generations automatically; the send mode (auto / always / never) is per connection.
-- Gallery: the viewer opens from gallery cards and inline previews alike and offers crop (with a reference mode), "send to references", copy, and delete.
-- Templates: Stage 1 instruction templates are editable on the Templates tab and stored server-side, so they survive reloads and follow your ST data directory.
-- Export/import of browser-local data (without API keys and the gallery) and the diagnostic dump live in **Settings → Данные и диагностика**.
+Другие расширения через `globalThis.URIS` могут строить промпт, запускать и отменять генерации, читать статус, галерею и список шаблонов. Их запросы идут через те же очередь и диагностику. Вкладка «Мост» — лаборатория, чтобы всё это пощупать без написания кода.
 
-A detailed walkthrough — in Russian, with connections, inline markers and all the nuances — lives in [USER_GUIDE.md](USER_GUIDE.md).
+## Требования
 
-## Compatibility notes
+- SillyTavern **1.19.0** — на этой версии расширение разрабатывается и тестируется.
+- Источник картинок: любое из поддерживаемых подключений (у каждого свой ключ или токен; ComfyUI — локальный и без ключа; у Cloudflare есть бесплатная дневная квота).
+- Источник текста для Шага 1: профиль Connection Manager или свой эндпоинт (OpenAI-совместимый или Gemini).
 
-- Browser-side image requests need either a CORS-permissive endpoint or the SillyTavern CORS proxy. The connection's delivery setting is **auto** by default, and auto learns: direct first; if the direct POST dies on a CORS/network failure, a free OPTIONS probe decides whether the request provably never left the browser (then the generation is re-dispatched through the proxy within the same call — one paid request total) or the outcome is genuinely unknown (a typed ambiguous error, one «Повторить» click). Either way the direct path is remembered as broken for ~30 minutes: subsequent auto deliveries go through the proxy without repeating the failure, and self-heal back to direct once a direct attempt succeeds again. Before the first paid request on an unprobed connection a cheap GET probe picks the delivery path. Delivery/dialect experience is stored browser-locally (like API keys) and survives reloads without leaking to other machines. An opt-in setting («Авто-повтор при неоднозначной доставке») lets a queued task resubmit itself once after an ambiguous outcome — off by default, since the first request may have been processed and billed. See `docs/cors-proxy-setup.md` and `docs/2026-09-28-delivery-auto-heal-design.md`.
-- Stopping a generation that is delivered through the ST proxy cancels only the wait: the provider keeps processing and may bill the request (the proxy does not forward cancellation).
-- Chat Completions gateways ignore aspect ratio/size unless the correct dialect is selected: OpenRouter documents a top-level `image_config`, while new-api relays (most gateways) silently ignore it and only forward `extra_body.google.image_config`. Without the right dialect the gateway quietly returns its default format — URIS warns about dropped parameters and, after the image arrives, verifies that the actual pixels match the request.
-- ComfyUI runs locally: launch it with `--enable-cors-header "*"` for direct browser access, or route the connection through the ST CORS proxy (JSON-only — it cannot forward the multipart `/upload/image` used for references, so references need direct access). A generation is queued via `POST /prompt` and polled over `GET /history/{id}` under the connection timeout; Stop also fires `POST /interrupt` (on older ComfyUI servers the interrupt body is ignored and the whole server queue is cancelled). «Проверить» fills the model dropdown from the server's checkpoint list. Step-by-step setup guide: [docs/guide/comfyui-setup.md](docs/guide/comfyui-setup.md).
-- Stage 1 via a Connection Manager profile is the most robust option behind proxies and non-CORS endpoints; custom endpoints depend on the provider allowing direct browser calls. A custom-endpoint request is never re-sent automatically after an ambiguous failure: before the first request the extension probes the host's model list to pick the delivery path, and if a paid request still dies behind a possible CORS mask it surfaces a clear error and the next attempt goes through the ST proxy.
+## Установка
 
----
+### Из git-репозитория
 
-### Технические детали для тех кому интересно
+> Адрес репозитория: **https://github.com/ochen-beep/SillyTavern-UR-Image-Studio**
 
-#### Two-stage pipeline
+1. Откройте в SillyTavern **Extensions → Manage Extensions**.
+2. Вставьте адрес репозитория в поле *Install extension* и нажмите **Install**.
+3. Перезагрузите SillyTavern и убедитесь, что **UR Image Studio** включён в списке расширений.
 
-Stage 1 (`src/text-api.js`) calls the text LLM with a template-built instruction plus the chat scene block and returns the image prompt; Stage 2 (`src/dispatch-plan.js` → `src/providers/*`) materializes it. Every generation runs as a draft (`src/generation-drafts.js`) with an epoch guard, so chat switches and cancellation cannot mix results between runs. Retries with backoff wrap Stage 1; Stage 2 is never retried automatically — a paid provider POST may have been processed, so a failed generation is re-run only by an explicit user action (or the opt-in single queue retry for provably ambiguous delivery).
+### Вручную
 
-#### Image connections and contracts
+1. Скопируйте содержимое релизного пакета (`manifest.json`, `index.js`, `style.css`, `src/`, `USER_GUIDE.md`) в новую папку под `data/<пользователь>/extensions/`.
+2. Перезапустите SillyTavern и включите **UR Image Studio** в **Manage Extensions**.
 
-A connection states its contract explicitly (`src/image-connection-schema.js`): `openai-images`, `gemini-native`, `openrouter-images`, `chat-completions` (with the optional `image_config` dialect), `pollinations-images`, `naistera`, `cloudflare-workers-ai`. A model name does not prove a protocol: the same model can want multipart on one gateway and JSON on another, so the edits protocol is stated per connection too. The probe (`Проверить`) records what the endpoint actually supports; capability facts (`src/capability-observer.js`) turn "model rejected the request" into human-readable constraints instead of generic errors. Secret fields are stripped from every export and dump.
+### Первый запуск
 
-#### Storage
+1. Нажмите плавающую кнопку — откроется окно студии.
+2. На вкладке **API** добавьте подключение к модели картинок (выберите протокол под ваш сервис, укажите адрес и ключ) и выберите источник текста для Шага 1 — профиль Connection Manager или свой эндпоинт.
+3. На вкладке **Генерация** нажмите кнопку: в режиме по умолчанию Шаг 1 построит промпт из чата, Шаг 2 нарисует, а результат появится во вкладке **Галерея**.
 
-Image metadata, templates, parameter presets, references and the studio config live in server-side user files (`uris_gallery.json`, `uris_studio.json`, …) behind the shared file-store machinery (`src/file-store.js`), which keeps `settings.json` small — ST re-uploads the whole settings object on every unrelated change. Actual image files live in SillyTavern's native gallery. Browser-local keys (API keys, browser-side stores) stay in localforage and never enter exports. On first load the studio copies any browser-side data into the server files.
+## CORS-прокси и безопасность
 
-#### Inline engine
+- Запросы к сервисам картинок идут **из браузера**: сначала напрямую, а если эндпоинт не отдаёт CORS-заголовки (например, `api.cloudflare.com` или ComfyUI без специального флага запуска) — через **встроенный CORS-прокси SillyTavern**. Сторонние прокси не используются никогда — только ваш собственный сервер ST.
+- Прокси включается в `config.yaml` (`enableCorsProxy: true`) с перезапуском ST; режим доставки «Авто» сам подбирает путь для каждого эндпоинта и запоминает неудачный прямой путь примерно на полчаса. Подробности: [docs/cors-proxy-setup.md](docs/cors-proxy-setup.md).
+- Если ST открыт с других устройств, стоит потратить две минуты на гигиену сервера: список `cors.origin` вместо `"*"`, узкий `whitelist`, `allowKeysExposure: false` и `basicAuthMode: true` для всего, что дальше локальной сети. Раздел «Гигиена» в той же доке; официальные ссылки: [config.yaml](https://docs.sillytavern.app/administration/config-yaml), [Remote Connections](https://docs.sillytavern.app/usage/remoteconnections/).
 
-`src/inline/` is split into a pure grammar (`[[тип: описание]]` markers, code-fence aware, ReDoS-safe), trigger profiles (per-type aspect, prefix/suffix, references policy), an event scanner, a runner (plans and caps paid jobs, auto mode only), and a render layer that reconciles DOM shells with job states across chat switches and cancellations. Automatic inline jobs and bridge calls share the autolane (`src/autolane.js`): one automatic paid request at a time; manual generations keep their own lane.
+## Нюансы
 
-#### External bridge
-
-`globalThis.URIS` (`src/bridge.js`) is a facade, not a public import surface. Headline methods: `generate / abort / getStatus / listConnections / on / off / ready / parseInline`; the full surface (v. 0.9.8) also exposes `buildPrompt / generateFromScene / getCapabilities / getCard / listActive / listGallery / listPending / listRefs / listTemplates / listTriggers / classifyError / removeCard / apiVersion / displayName` — inspect `URIS.getCapabilities()` at runtime for the authoritative list. Bridge generations go through the same pipeline, recovery records, diagnostics and Stop button as manual ones. The Bridge tab hosts Stage 1 / Generation labs for testing consumer integrations.
-
-#### Diagnostics
-
-The network dump records the last 50 extension requests — metadata only (scrubbed URLs, statuses, timings, header names, body sizes; no prompts or bodies) — and is exported separately. The event log survives reloads and contains only metadata: timestamps, stages, generations, errors. The diagnostic export never includes scene text, prompts, API keys, or raw responses.
-
-#### Development
-
-```bash
-npm test              # node --test across tests/!(server-*)*.test.js
-npm run test:server   # server-line tests; expected red until the server plugin ships
-```
-
-The test runtime needs no jsdom: `tests/fake-dom.js` stubs the minimum DOM surface for the pure modules. A server-plugin variant (generation executed by a SillyTavern server plugin) was explored early on but abandoned — the CORS problem it targeted is solved cheaper by direct browser routes with an ST CORS-proxy fallback, so no server-side code ships with the extension. `docs/runbooks/2026-09-14-dev-deploy-workflow.md` describes the two-tree dev/deploy workflow.
-
-#### Project structure
-
-- `index.js` — entry point: lifecycle hooks + orchestration.
-- `src/core.js` — state, settings, logging, fetch with timeout/retry.
-- `src/pipeline*.js`, `src/dispatch-plan.js` — Stage 1/Stage 2 orchestration and provider dispatch.
-- `src/providers/` — one adapter per image contract plus the text LLM adapters.
-- `src/refs-library.js`, `src/gallery-index.js`, `src/param-presets.js`, `src/prompt-templates.js`, `src/studio-scope.js` — server-file stores and their domain logic.
-- `src/file-store.js` — shared user-files machinery: server-file storage with write coalescing, unload flush, and read-only refusals that protect data (requires a SillyTavern with the user-files API).
-- `src/inline/` — the inline engine (grammar, triggers, scanner, runner, render, store).
-- `src/bridge.js`, `src/autolane.js` — external facade and the automatic-jobs lane.
-- `src/ui/` — floating window, tabs (API, References, Generate, Gallery, Templates, Media, Bridge, Settings), viewer, launcher.
-- `docs/` — changelog, provider contract notes, plans, runbooks.
-
-#### Packaging
-
-The user-facing package contains only: `manifest.json`, `index.js`, `style.css`, `src/`, `USER_GUIDE.md`.
-
-**Exclude when exporting:** `docs/`, `tests/`, `node_modules/`, `package.json`, `README.md` (optional).
+- Шлюзы Chat Completions молча игнорируют стороны и размер, если не выбран правильный диалект настроек картинки: OpenRouter ждёт `image_config`, большинство релеев на new-api — `extra_body.google.image_config`. URIS предупреждает о выброшенных параметрах и после ответа проверяет, что картинка действительно нужного размера.
+- ComfyUI: запустите с `--enable-cors-header "*"` для прямых запросов из браузера либо пустите подключение через прокси ST — но через прокси не работают референсы (он не передаёт загрузку файлов), а «Стоп» на старых версиях ComfyUI очищает всю очередь сервера. Пошаговая настройка: [docs/guide/comfyui-setup.md](docs/guide/comfyui-setup.md).
+- Остановка генерации, которая идёт через прокси, отменяет только ожидание: провайдер может успеть обработать и списать запрос.
+- Для Шага 1 профиль Connection Manager надёжнее всего — запрос идёт через сервер ST, и CORS его не касается. Свой эндпоинт должен разрешать прямые запросы из браузера.
