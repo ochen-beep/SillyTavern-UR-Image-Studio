@@ -14,9 +14,12 @@ import { getConnection, isServerOwnedConnection, saveConnection } from '../conne
 import { effectiveReferenceCap } from '../reference-limits.js';
 import { resolveDispatchPlan, referenceEncoding } from '../dispatch-plan.js';
 import { reportFailure, URIS_SCOPES } from '../error-pool.js';
-import { getChatRefs, saveChatRefs, listFolders, listRefs } from '../refs-library.js';
+import { getChatRefs, saveChatRefs, listFolders, listRefs, getRefSync } from '../refs-library.js';
 import { showPoolPicker } from './tab-references.js';
 import { openFolderSheet } from './folder-picker.js';
+import { openCardActionMenu, bindCardContextMenu } from './card-action-menu.js';
+import { showSingleImage } from './lightbox.js';
+import { copyImageToClipboard } from './gallery-actions.js';
 import { bindDetailsToggle } from './accordion-state.js';
 import { refreshActive } from './tabs.js';
 import { activeScope } from './tab-generate-scope.js';
@@ -381,6 +384,22 @@ async function renderWhitelistChips(root, chatRefs) {
         if (chip.classList.contains('uris-ref-stale')) return;
         const refId = chip.dataset.refId;
         if (refId) makeChipDraggable(chip, refId, async id => { await applyReferenceCorrection(root, id, true); });
+        // Context menu mirrors the two existing gestures: drag-to-preview
+        // (include) and the ✕ button (exclude). Long-press works on touch.
+        if (!refId) return;
+        bindCardContextMenu(chip, ({ x, y }) => {
+            const ref = getRefSync(refId);
+            openCardActionMenu({
+                title: ref?.name || chip.title || '',
+                x, y,
+                items: [
+                    { id: 'include', icon: 'fa-check', label: 'Включить в генерацию',
+                        onSelect: () => { void applyReferenceCorrection(root, refId, true); } },
+                    { id: 'exclude', icon: 'fa-ban', label: 'Исключить', danger: true,
+                        onSelect: () => { void applyReferenceCorrection(root, refId, false); } },
+                ],
+            });
+        });
     });
 }
 
@@ -557,5 +576,36 @@ export async function renderLivePreview(root, referenceResolution) {
         const chosen = await showPoolPicker({ title: 'Референсы для генерации', multi: true, excludeIds: Array.from(effectiveIds) });
         if (!chosen?.length) return;
         await addStage2Includes(root, chosen);
+    });
+
+    // Context menu on the "going into generation" previews: the same actions
+    // the tile already supports (view on click, ✕ removes) plus clipboard copy.
+    host.querySelectorAll('.uris-ref-chip-preview').forEach(chip => {
+        bindCardContextMenu(chip, ({ x, y }) => {
+            const refId = chip.dataset.refId;
+            const ref = getRefSync(refId);
+            if (!ref) return;
+            openCardActionMenu({
+                title: ref.name || '',
+                x, y,
+                items: [
+                    { id: 'view', icon: 'fa-eye', label: 'Открыть',
+                        onSelect: () => showSingleImage({
+                            src: ref.imagePath,
+                            width: ref.width,
+                            height: ref.height,
+                            actions: 'ref',
+                            refId: ref.id,
+                            name: ref.name,
+                            aliases: ref.aliases,
+                            description: ref.description,
+                        }) },
+                    { id: 'copy', icon: 'fa-image', label: 'Скопировать',
+                        onSelect: () => { void copyImageToClipboard(ref); } },
+                    { id: 'remove', icon: 'fa-xmark', label: 'Убрать из генерации', danger: true,
+                        onSelect: () => { void applyReferenceCorrection(root, refId, false); } },
+                ],
+            });
+        });
     });
 }

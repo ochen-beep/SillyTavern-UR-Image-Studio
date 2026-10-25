@@ -952,7 +952,7 @@ test('refreshReferencePanel refreshes ambiguity controls with the effective prev
     const hosts = new Map([
         ['#urisRefsPanel', {}],
         ['#urisRefsModeBadge', { innerHTML: 'old' }],
-        ['#urisRefsPreview', { innerHTML: '', querySelector: () => null }],
+        ['#urisRefsPreview', { innerHTML: '', querySelector: () => null, querySelectorAll: () => [] }],
         ['#urisRefsWhitelist', { innerHTML: '', querySelector: () => null, querySelectorAll: () => [] }],
         ['.uris-scene-context', { innerHTML: 'stale' }],
     ]);

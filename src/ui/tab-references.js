@@ -702,7 +702,100 @@ async function _renderGrid(root, folders, refsOverride, searchQuery = '') {
             _renderOverlay(root, folders);
             _renderGrid(root, folders);
         });
+        bindCardContextMenu(tile, ({ x, y }) => {
+            const refId = tile.dataset.refId;
+            const ref = refs.find(r => r.id === refId);
+            if (!ref) return;
+            openCardActionMenu({
+                title: ref.name,
+                x, y,
+                items: [
+                    { id: 'open', icon: 'fa-eye', label: 'Открыть',
+                        onSelect: () => {
+                            _editingRefId = refId;
+                            void _renderOverlay(root, folders);
+                            void _renderGrid(root, folders);
+                        } },
+                    { id: 'crop', icon: 'fa-crop-simple', label: 'Обрезать',
+                        onSelect: () => { void _cropRefAction(refId, root); } },
+                    { id: 'clone', icon: 'fa-clone', label: 'Клонировать',
+                        onSelect: () => { void _cloneRefAction(refId, root); } },
+                    { id: 'folders', icon: 'fa-folder', label: 'Папки…',
+                        onSelect: () => { void _assignRefFolders(refId, root); } },
+                    { id: 'del', icon: 'fa-trash', label: 'Удалить…', danger: true,
+                        onSelect: () => { void _deleteRefAction(refId, root); } },
+                ],
+            });
+        });
     });
+}
+
+// ── Shared ref actions (grid context menu + mobile) ──
+// The overlay editor binds its own variants with in-place preview updates;
+// these standalone versions operate on the pool record and refresh the grid.
+
+/** Crop the ref's current image into a new pool file (grid-level flow). */
+async function _cropRefAction(refId, root) {
+    const ref = await getRef(refId);
+    if (!ref?.imagePath) return;
+    const oldImage = ref.imagePath;
+    try {
+        const crop = await openCropDialog({ source: ref.imagePath });
+        if (!crop) return;
+        const optimized = await ingestReferenceImage(crop.blob, `ref_${ref.id}_${Date.now()}`);
+        try {
+            await updateRef(ref.id, { imagePath: optimized.imagePath, ...optimized.metadata });
+            await persistPoolOrThrow('обрезать');
+        } catch (mutationError) {
+            throw new Error(`${mutationError.message}; orphaned upload: ${optimized.imagePath}`);
+        }
+        releaseRefImage(oldImage);
+        refreshActive();
+    } catch (err) {
+        reportFailure({ scope: URIS_SCOPES.refs, message: 'Не удалось обрезать: ' + (err?.message || err), toast: true, toastText: 'Не удалось обрезать: ' + err.message });
+    }
+}
+
+async function _cloneRefAction(refId, root) {
+    try {
+        const ref = await getRef(refId);
+        if (!ref) return;
+        const clone = await cloneRef(ref);
+        toastr?.success('Клонирован: ' + clone.name);
+        _editingRefId = clone.id;
+        refreshActive();
+        void root;
+    } catch (err) {
+        reportFailure({ scope: URIS_SCOPES.refs, message: 'Клонирование: ' + (err?.message || err), toast: true, toastText: 'Не удалось клонировать: ' + err.message });
+    }
+}
+
+async function _assignRefFolders(refId, root) {
+    const ref = await getRef(refId);
+    if (!ref) return;
+    const folders = await listFolders();
+    const selected = new Set(ref.folders || []);
+    openFolderSheet({
+        title: 'Папки референса',
+        folders,
+        selectedIds: ref.folders || [],
+        onToggle: async (folder, isOn) => {
+            if (isOn) selected.add(folder.id); else selected.delete(folder.id);
+            await updateRef(ref.id, { folders: [...selected] });
+        },
+        onDone: () => refreshActive(),
+        onCancel: () => refreshActive(),
+    });
+    void root;
+}
+
+async function _deleteRefAction(refId, root) {
+    if (!await showConfirmModal('Удалить референс из пула?')) return;
+    await deleteRef(refId);
+    if (_editingRefId === refId) _editingRefId = null;
+    _mobileScreen = 'grid';
+    refreshActive();
+    void root;
 }
 
 // ── Overlay panel ──
