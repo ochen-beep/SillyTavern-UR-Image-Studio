@@ -390,14 +390,12 @@ export function renderModelSelectMarkup(choices) {
 }
 
 /**
- * Write one generation default with the «для всех чатов» semantics: when the
- * global mode is on AND the chat has no own value for the key, the change
+ * Write one generation default with the "use for all chats" semantics: when
+ * the global mode is on AND the chat has no own value for the key, the change
  * lands in settings.globalGenerationDefaults (visible to every chat); an
  * existing chat value is overridden as usual (patchChatConfig). Reading side
  * (chat ?? global) already lives in chat-binding.js / pipeline-config.js.
- */
-/**
- * Exported for tests: the «для всех чатов» write semantics of one default.
+ * Exported for tests.
  */
 export async function saveGenerationDefaultByKey(key, value) {
     let toGlobal = false;
@@ -533,9 +531,9 @@ export async function render(root) {
     if (!isCurrent()) return;
     root.innerHTML = renderGenerateMarkup({ ...vm, modelChoices, qualityOptions: qualityOptionsFor(modelChoices?.current || '', effectiveDraft.quality), isStudio: studio });
     bindGenerate(root);
-    // №14 UI-ревизии: строка «Дополнительно» (Размер/Quality/Флоу/Автоматизация)
-    // под гармошкой; положение запоминается в settings.accordionState и
-    // переживает перезагрузку страницы (accordion-state.js).
+    // The "Advanced" row (Size/Quality/Flow/Automation) lives under a
+    // collapsible; its position persists in settings.accordionState and
+    // survives page reloads (accordion-state.js).
     bindDetailsToggle(root.querySelector('#urisGenParamsAcc'), 'generate:params');
     syncCancelState(root);
     bindModelSelect(root, modelChoices, { onSwitched: () => render(root) });

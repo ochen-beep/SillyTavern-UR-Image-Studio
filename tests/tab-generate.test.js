@@ -212,7 +212,7 @@ test('renderGenerateMarkup splits params into rows (format + template + «Доп
     const messageText = 'message text';
     const draft = { prompt: 'a cat', aspectRatio: '9:16', imageSize: '2K', quality: 'high', templateId: null, messageHash: hashMessage(messageText) };
     const markup = renderGenerateMarkup(baseVm({ draft, messageText }));
-    // UI-ревизия №14: 4 строки uris-gen-params (2 открытые + 2 внутри аккордеона).
+    // 4 uris-gen-params rows (2 open + 2 inside the Advanced accordion).
     assert.equal((markup.match(/class="uris-gen-params"/g) || []).length, 4);
     for (const id of ['urisAspect', 'urisImgSize', 'urisQuality', 'urisTemplate', 'urisAutomationMode', 'urisGenerationFlow']) {
         assert.match(markup, new RegExp(`id="${id}"`));

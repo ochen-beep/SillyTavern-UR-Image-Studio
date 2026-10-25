@@ -100,10 +100,10 @@ export async function copyItemText(item, deps = {}) {
 }
 
 /**
- * Копирование самой картинки в буфер обмена (№15 из UI-ревизии): пункт
- * контекстного меню карточки и кнопка лайтбокса. Clipboard API принимает
- * только image/png — webp/jpeg перегоняются через canvas. Возврат true/false
- * для контракта «закрывать ли просмотрщик»; ошибки — тост + error pool.
+ * Copy the image itself to the clipboard: a card context-menu item and a
+ * lightbox button. The Clipboard API accepts image/png only — webp/jpeg are
+ * re-encoded through a canvas. Returns true/false for the "close the viewer"
+ * contract; failures go to a toast + the error pool.
  * @param {{imagePath?:string, stGalleryPath?:string, src?:string}} item
  * @param {{fetch?:Function, write?:Function, ClipboardItem?:Function, createImageBitmap?:Function, canvas?:Function}} [deps]
  */
@@ -376,17 +376,17 @@ export async function deleteImage(item, chatId, root) {
     return removed !== false;
 }
 
-/** Exported for tests: the delete-popup with the "erase file too" checkbox. */
+/** Exported for tests: the delete popup with the "erase file too" checkbox. */
 export async function confirmDeleteModal(ctx) {
-    // Returns: true (delete file too), false (hide only), null (cancelled).
+    // Returns: true (delete the file too), false (hide only), null (cancelled).
     if (!ctx?.callGenericPopup || !ctx?.POPUP_TYPE) {
         // Fallback: simple confirm = hide only.
         return await showConfirmModal('Удалить картинку из галереи расширения?') ? false : null;
     }
-    // ST Popup удаляет DOM диалога до того, как resolve вернёт управление
-    // (popup.js: complete → #hide → remove → resolver), поэтому прочитать
-    // чекбокс после await нельзя. Ловим его состояние capture-фазой change —
-    // живые переключения видны, пока диалог открыт.
+    // The ST popup removes the dialog DOM before its promise resolves
+    // (hide → remove → resolver), so the checkbox cannot be read after the
+    // await. Track its state with a capture-phase change listener while the
+    // dialog is open.
     const deleteFileRef = { checked: false };
     const onChange = (e) => {
         const input = e.target?.closest?.('#urisDeleteFile') || (e.target?.id === 'urisDeleteFile' ? e.target : null);

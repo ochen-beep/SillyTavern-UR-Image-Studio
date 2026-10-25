@@ -1,8 +1,8 @@
 // @ts-check
-// stage1-context.js (№16 из UI-ревизии, по образцу DS-Comments): блоки
-// персоны/карточки {{char}}/лорбука/истории для Stage 1. Тумблеры выключены
-// по умолчанию — parts пуст; каждый включённый блок попадает отдельной
-// строкой; история — до якорного поста, без is_system/is_hidden.
+// stage1-context.js: persona / {{char}} card / lorebook / history blocks
+// for Stage 1. Toggles are off by default — parts is empty; each enabled
+// block lands as its own string; history stops at the anchor post and skips
+// is_system/is_hidden.
 import { test, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
 

@@ -252,9 +252,9 @@ export const defaultSettings = Object.freeze({
         imageSize: null,
         quality: null,
     }),
-    // Контекст Stage 1 (по образцу DS-Comments): персона/карточка {{char}}/
-    // лорбук/история чата. Всё выключено по умолчанию — промпт строится
-    // только из сцены, пока пользователь явно включит блоки (см. stage1-context.js).
+    // Stage 1 context: persona / {{char}} card / lorebook / chat history.
+    // Everything is off by default — the prompt is built from the scene only
+    // until the user enables blocks explicitly (see stage1-context.js).
     stage1IncludePersona: false,
     stage1IncludeCharacter: false,
     stage1IncludeLore: false,
@@ -502,8 +502,8 @@ export function loadSettings() {
     if (typeof s.accordionState !== 'object' || s.accordionState === null || Array.isArray(s.accordionState)) {
         s.accordionState = {};
     }
-    // Контекст Stage 1 (персона/карточка/лорбук/история): строгие booleans,
-    // depth — 0/5/10/20, всё остальное → 0 (выключено).
+    // Stage 1 context (persona/card/lore/history): strict booleans; depth is
+    // 0/5/10/20, anything else → 0 (off).
     s.stage1IncludePersona = s.stage1IncludePersona === true;
     s.stage1IncludeCharacter = s.stage1IncludeCharacter === true;
     s.stage1IncludeLore = s.stage1IncludeLore === true;

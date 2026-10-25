@@ -102,11 +102,11 @@ export async function getProfileDetails(profileId) {
 const STAGE1_PROFILE_TIMEOUT_MS = 300000;
 
 /**
- * Сообщения профильного запроса. userPrompt — строка ИЛИ массив user-блоков
- * (контекст Stage 1 из stage1-context.js): каждый блок — отдельное
- * {role:'user'} сообщение, CM передаёт массив as-is (как у DS-Comments —
- * request log показывает, где persona/карточка/лорбук/история).
- * Экспортировано для тестов формы запроса.
+ * Messages for a profile request. userPrompt is a string OR an array of
+ * user blocks (Stage 1 context from stage1-context.js): each block becomes
+ * its own {role:'user'} message; CM passes the array as-is, so the request
+ * log shows where persona/card/lore/history are.
+ * Exported for request-shape tests.
  */
 export function buildProfileMessages(systemPrompt, userPrompt) {
     const userBlocks = (Array.isArray(userPrompt) ? userPrompt : [userPrompt])

@@ -1,8 +1,8 @@
 // @ts-check
-// Попап удаления картинки: чекбокс «Также стереть файл» должен выжить до
-// резолва. ST Popup удаляет DOM диалога ДО вызова resolver'а — регрессия
-// читала чекбокс после await и всегда получала unchecked. Фикс ловит
-// переключение capture-фазой change, пока диалог открыт.
+// Delete popup: the "erase file too" checkbox must survive until resolve.
+// The ST popup removes the dialog DOM BEFORE its promise resolves — the old
+// regression read the checkbox after the await and always saw it unchecked.
+// The fix tracks toggles with a capture-phase change listener.
 import { test, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { makeFakeDocument } from './fake-dom.js';

@@ -1,7 +1,7 @@
 // @ts-check
-// Копирование картинки в буфер (№15): PNG уходит как есть, webp/jpeg
-// перегоняются через canvas, ошибки (fetch/clipboard) — тост + false.
-// Все внешние эффекты подменяются deps — браузер не нужен.
+// Image-to-clipboard: PNG goes as-is, webp/jpeg are re-encoded via canvas,
+// failures (fetch/clipboard) end in a toast + false. All external effects
+// are injected via deps — no browser needed.
 import { test, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { makeFakeDocument } from './fake-dom.js';

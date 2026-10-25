@@ -1,19 +1,17 @@
 // @ts-check
 /**
- * Контекст Stage 1 из чата (по образцу DS-Comments src/generator.js):
- * карточка {{user}} (персона), карточка {{char}}, записи лорбука и история
- * сообщений — опциональные блоки, добавляемые к Scene-сообщению Stage 1.
+ * Chat context for Stage 1: the {{user}} card (persona), the {{char}} card,
+ * lorebook entries and chat history — optional blocks appended to the Stage 1
+ * Scene message.
  *
- * Логика DS-Comments, воспроизведённая здесь:
- *  - persona: ctx.powerUserSettings.persona_description (generator.js:120);
- *  - character: ctx.characters[ctx.characterId].description (+personality) (generator.js:128);
- *  - lore: книги из chat_metadata.world_info + книга персонажа
- *    (resolveAttachedLorebookSources), записи через ctx.loadWorldInfo (lorebooks.js:190);
- *  - history: последние N сообщений чата до якорного, без is_system/is_hidden,
- *    формат «Имя: текст» (generator.js:157-190).
- *
- * Каждый блок включается своим тумблером в Настройках и обрезается по
- * символам — у Stage 1 свой бюджет контекста, меньший, чем у RP-пресетов.
+ * Each block is enabled by its own Settings toggle and clipped to a character
+ * budget — Stage 1 gets a much smaller context than an RP preset:
+ *  - persona: ctx.powerUserSettings.persona_description;
+ *  - character: ctx.characters[ctx.characterId].description (+personality);
+ *  - lore: books from chat_metadata.world_info + the character book, entries
+ *    via ctx.loadWorldInfo;
+ *  - history: the last N chat messages before the anchor post, skipping
+ *    is_system/is_hidden, formatted as "Name: text".
  */
 import { state, log } from './core.js';
 
@@ -122,8 +120,8 @@ export async function buildLorePart(ctx) {
 }
 
 /**
- * История чата: последние depth сообщений до якорного (msgId), без
- * is_system/is_hidden. Текст берётся из m.mes; имена — как в DS-Comments.
+ * Chat history: the last `depth` messages before the anchor (msgId), without
+ * is_system/is_hidden. Text comes from m.mes.
  */
 export function buildHistoryPart(ctx, depth, anchorMsgId = null) {
     const d = Number.isFinite(depth) ? Math.floor(depth) : 0;

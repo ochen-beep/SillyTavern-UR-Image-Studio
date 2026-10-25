@@ -1,11 +1,10 @@
 // @ts-check
-// Вердикт по вопросу «алиасы в Stage 2» (№13 UI-ревизии): в Stage 2 уходит
-// НЕ «вся строка алиасов», а только рефы, чей канонический алиас найден в
-// ИТОГОВОМ промпте (resolvePromptReferenceContext резолвится от prompt —
-// то есть после Stage 1). Stage 1 получает описания только рефов,
-// распознанных в тексте поста (stage1Descriptions) — супerset по сравнению
-// с Stage 2, но тоже не полный список. Тест фиксирует контракт: при двух
-// кандидатах и упоминании одного алиаса в Stage 2 едет один реф.
+// Stage 2 contract: NOT the whole alias row is sent — only references whose
+// canonical alias appears in the FINAL prompt (resolvePromptReferenceContext
+// resolves against the prompt, i.e. after Stage 1). Stage 1 receives
+// descriptions only of references detected in the source post
+// (stage1Descriptions) — a superset of Stage 2, still not the full list.
+// With two candidates and one alias mentioned, exactly one ref ships.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
