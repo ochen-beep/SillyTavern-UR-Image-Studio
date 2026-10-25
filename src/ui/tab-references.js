@@ -15,6 +15,7 @@ import {
 } from '../refs-library.js';
 
 import { ingestReferenceImage } from '../references.js';
+import { refsView, REFS_MOBILE_BREAK, REFS_SEARCH_DEBOUNCE_MS, refsForActiveFilter, filterRefsBySearch, poolTileHtml } from './refs-view-shared.js';
 import { openBatchUploadDialog } from './ref-batch-upload.js';
 import { openCropDialog } from './crop-dialog.js';
 import { showSingleImage } from './lightbox.js';
@@ -29,31 +30,10 @@ import { openCardActionMenu, bindCardContextMenu } from './card-action-menu.js';
 import { editTextModal } from './text-editor.js';
 
 // Layout state
-let _activeFolderFilter = 'all';
-let _editingFolderId = null;
-let _editingRefId = null;
 let _cw = 600;
 let _ro = null;
 let _mobileSearchQuery = '';
 let _folderSearchQuery = '';
-
-// Mobile stack breakpoint — measured against the TAB CONTAINER (root.clientWidth),
-// not window.innerWidth (unlike CSS media @media (max-width: 768px)). The axes are
-// intentionally different: SillyTavern has side panels, so clientWidth < innerWidth,
-// therefore a 480px container threshold roughly corresponds to 768px media query
-// in the typical case. This is a deliberate trade-off, not a bug: testing showed
-// that simply aligning to 768 breaks valid 600px desktop tests (project contract).
-//
-// Interaction with the UI-scale zoom (--uris-scale, style.css): zoom shrinks the
-// container's LAYOUT px (clientWidth reads visual/zoom), so scale >100% reaches
-// this breakpoint earlier and <100% later — identically on desktop and in the
-// mobile fullscreen mode. Deliberate single semantics: dense scale → compact
-// layout.
-const REFS_MOBILE_BREAK = 480;
-// Search re-renders the grid debounced: every keystroke used to wipe the
-// grid's innerHTML (restarting loads for all visible tiles) — the main
-// typing-lag source on pools of hundreds of refs.
-const REFS_SEARCH_DEBOUNCE_MS = 150;
 
 export function render(root) {
     root.classList.add('uris-body-flush');
@@ -66,8 +46,8 @@ export function render(root) {
     _folderSearchQuery = '';
     // A full tab re-entry must not inherit a stale editor session: close any
     // open reference/folder editor overlay so the grid renders clean.
-    _editingRefId = null;
-    _editingFolderId = null;
+    refsView.editingRefId = null;
+    refsView.editingFolderId = null;
     root.innerHTML = `
         <div class="uris-references">
             <div class="uris-refs-sidebar" id="urisRefsSidebar"></div>
@@ -201,12 +181,6 @@ function _renderSidebar(root, folders, refs) {
 }
 
 /** Референсы активного фильтра: группа отдаёт всё поддерево, подпапка — себя. */
-function refsForActiveFilter(refs, folders) {
-    if (_activeFolderFilter === 'all' || _activeFolderFilter === 'none') {
-        return filterRefsByFolder(refs, _activeFolderFilter);
-    }
-    return filterRefsByFolderTree(refs, folders, _activeFolderFilter);
-}
 
 function _renderFolderList(root, folders, refs) {
     const host = root.querySelector('#urisFolderList');
@@ -227,7 +201,7 @@ function _renderFolderList(root, folders, refs) {
 
     const pseudoItem = (folderId, label, count) => `
         <div class="uris-folder-row">
-            <button type="button" class="uris-folder-item ${_activeFolderFilter === folderId ? 'uris-folder-item-on' : ''}"
+            <button type="button" class="uris-folder-item ${refsView.activeFolderFilter === folderId ? 'uris-folder-item-on' : ''}"
                     data-folder="${escapeHtml(folderId)}">
                 <span class="uris-folder-dot uris-folder-dot-mute"></span>
                 <span class="uris-folder-name">${escapeHtml(label)}</span>
@@ -239,7 +213,7 @@ function _renderFolderList(root, folders, refs) {
     // Кнопок действий в строке нет — меню по ПКМ/долгому тапу и из тулбара.
     const rowHtml = (folder, { indent = false } = {}) => {
         const isGroup = folderHasChildren(folders, folder.id);
-        const on = _activeFolderFilter === folder.id;
+        const on = refsView.activeFolderFilter === folder.id;
         const collapsed = collapsedSet.has(folder.id);
         const parent = parentOf(folder);
         const sub = inSearch && parent ? `<span class="uris-folder-sub">в группе «${escapeHtml(parent.name)}»</span>` : '';
@@ -262,7 +236,7 @@ function _renderFolderList(root, folders, refs) {
     };
 
     const editorHtml = (folder) => {
-        if (_editingFolderId !== folder.id) return '';
+        if (refsView.editingFolderId !== folder.id) return '';
         const swatches = FOLDER_COLOR_PALETTE.map(color => `
             <button class="uris-folder-editor-swatch ${folder.color === color ? 'uris-folder-editor-swatch-on' : ''}"
                     type="button" data-color="${escapeHtml(color)}" title="Цвет папки" aria-label="Цвет папки"
@@ -342,7 +316,7 @@ function _renderFolderList(root, folders, refs) {
 
     host.querySelectorAll('.uris-folder-item').forEach(btn => {
         btn.addEventListener('click', async () => {
-            _activeFolderFilter = btn.dataset.folder;
+            refsView.activeFolderFilter = btn.dataset.folder;
             await _renderAll(root);
         });
         bindCardContextMenu(btn, ({ x, y }) => {
@@ -405,7 +379,7 @@ function _renderFolderList(root, folders, refs) {
     // Инлайн-редактор папки (имя + палитра) — открывается из меню «Правка…».
     const editor = host.querySelector('.uris-folder-editor');
     if (editor) {
-        const folder = folders.find(f => f.id === _editingFolderId);
+        const folder = folders.find(f => f.id === refsView.editingFolderId);
         let selectedColor = folder?.color;
         editor.querySelectorAll('.uris-folder-editor-swatch').forEach(btn => {
             btn.addEventListener('click', () => {
@@ -419,11 +393,11 @@ function _renderFolderList(root, folders, refs) {
                 name: editor.querySelector('.uris-folder-editor-name').value,
                 color: selectedColor,
             });
-            _editingFolderId = null;
+            refsView.editingFolderId = null;
             await _renderAll(root);
         });
         editor.querySelector('.uris-folder-editor-cancel')?.addEventListener('click', async () => {
-            _editingFolderId = null;
+            refsView.editingFolderId = null;
             await _renderAll(root);
         });
         editor.querySelector('.uris-folder-editor-delete')?.addEventListener('click', async () => {
@@ -436,7 +410,7 @@ function _renderFolderList(root, folders, refs) {
 /** Куда попадёт новая папка по «＋» шапки: активная группа → внутрь, активная
  *  подпапка → соседняя в её группе, иначе верхний уровень. */
 function _folderCreateDestination(folders) {
-    const active = folders.find(f => f.id === _activeFolderFilter);
+    const active = folders.find(f => f.id === refsView.activeFolderFilter);
     if (!active) return { parentId: null, label: '' };
     if (active.parentId) {
         const parent = folders.find(f => f.id === active.parentId);
@@ -454,8 +428,8 @@ function _folderCreateTitle(folders) {
 /** Удаление с обновлением активного фильтра и полным ре-рендером. */
 async function _deleteFolderAndRerender(root, folder) {
     await deleteFolder(folder.id);
-    _editingFolderId = null;
-    if (_activeFolderFilter === folder.id) _activeFolderFilter = 'none';
+    refsView.editingFolderId = null;
+    if (refsView.activeFolderFilter === folder.id) refsView.activeFolderFilter = 'none';
     await _renderAll(root);
 }
 
@@ -483,7 +457,7 @@ async function _openFolderMenu({ root, folder, folders, x = null, y = null, mobi
           // мёртвый пункт меню не показываем.
           hidden: mobile,
           onSelect: async () => {
-            _editingFolderId = folder.id;
+            refsView.editingFolderId = folder.id;
             await _renderAll(root);
         } },
     ];
@@ -547,11 +521,11 @@ function _openMoveSheet(root, folder, folders) {
 // фильтрах (Все/Без папки) гаснет, но не прячется — место стабильно.
 function _activeFolderChain(folders) {
     const chain = [{ id: 'all', label: 'Все карточки' }];
-    if (_activeFolderFilter === 'none') {
+    if (refsView.activeFolderFilter === 'none') {
         chain.push({ id: 'none', label: 'Без папки' });
         return chain;
     }
-    const active = folders.find(f => f.id === _activeFolderFilter);
+    const active = folders.find(f => f.id === refsView.activeFolderFilter);
     if (!active) return chain;
     if (active.parentId) {
         const parent = folders.find(f => f.id === active.parentId);
@@ -566,7 +540,7 @@ function _renderToolbar(root, folders) {
     if (!host) return;
     // Show where the new reference will land: a real folder name when one is
     // active, otherwise it is created without a folder.
-    const activeFolder = folders.find(f => f.id === _activeFolderFilter);
+    const activeFolder = folders.find(f => f.id === refsView.activeFolderFilter);
     const addBtnInner = activeFolder
         ? `<i class="fa-solid fa-plus"></i> В <span class="uris-refs-add-dest" title="${escapeHtml(activeFolder.name)}">«${escapeHtml(activeFolder.name)}»</span>`
         : `<i class="fa-solid fa-plus"></i> Референс`;
@@ -597,15 +571,15 @@ function _renderToolbar(root, folders) {
         const files = [...(e.target.files || [])];
         e.target.value = '';
         if (!files.length) return;
-        const folderIds = _activeFolderFilter !== 'all' && _activeFolderFilter !== 'none'
-            ? [_activeFolderFilter] : [];
+        const folderIds = refsView.activeFolderFilter !== 'all' && refsView.activeFolderFilter !== 'none'
+            ? [refsView.activeFolderFilter] : [];
         openBatchUploadDialog({ files, folderIds, onFinish: () => refreshActive() });
     });
     const runSearch = debounce((q) => { void _renderGrid(root, folders, null, q); }, REFS_SEARCH_DEBOUNCE_MS);
     host.querySelector('#urisRefsSearch')?.addEventListener('input', (e) => runSearch(e.target.value));
     host.querySelectorAll('.uris-crumb').forEach(btn => {
         btn.addEventListener('click', async () => {
-            _activeFolderFilter = btn.dataset.folder;
+            refsView.activeFolderFilter = btn.dataset.folder;
             await _renderAll(root);
         });
     });
@@ -628,32 +602,6 @@ function _renderToolbar(root, folders) {
  * Filter refs by search substring over name and aliases. Shared by the desktop
  * grid and both mobile tile renderers (three former inline copies).
  */
-function filterRefsBySearch(refs, query) {
-    const q = (query || '').toLowerCase().trim();
-    if (!q) return refs;
-    return refs.filter(r => (r.name || '').toLowerCase().includes(q)
-        || (r.aliases || []).some(a => a.toLowerCase().includes(q)));
-}
-
-/**
- * Pool tile markup shared by the desktop grid and the mobile grid. The mobile
- * variant caps folder dots at 3 (narrower tiles).
- */
-function poolTileHtml(ref, foldersById, { maxDots = 4, selected = false } = {}) {
-    const dots = (ref.folders || []).map(fid => foldersById.get(fid)).filter(Boolean)
-        .slice(0, maxDots).map(f => `<span class="uris-pool-tile-dot" style="background:${escapeHtml(f.color)}"></span>`).join('');
-    const selectedClass = selected ? ' uris-pool-tile-selected' : '';
-    // Native width/height from the record metadata (ingest saves them): the
-    // browser reserves the box before load — no CLS, no scrollbar jumps.
-    const dims = Number(ref?.width) > 0 && Number(ref?.height) > 0
-        ? ` width="${Number(ref.width)}" height="${Number(ref.height)}"` : '';
-    return `<button type="button" class="uris-pool-tile${selectedClass}" data-ref-id="${escapeHtml(ref.id)}" aria-label="${escapeHtml(ref.name)}" title="${escapeHtml(ref.name)}">
-        <img src="${escapeHtml(ref.imagePath)}" alt="${escapeHtml(ref.name)}" loading="lazy" decoding="async"${dims}>
-        ${dots ? `<div class="uris-pool-tile-dots">${dots}</div>` : ''}
-        <div class="uris-pool-tile-name">${escapeHtml(ref.name)}</div>
-    </button>`;
-}
-
 /**
  * Editor body markup shared by the desktop overlay and the mobile card screen.
  * Only the delete-button label differs between the two layouts.
@@ -693,10 +641,8 @@ function refEditorBodyHtml(ref, { deleteLabel = 'Удалить карточку
 // One click/contextmenu listener pair on the grid host instead of two per
 // tile (the bindCards pattern from tab-gallery.js): search and grid re-renders
 // no longer rebind O(n) listeners. The listener outlives the host's innerHTML
-// wipes, so handlers read module state (_gridRefs/_gridFolders) instead of
+// wipes, so handlers read module state (refsView.gridRefs/refsView.gridFolders) instead of
 // closing over a specific render's locals.
-let _gridRefs = [];
-let _gridFolders = [];
 
 function _bindPoolGridDelegation(host, { onOpen, menuItems }) {
     if (host.dataset.delegated === '1') return;   // idempotent per render
@@ -712,7 +658,7 @@ function _bindPoolGridDelegation(host, { onOpen, menuItems }) {
     bindCardContextMenu(host, ({ x, y, target }) => {
         const tile = tileOf(target);
         if (!tile) return;
-        const ref = _gridRefs.find(r => r.id === tile.dataset.refId);
+        const ref = refsView.gridRefs.find(r => r.id === tile.dataset.refId);
         if (ref) openCardActionMenu({ title: ref.name || 'Референс', x, y, items: menuItems(ref) });
     });
 }
@@ -730,20 +676,20 @@ async function _renderGrid(root, folders, refsOverride, searchQuery = '') {
     const refs = refsOverride ?? await listRefs();
     const filtered = refsForActiveFilter(refs, folders);
     const searched = filterRefsBySearch(filtered, searchQuery);
-    _gridRefs = searched;
-    _gridFolders = folders;
+    refsView.gridRefs = searched;
+    refsView.gridFolders = folders;
     _bindPoolGridDelegation(host, {
         onOpen: (refId) => {
-            _editingRefId = refId;
+            refsView.editingRefId = refId;
             _selectPoolTile(host, refId);
-            void _renderOverlay(root, _gridFolders);
+            void _renderOverlay(root, refsView.gridFolders);
         },
         menuItems: (ref) => [
             { id: 'open', icon: 'fa-eye', label: 'Открыть',
                 onSelect: () => {
-                    _editingRefId = ref.id;
+                    refsView.editingRefId = ref.id;
                     _selectPoolTile(host, ref.id);
-                    void _renderOverlay(root, _gridFolders);
+                    void _renderOverlay(root, refsView.gridFolders);
                 } },
             { id: 'crop', icon: 'fa-crop-simple', label: 'Обрезать',
                 onSelect: () => { void _cropRefAction(ref.id, root); } },
@@ -762,7 +708,7 @@ async function _renderGrid(root, folders, refsOverride, searchQuery = '') {
     const foldersById = new Map(folders.map(f => [f.id, f]));
     performance.mark('uris:refs-grid');
     host.innerHTML = searched.map(r =>
-        poolTileHtml(r, foldersById, { selected: _editingRefId === r.id })
+        poolTileHtml(r, foldersById, { selected: refsView.editingRefId === r.id })
     ).join('');
     performance.measure('uris:refs-grid', 'uris:refs-grid');
 }
@@ -799,7 +745,7 @@ async function _cloneRefAction(refId, root) {
         if (!ref) return;
         const clone = await cloneRef(ref);
         toastr?.success('Клонирован: ' + clone.name);
-        _editingRefId = clone.id;
+        refsView.editingRefId = clone.id;
         refreshActive();
         void root;
     } catch (err) {
@@ -829,7 +775,7 @@ async function _assignRefFolders(refId, root) {
 async function _deleteRefAction(refId, root) {
     if (!await showConfirmModal('Удалить референс из пула?')) return;
     await deleteRef(refId);
-    if (_editingRefId === refId) _editingRefId = null;
+    if (refsView.editingRefId === refId) refsView.editingRefId = null;
     _mobileScreen = 'grid';
     refreshActive();
     void root;
@@ -838,17 +784,17 @@ async function _deleteRefAction(refId, root) {
 // ── Overlay panel ──
 // Epoch guard: tile clicks fire _renderOverlay unawaited; two rapid clicks race
 // two getRef() calls and the slower one used to win, showing reference A while
-// _editingRefId was already B (subsequent autosaves targeted the shown record).
+// refsView.editingRefId was already B (subsequent autosaves targeted the shown record).
 let _overlayEpoch = 0;
 async function _renderOverlay(root, folders) {
     const epoch = ++_overlayEpoch;
-    const requestedId = _editingRefId;
+    const requestedId = refsView.editingRefId;
     const host = root.querySelector('#urisRefsOverlay');
     if (!host) return;
-    if (!_editingRefId) { host.innerHTML = ''; host.classList.remove('uris-refs-overlay-open'); host.removeAttribute('role'); host.removeAttribute('aria-modal'); host.removeAttribute('aria-label'); return; }
-    const ref = await getRef(_editingRefId);
-    if (epoch !== _overlayEpoch || _editingRefId !== requestedId) return;
-    if (!ref) { _editingRefId = null; host.innerHTML = ''; host.removeAttribute('role'); host.removeAttribute('aria-modal'); host.removeAttribute('aria-label'); return; }
+    if (!refsView.editingRefId) { host.innerHTML = ''; host.classList.remove('uris-refs-overlay-open'); host.removeAttribute('role'); host.removeAttribute('aria-modal'); host.removeAttribute('aria-label'); return; }
+    const ref = await getRef(refsView.editingRefId);
+    if (epoch !== _overlayEpoch || refsView.editingRefId !== requestedId) return;
+    if (!ref) { refsView.editingRefId = null; host.innerHTML = ''; host.removeAttribute('role'); host.removeAttribute('aria-modal'); host.removeAttribute('aria-label'); return; }
     host.classList.add('uris-refs-overlay-open');
     host.setAttribute('role', 'dialog');
     host.setAttribute('aria-modal', 'true');
@@ -867,7 +813,7 @@ async function _renderOverlay(root, folders) {
 
 function _bindOverlay(root, host, ref, folders) {
     // Одна перерисовка окружения для смены папок и клона: свежий список папок
-    // (шит поля мог создать новую), оверлей под новым _editingRefId, сайдбар с
+    // (шит поля мог создать новую), оверлей под новым refsView.editingRefId, сайдбар с
     // свежими счётчиками и сетка с новой карточкой.
     const refreshAround = async () => {
         const freshFolders = await listFolders();
@@ -880,7 +826,7 @@ function _bindOverlay(root, host, ref, folders) {
         onCloned: refreshAround,
     });
     host.querySelector('.uris-refs-overlay-close')?.addEventListener('click', async () => {
-        _editingRefId = null;
+        refsView.editingRefId = null;
         await _renderAll(root);
     });
 }
@@ -907,7 +853,7 @@ async function _renderMobileAll(root) {
     // без refId» посреди правки) иначе молча оставляет вкладку пустой —
     // откатываемся: неизвестное — в список папок, битую карточку — в сетку.
     if (_mobileScreen !== 'folders' && _mobileScreen !== 'grid' && _mobileScreen !== 'card' && _mobileScreen !== 'group') _mobileScreen = 'folders';
-    if (_mobileScreen === 'card' && !_editingRefId) _mobileScreen = 'grid';
+    if (_mobileScreen === 'card' && !refsView.editingRefId) _mobileScreen = 'grid';
     if (_mobileScreen === 'group' && !_mobileGroupId) _mobileScreen = 'folders';
     if (_mobileScreen === 'folders') return _renderMobileFolders(root);
     if (_mobileScreen === 'group') return _renderMobileGroup(root);
@@ -997,7 +943,7 @@ async function _renderMobileFolders(root) {
                     _mobileGroupId = folderId;
                     _mobileScreen = 'group';
                 } else {
-                    _activeFolderFilter = folderId;
+                    refsView.activeFolderFilter = folderId;
                     _mobileScreen = 'grid';
                 }
                 _renderMobileAll(root);
@@ -1070,7 +1016,7 @@ async function _renderMobileGroup(root) {
         }).join('')}`;
     listHost.querySelectorAll('.uris-mobile-folder-item').forEach(btn => {
         btn.addEventListener('click', () => {
-            _activeFolderFilter = btn.dataset.folder;
+            refsView.activeFolderFilter = btn.dataset.folder;
             _mobileScreen = 'grid';
             _renderMobileAll(root);
         });
@@ -1093,9 +1039,9 @@ async function _renderMobileGrid(root) {
     const foldersById = new Map(folders.map(f => [f.id, f]));
     const filtered = refsForActiveFilter(refs, folders);
     const searched = filterRefsBySearch(filtered, _mobileSearchQuery);
-    const activeFolder = folders.find(f => f.id === _activeFolderFilter);
-    const title = _activeFolderFilter === 'all' ? 'Все карточки'
-        : _activeFolderFilter === 'none' ? 'Без папки'
+    const activeFolder = folders.find(f => f.id === refsView.activeFolderFilter);
+    const title = refsView.activeFolderFilter === 'all' ? 'Все карточки'
+        : refsView.activeFolderFilter === 'none' ? 'Без папки'
         : (activeFolder?.name || 'Папка');
     host.innerHTML = `
         <div class="uris-mobile-toolbar">
@@ -1125,16 +1071,16 @@ async function _renderMobileGrid(root) {
         if (count) count.textContent = String(list.length);
         const grid = host.querySelector('#urisMobileGrid');
         if (!grid) return;
-        _gridRefs = list;
+        refsView.gridRefs = list;
         _bindPoolGridDelegation(grid, {
             onOpen: (refId) => {
-                _editingRefId = refId;
+                refsView.editingRefId = refId;
                 _mobileScreen = 'card';
                 void _renderMobileAll(root);
             },
             menuItems: (ref) => [
                 { id: 'edit', icon: 'fa-pencil', label: 'Правка', onSelect: () => {
-                    _editingRefId = ref.id;
+                    refsView.editingRefId = ref.id;
                     _mobileScreen = 'card';
                     _renderMobileAll(root);
                 } },
@@ -1195,7 +1141,7 @@ function openFolderSwitcher(root) {
             folders: entries,
             mode: 'pick-one',
             onPick: (folder) => {
-                _activeFolderFilter = folder.id;
+                refsView.activeFolderFilter = folder.id;
                 _mobileSearchQuery = '';
                 _renderMobileAll(root);
             },
@@ -1205,9 +1151,9 @@ function openFolderSwitcher(root) {
 
 async function _renderMobileCard(root) {
     const host = root.querySelector('#urisMobileScreen');
-    if (!host || !_editingRefId) return;
-    const ref = await getRef(_editingRefId);
-    if (!ref) { _editingRefId = null; _mobileScreen = 'grid'; return _renderMobileAll(root); }
+    if (!host || !refsView.editingRefId) return;
+    const ref = await getRef(refsView.editingRefId);
+    if (!ref) { refsView.editingRefId = null; _mobileScreen = 'grid'; return _renderMobileAll(root); }
     const folders = await listFolders();
     host.innerHTML = `
         <div class="uris-mobile-toolbar">
@@ -1353,7 +1299,7 @@ function _bindEditorBody(root, host, ref, folders, opts = {}) {
         try {
             const clone = await cloneRef(ref);
             toastr?.success('Клонирован: ' + clone.name);
-            _editingRefId = clone.id;
+            refsView.editingRefId = clone.id;
             await opts.onCloned?.();
         } catch (err) {
             reportFailure({ scope: URIS_SCOPES.refs, message: 'Клонирование: ' + (err?.message || err), toast: true, toastText: 'Не удалось клонировать: ' + err.message });
@@ -1363,7 +1309,7 @@ function _bindEditorBody(root, host, ref, folders, opts = {}) {
     host.querySelector('.uris-ed-del')?.addEventListener('click', async () => {
         if (await showConfirmModal('Удалить референс из пула?')) {
             await deleteRef(ref.id);
-            _editingRefId = null;
+            refsView.editingRefId = null;
             _mobileScreen = 'grid';
             refreshActive();
         }
@@ -1377,8 +1323,8 @@ function _bindMobileAddRef(host, root) {
         const files = [...(e.target.files || [])];
         e.target.value = '';
         if (!files.length) return;
-        const folderIds = _activeFolderFilter !== 'all' && _activeFolderFilter !== 'none'
-            ? [_activeFolderFilter] : [];
+        const folderIds = refsView.activeFolderFilter !== 'all' && refsView.activeFolderFilter !== 'none'
+            ? [refsView.activeFolderFilter] : [];
         openBatchUploadDialog({ files, folderIds, onFinish: () => _renderMobileAll(root) });
     });
 }
