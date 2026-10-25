@@ -14,6 +14,7 @@ import { filterRefsByFolder, filterRefsByFolderTree } from '../refs-library.js';
 /** View state shared by main grid / sidebar / mobile / editor. */
 export const refsView = {
     activeFolderFilter: 'all',
+    folderSearchQuery: '',
     editingRefId: null,
     editingFolderId: null,
     // Snapshot of the last rendered grid list/folders — the delegated tile
