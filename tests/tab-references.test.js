@@ -781,9 +781,50 @@ test('render: mobile grid searches names and aliases without changing stored ref
 
     search.value = 'cApTaIn';
     await search.dispatchEvent({ type: 'input', target: search, currentTarget: search });
-    await new Promise(resolve => setTimeout(resolve, 0));
+    // Поиск дебаунсится (REFS_SEARCH_DEBOUNCE_MS=150) — ждём таймер.
+    await new Promise(resolve => setTimeout(resolve, 200));
     assert.deepEqual([...el.querySelectorAll('.uris-pool-tile')].map(tile => tile.dataset.refId), [char.id], 'alias search is case-insensitive');
     assert.equal((await listRefs()).length, 2, 'search does not persist any reference changes');
+
+    root.removeChild(el);
+});
+
+test('render: search re-renders do not rebind tile listeners (grid delegation)', async () => {
+    const { document, root } = makeFakeDocument();
+    globalThis.document = document;
+    globalThis.document.body = root;
+
+    const { createRef } = await import('../src/refs-library.js');
+    const mira = await createRef({ name: 'Mira', imagePath: '/mira.png' });
+    await createRef({ name: 'Guard', imagePath: '/guard.png' });
+    const { render } = await import('../src/ui/tab-references.js');
+    const el = makeTabEl(document, 600);
+    root.appendChild(el);
+    await render(el);
+
+    // Модульный фильтр от предыдущих тестов мог остаться — возвращаем «Все».
+    await [...el.querySelectorAll('.uris-folder-item')].find(item => item.dataset.folder === 'all').click();
+    await new Promise(resolve => setTimeout(resolve, 0));
+
+    const grid = el.querySelector('#urisRefsGrid');
+    const clicksBefore = grid._listeners.filter(l => l.type === 'click').length;
+
+    const search = el.querySelector('#urisRefsSearch');
+    search.value = 'mira';
+    await search.dispatchEvent({ type: 'input', target: search, currentTarget: search });
+    await new Promise(resolve => setTimeout(resolve, 200));
+
+    const tiles = [...el.querySelectorAll('.uris-pool-tile')];
+    assert.equal(tiles.length, 1, 'search narrows the grid');
+    assert.equal(tiles[0].dataset.refId, mira.id, 'the surviving tile is the match');
+    assert.equal(grid._listeners.filter(l => l.type === 'click').length, clicksBefore,
+        'grid re-render adds no click listeners (delegation, not per-tile binding)');
+
+    await tiles[0].click();
+    await new Promise(resolve => setTimeout(resolve, 0));
+    assert.ok(el.querySelector('.uris-editor-preview-wrap'), 'tile click opens the editor after a search re-render');
+    assert.equal([...grid.querySelectorAll('.uris-pool-tile-selected')].length, 1,
+        'clicked tile is selected without a full grid re-render');
 
     root.removeChild(el);
 });

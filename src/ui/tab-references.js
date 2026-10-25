@@ -4,7 +4,7 @@
  * v4-redesign (Figma): folder sidebar left + 3:4 card grid +
  * overlay editor panel on the right. Multi-folder via folders[].
  */
-import { state, getCtx, escapeHtml, showConfirmModal, showInputModal } from '../core.js';
+import { state, getCtx, escapeHtml, debounce, showConfirmModal, showInputModal } from '../core.js';
 import {
     listRefs, getRef, updateRef, deleteRef,
     listFolders, createFolder, updateFolder, deleteFolder, FOLDER_COLOR_PALETTE,
@@ -50,6 +50,10 @@ let _folderSearchQuery = '';
 // mobile fullscreen mode. Deliberate single semantics: dense scale → compact
 // layout.
 const REFS_MOBILE_BREAK = 480;
+// Поиск перерисовывает сетку с дебаунсом: каждое нажатие клавиши раньше
+// сбрасывало innerHTML сетки (рестарт загрузки всех видимых миниатюр) —
+// на пуле в сотни карточек это был главный источник лага набора.
+const REFS_SEARCH_DEBOUNCE_MS = 150;
 
 export function render(root) {
     root.classList.add('uris-body-flush');
@@ -597,9 +601,8 @@ function _renderToolbar(root, folders) {
             ? [_activeFolderFilter] : [];
         openBatchUploadDialog({ files, folderIds, onFinish: () => refreshActive() });
     });
-    host.querySelector('#urisRefsSearch')?.addEventListener('input', (e) => {
-        _renderGrid(root, folders, null, e.target.value);
-    });
+    const runSearch = debounce((q) => { void _renderGrid(root, folders, null, q); }, REFS_SEARCH_DEBOUNCE_MS);
+    host.querySelector('#urisRefsSearch')?.addEventListener('input', (e) => runSearch(e.target.value));
     host.querySelectorAll('.uris-crumb').forEach(btn => {
         btn.addEventListener('click', async () => {
             _activeFolderFilter = btn.dataset.folder;
@@ -640,8 +643,12 @@ function poolTileHtml(ref, foldersById, { maxDots = 4, selected = false } = {}) 
     const dots = (ref.folders || []).map(fid => foldersById.get(fid)).filter(Boolean)
         .slice(0, maxDots).map(f => `<span class="uris-pool-tile-dot" style="background:${escapeHtml(f.color)}"></span>`).join('');
     const selectedClass = selected ? ' uris-pool-tile-selected' : '';
+    // Нативные width/height из метаданных записи (инжест их сохраняет): браузер
+    // резервирует место до загрузки — без CLS и прыжков скроллбара.
+    const dims = Number(ref?.width) > 0 && Number(ref?.height) > 0
+        ? ` width="${Number(ref.width)}" height="${Number(ref.height)}"` : '';
     return `<button type="button" class="uris-pool-tile${selectedClass}" data-ref-id="${escapeHtml(ref.id)}" aria-label="${escapeHtml(ref.name)}" title="${escapeHtml(ref.name)}">
-        <img src="${escapeHtml(ref.imagePath)}" alt="${escapeHtml(ref.name)}" loading="lazy">
+        <img src="${escapeHtml(ref.imagePath)}" alt="${escapeHtml(ref.name)}" loading="lazy" decoding="async"${dims}>
         ${dots ? `<div class="uris-pool-tile-dots">${dots}</div>` : ''}
         <div class="uris-pool-tile-name">${escapeHtml(ref.name)}</div>
     </button>`;
@@ -682,52 +689,82 @@ function refEditorBodyHtml(ref, { deleteLabel = 'Удалить карточку
         </div>`;
 }
 
+// ── Делегирование плиток пула ──
+// Один click/contextmenu-слушатель на контейнер сетки вместо двух на каждую
+// плитку (паттерн bindCards из tab-gallery.js): поиск и перерисовки сетки
+// больше не перевешивают O(n) слушателей. Слушатель переживает innerHTML-вайпы
+// контента, поэтому обработчики читают только module-state (_gridRefs/_gridFolders),
+// а не замыкания конкретной отрисовки.
+let _gridRefs = [];
+let _gridFolders = [];
+
+function _bindPoolGridDelegation(host, { onOpen, menuItems }) {
+    if (host.dataset.delegated === '1') return;   // idempotent per render
+    host.dataset.delegated = '1';
+    const tileOf = (target) => {
+        const tile = target?.closest?.('.uris-pool-tile');
+        return tile && host.contains(tile) ? tile : null;
+    };
+    host.addEventListener('click', (e) => {
+        const tile = tileOf(e.target);
+        if (tile) onOpen(tile.dataset.refId);
+    });
+    bindCardContextMenu(host, ({ x, y, target }) => {
+        const tile = tileOf(target);
+        if (!tile) return;
+        const ref = _gridRefs.find(r => r.id === tile.dataset.refId);
+        if (ref) openCardActionMenu({ title: ref.name || 'Референс', x, y, items: menuItems(ref) });
+    });
+}
+
+/** Выделение плитки без перерисовки сетки (бывший полный _renderGrid по клику). */
+function _selectPoolTile(host, refId) {
+    for (const tile of host.querySelectorAll('.uris-pool-tile')) {
+        tile.classList.toggle('uris-pool-tile-selected', tile.dataset.refId === refId);
+    }
+}
+
 async function _renderGrid(root, folders, refsOverride, searchQuery = '') {
     const host = root.querySelector('#urisRefsGrid');
     if (!host) return;
     const refs = refsOverride ?? await listRefs();
     const filtered = refsForActiveFilter(refs, folders);
     const searched = filterRefsBySearch(filtered, searchQuery);
+    _gridRefs = searched;
+    _gridFolders = folders;
+    _bindPoolGridDelegation(host, {
+        onOpen: (refId) => {
+            _editingRefId = refId;
+            _selectPoolTile(host, refId);
+            void _renderOverlay(root, _gridFolders);
+        },
+        menuItems: (ref) => [
+            { id: 'open', icon: 'fa-eye', label: 'Открыть',
+                onSelect: () => {
+                    _editingRefId = ref.id;
+                    _selectPoolTile(host, ref.id);
+                    void _renderOverlay(root, _gridFolders);
+                } },
+            { id: 'crop', icon: 'fa-crop-simple', label: 'Обрезать',
+                onSelect: () => { void _cropRefAction(ref.id, root); } },
+            { id: 'clone', icon: 'fa-clone', label: 'Клонировать',
+                onSelect: () => { void _cloneRefAction(ref.id, root); } },
+            { id: 'folders', icon: 'fa-folder', label: 'Папки…',
+                onSelect: () => { void _assignRefFolders(ref.id, root); } },
+            { id: 'del', icon: 'fa-trash', label: 'Удалить…', danger: true,
+                onSelect: () => { void _deleteRefAction(ref.id, root); } },
+        ],
+    });
     if (!searched.length) {
         host.innerHTML = `<div class="uris-refs-empty">${searchQuery ? 'Не найдено' : 'Пусто. Добавьте референс кнопкой «+».'}</div>`;
         return;
     }
     const foldersById = new Map(folders.map(f => [f.id, f]));
+    performance.mark('uris:refs-grid');
     host.innerHTML = searched.map(r =>
         poolTileHtml(r, foldersById, { selected: _editingRefId === r.id })
     ).join('');
-    host.querySelectorAll('.uris-pool-tile').forEach(tile => {
-        tile.addEventListener('click', () => {
-            _editingRefId = tile.dataset.refId;
-            _renderOverlay(root, folders);
-            _renderGrid(root, folders);
-        });
-        bindCardContextMenu(tile, ({ x, y }) => {
-            const refId = tile.dataset.refId;
-            const ref = refs.find(r => r.id === refId);
-            if (!ref) return;
-            openCardActionMenu({
-                title: ref.name,
-                x, y,
-                items: [
-                    { id: 'open', icon: 'fa-eye', label: 'Открыть',
-                        onSelect: () => {
-                            _editingRefId = refId;
-                            void _renderOverlay(root, folders);
-                            void _renderGrid(root, folders);
-                        } },
-                    { id: 'crop', icon: 'fa-crop-simple', label: 'Обрезать',
-                        onSelect: () => { void _cropRefAction(refId, root); } },
-                    { id: 'clone', icon: 'fa-clone', label: 'Клонировать',
-                        onSelect: () => { void _cloneRefAction(refId, root); } },
-                    { id: 'folders', icon: 'fa-folder', label: 'Папки…',
-                        onSelect: () => { void _assignRefFolders(refId, root); } },
-                    { id: 'del', icon: 'fa-trash', label: 'Удалить…', danger: true,
-                        onSelect: () => { void _deleteRefAction(refId, root); } },
-                ],
-            });
-        });
-    });
+    performance.measure('uris:refs-grid', 'uris:refs-grid');
 }
 
 // ── Shared ref actions (grid context menu + mobile) ──
@@ -1088,49 +1125,44 @@ async function _renderMobileGrid(root) {
         if (count) count.textContent = String(list.length);
         const grid = host.querySelector('#urisMobileGrid');
         if (!grid) return;
+        _gridRefs = list;
+        _bindPoolGridDelegation(grid, {
+            onOpen: (refId) => {
+                _editingRefId = refId;
+                _mobileScreen = 'card';
+                void _renderMobileAll(root);
+            },
+            menuItems: (ref) => [
+                { id: 'edit', icon: 'fa-pencil', label: 'Правка', onSelect: () => {
+                    _editingRefId = ref.id;
+                    _mobileScreen = 'card';
+                    _renderMobileAll(root);
+                } },
+                { id: 'clone', icon: 'fa-clone', label: 'Клонировать', onSelect: async () => {
+                    await cloneRef(ref);
+                    _renderMobileAll(root);
+                } },
+                { id: 'del', icon: 'fa-trash', label: 'Удалить…', danger: true, onSelect: async () => {
+                    if (!(await showConfirmModal(`Удалить референс «${ref.name || 'Без названия'}»?`))) return;
+                    await deleteRef(ref.id);
+                    _renderMobileAll(root);
+                } },
+            ],
+        });
         if (!list.length) {
             grid.innerHTML = `<div class="uris-refs-empty">${q ? 'Не найдено' : 'Нет карточек'}</div>`;
             return;
         }
+        performance.mark('uris:refs-grid');
         grid.innerHTML = list.map(r => poolTileHtml(r, foldersById, { maxDots: 3 })).join('');
-        grid.querySelectorAll('.uris-pool-tile').forEach(tile => {
-            tile.addEventListener('click', () => {
-                _editingRefId = tile.dataset.refId;
-                _mobileScreen = 'card';
-                _renderMobileAll(root);
-            });
-            // Долгий тап / ПКМ: быстрые действия без открытия редактора.
-            bindCardContextMenu(tile, ({ x, y }) => {
-                const ref = list.find(r => r.id === tile.dataset.refId);
-                if (!ref) return;
-                openCardActionMenu({
-                    title: ref.name || 'Референс',
-                    x, y,
-                    items: [
-                        { id: 'edit', icon: 'fa-pencil', label: 'Правка', onSelect: () => {
-                            _editingRefId = ref.id;
-                            _mobileScreen = 'card';
-                            _renderMobileAll(root);
-                        } },
-                        { id: 'clone', icon: 'fa-clone', label: 'Клонировать', onSelect: async () => {
-                            await cloneRef(ref);
-                            _renderTiles();
-                        } },
-                        { id: 'del', icon: 'fa-trash', label: 'Удалить…', danger: true, onSelect: async () => {
-                            if (!(await showConfirmModal(`Удалить референс «${ref.name || 'Без названия'}»?`))) return;
-                            await deleteRef(ref.id);
-                            _renderTiles();
-                        } },
-                    ],
-                });
-            });
-        });
+        performance.measure('uris:refs-grid', 'uris:refs-grid');
     };
     _renderTiles();
 
+    const runMobileSearch = debounce(_renderTiles, REFS_SEARCH_DEBOUNCE_MS);
     host.querySelector('.uris-mobile-search')?.addEventListener('input', (e) => {
         _mobileSearchQuery = e.target.value;
-        _renderTiles();
+        runMobileSearch();
     });
     host.querySelector('.uris-mobile-back')?.addEventListener('click', () => {
         _mobileScreen = 'folders';
