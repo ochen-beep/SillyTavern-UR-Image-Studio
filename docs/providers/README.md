@@ -17,19 +17,6 @@
 | `comfyui` | `comfyui-local-api.md`, `comfyui-readme.md` |
 | `cloudflare-workers-ai` | `cloudflare-workers-ai.md` |
 
-## Кандидаты из плана 2026-10-13 (доки скачаны, реализация — по плану
-[../research/2026-10-13-new-image-providers-plan.md](../research/2026-10-13-new-image-providers-plan.md))
-
-| Провайдер | Файлы здесь |
-|---|---|
-| A1111/Forge/SD.Next (SD WebUI API) | `sd-webui-a1111-api.md` |
-| Stability Platform v2beta | `stability-platform-api.md` |
-| BFL FLUX | `bfl-flux-api.md` |
-| fal.ai | `fal-ai-api.md` |
-| Replicate | `replicate-api.md` |
-| BytePlus Seedream | `seedream-byteplus.md` |
-| HuggingFace Inference | `huggingface-inference.md` (free закрыт, проверено вживую 2026-10-13 — 402) |
-
 ## Описания файлов
 
 - **openai-images-api.md** — Images API (`/v1/images/generations`, `/images/edits`,

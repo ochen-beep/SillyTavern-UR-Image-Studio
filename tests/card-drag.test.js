@@ -73,6 +73,27 @@ test('мышь: drag карточки вниз через середину со�
     assert.deepEqual(calls, [[0, 1]], 'a переставлена после b');
 });
 
+test('pointerdown отменяется для мыши (запрет нативного выделения), но не для тача', async () => {
+    const { makeCardReorderable } = await setup();
+    const container = mount([makeCard('a', 0), makeCard('b', 100)]);
+    makeCardReorderable(container, { selector: '.uris-preset-card', onReorder: () => {} });
+
+    const cardA = container.children[0];
+    let mousePrevented = false;
+    cardA.dispatchEvent({
+        type: 'pointerdown', button: 0, pointerType: 'mouse', clientX: 10, clientY: 10,
+        target: cardA.querySelector('.uris-name'), preventDefault: () => { mousePrevented = true; },
+    });
+    assert.equal(mousePrevented, true, 'у мыши default гасится — выделение не начнётся');
+
+    let touchPrevented = false;
+    cardA.dispatchEvent({
+        type: 'pointerdown', button: 0, pointerType: 'touch', clientX: 10, clientY: 10,
+        target: cardA.querySelector('.uris-name'), preventDefault: () => { touchPrevented = true; },
+    });
+    assert.equal(touchPrevented, false, 'тач сохраняет default — жест может стать скроллом');
+});
+
 test('клик без сдвига не reorder\'ит (порог 6px)', async () => {
     const { makeCardReorderable } = await setup();
     const container = mount([makeCard('a', 0), makeCard('b', 100)]);

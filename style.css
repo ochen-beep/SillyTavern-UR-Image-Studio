@@ -1132,7 +1132,13 @@
     opacity: .92; box-shadow: 0 6px 18px rgba(0,0,0,.5); border-radius: var(--uris-radius-card); overflow: hidden;
     will-change: transform;
 }
-.uris-dragging-active, .uris-dragging-active * { cursor: grabbing !important; }
+/* Dragging suppresses native text selection over every card (pointerdown is
+   cancelled for the mouse; this covers pen/touch and any mid-move starts). */
+.uris-dragging-active, .uris-dragging-active * {
+    cursor: grabbing !important;
+    user-select: none !important;
+    -webkit-user-select: none !important;
+}
 [data-drop-zone].uris-drop-zone--over {
     outline: 2px dashed var(--uris-accent); outline-offset: -3px;
     border-radius: var(--uris-radius-card);

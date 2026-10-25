@@ -6,6 +6,12 @@ node_modules/
 # AI agent workspace data
 .zcode/
 
+# internal research, design & test notes (kept local, not for the public repo)
+docs/research/
+docs/abandoned/
+docs/design/
+docs/manual-test-report-*.md
+
 
 # temp scratch & test output
 tmp/

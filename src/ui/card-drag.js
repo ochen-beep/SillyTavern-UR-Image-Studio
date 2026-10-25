@@ -15,6 +15,10 @@ const LONG_PRESS_MS = 220;     // ms, старт drag для тача/пера
 const EDGE_SCROLL_ZONE = 48;   // px, авто-скролл у края контейнера
 const DEFAULT_EXCLUDED = 'button, a, input, textarea, select, [data-no-drag]';
 
+function isMousePointer(pointerType) {
+    return pointerType !== 'touch' && pointerType !== 'pen';
+}
+
 /** Список селекторов проверяется по одному: fake-dom не понимает запятые. */
 function isExcludedTarget(target, excluded) {
     for (const sel of excluded.split(',').map(s => s.trim()).filter(Boolean)) {
@@ -36,6 +40,13 @@ export function makeCardReorderable(container, { selector, onReorder, longPressM
         if (isExcludedTarget(e.target, excluded)) return;
         const card = e.target.closest?.(selector);
         if (!card || !container.contains(card)) return;
+
+        // Mouse only: cancelling the pointerdown stops the browser from
+        // starting a native text selection the moment the pointer moves —
+        // otherwise every other card highlights mid-drag. Touch/pen must keep
+        // the default so the gesture can still become a scroll until the
+        // long-press fires. Click still fires (it comes from pointerup).
+        if (isMousePointer(e.pointerType)) e.preventDefault?.();
 
         const startX = e.clientX;
         const startY = e.clientY;
@@ -62,6 +73,9 @@ export function makeCardReorderable(container, { selector, onReorder, longPressM
             card.classList.add('uris-drag-source');
             card.style.touchAction = 'none';
             document.body.classList.add('uris-dragging-active');
+            // Belt and suspenders for the native selection: a few px of move
+            // may have started one before the drag threshold fired.
+            try { window.getSelection?.()?.removeAllRanges(); } catch { /* no selection API */ }
             moveGhost(e.clientX, e.clientY);
             // Авто-скролл у краёв контейнера; в тестовом окружении rAF нет.
             if (typeof requestAnimationFrame === 'function') raf = requestAnimationFrame(edgeScroll);

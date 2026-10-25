@@ -1,6 +1,5 @@
 {
     "compilerOptions": {
-        "checkJs": true,
         "target": "ES2022",
         "module": "ESNext",
         "moduleResolution": "Node",
@@ -9,5 +8,6 @@
         "strict": false,
         "skipLibCheck": true
     },
-    "include": ["src/**/*.js", "tests/**/*.js", "index.js"]
+    "include": ["src/**/*.js", "tests/**/*.js", "index.js"],
+    "exclude": ["src/vendor"]
 }
