@@ -19,6 +19,7 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { _testFloatingLauncher, makePulseStateMachine } from '../src/ui/floating-launcher.js';
+import { readAllStyles } from './_helpers.js';
 
 const { defaultPosition, clampPosition, clampFabPosition, computeRestoredPosition, FAB_SIZE, DRAG_THRESHOLD_PX } = _testFloatingLauncher;
 
@@ -143,7 +144,7 @@ test('drag threshold is small enough for a click, large enough for a drag', () =
 
 // ── CSS-инварианты FAB ──
 
-const rawCss = readFileSync(join(dirname(fileURLToPath(import.meta.url)), '..', 'style.css'), 'utf8');
+const rawCss = readAllStyles();
 const css = rawCss.replace(/\/\*[\s\S]*?\*\//g, '');
 
 function ruleBlock(selector) {

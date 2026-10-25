@@ -16,9 +16,10 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
+import { readAllStyles } from './_helpers.js';
 
 const src = readFileSync(join(dirname(fileURLToPath(import.meta.url)), '..', 'src', 'ui', 'lightbox.js'), 'utf8');
-const rawCss = readFileSync(join(dirname(fileURLToPath(import.meta.url)), '..', 'style.css'), 'utf8');
+const rawCss = readAllStyles();
 const css = rawCss.replace(/\/\*[\s\S]*?\*\//g, '');
 
 test('hit-transparent ставится на самом раннем событии закрытия (close, не closingAnimationStart)', () => {

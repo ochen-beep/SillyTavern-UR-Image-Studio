@@ -11,8 +11,9 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
+import { readAllStyles } from './_helpers.js';
 
-const rawCss = readFileSync(join(dirname(fileURLToPath(import.meta.url)), '..', 'style.css'), 'utf8');
+const rawCss = readAllStyles();
 // Комментарии вырезаем (та же причина, что в popup-viewport-css.test.js).
 const css = rawCss.replace(/\/\*[\s\S]*?\*\//g, '');
 

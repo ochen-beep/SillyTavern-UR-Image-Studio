@@ -1,5 +1,24 @@
 // @ts-check
 import { gzipSync, zstdCompressSync } from 'node:zlib';
+import { readFileSync } from 'node:fs';
+import { join, dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+/**
+ * Effective stylesheet text for CSS-contract tests: root style.css plus every
+ * `@import`ed styles/*.css in import (cascade) order, root rules last. Works
+ * unchanged before and after the root split — tests always see one sheet.
+ */
+export function readAllStyles() {
+    const rootPath = join(dirname(fileURLToPath(import.meta.url)), '..', 'style.css');
+    const root = readFileSync(rootPath, 'utf8');
+    const parts = [];
+    for (const match of root.matchAll(/@import\s+(?:url\()?["']([^"')]+)["']\)?[^;]*;/g)) {
+        parts.push(readFileSync(join(dirname(rootPath), match[1]), 'utf8'));
+    }
+    return [...parts, root].join('\n');
+}
+
 /**
  * Общий хелпер для тестов провайдеров: мокает globalThis.fetch так, чтобы
  * запросы через CORS-прокси (/proxy/<encoded>) прозрачно декодировались

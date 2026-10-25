@@ -13,6 +13,7 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { _testWindowGeometry } from '../src/ui/window.js';
+import { readAllStyles } from './_helpers.js';
 
 const { clampWindowGeometry, MIN_VISIBLE_PX, MIN_WIDTH, MIN_HEIGHT } = _testWindowGeometry;
 
@@ -72,7 +73,7 @@ test('clampWindowGeometry не даёт окну стать меньше мин�
 
 // ── Жест перетаскивания не отдаётся скроллу страницы ──
 
-const rawCss = readFileSync(join(dirname(fileURLToPath(import.meta.url)), '..', 'style.css'), 'utf8');
+const rawCss = readAllStyles();
 const css = rawCss.replace(/\/\*[\s\S]*?\*\//g, '');
 
 function ruleBlock(selector) {
