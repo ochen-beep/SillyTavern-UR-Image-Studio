@@ -708,6 +708,10 @@
 .uris-card {
     border-radius: var(--uris-radius-card); overflow: hidden; position: relative;
     border: 1px solid var(--uris-border-soft);
+    /* Вне вьюпорта плитка не лэйаутится и не красится (длинные галереи).
+       auto в contain-intrinsic-size запоминает первый реальный размер —
+       числовая оценка работает только до первой отрисовки плитки. */
+    content-visibility: auto; contain-intrinsic-size: auto 240px;
 }
 /* Картинка-кнопка: клик/тап открывает просмотрщик (expand-кнопка выпилена).
    Настоящий <button> — клавиатура (Tab/Enter) и роль accessibility; сбрасываем
@@ -1351,6 +1355,9 @@
     background: var(--uris-surface-card); border: 1px solid transparent;
     transition: border-color .12s; display: block; isolation: isolate;
     aspect-ratio: 3 / 4; align-self: start;
+    /* Как у .uris-card: невидимые плитки пула пропускают layout/paint;
+       130px — оценка высоты до первого рендера (реальную запомнит auto). */
+    content-visibility: auto; contain-intrinsic-size: auto 130px;
     /* The tile is a real <button> so it is keyboard-focusable; reset the UA
        button chrome so it keeps the card appearance. */
     font: inherit; color: inherit; padding: 0; text-align: inherit; width: 100%;
