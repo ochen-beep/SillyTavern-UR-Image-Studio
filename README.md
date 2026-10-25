@@ -2,7 +2,7 @@
 
 **English summary:** a [SillyTavern](https://docs.sillytavern.app/) extension that turns your chat into images. A text model (Stage 1) distills recent posts into an image prompt, an image model (Stage 2) draws it — or skip Stage 1 and write the prompt yourself. Chat text stays untouched; images land in the extension's gallery with previews inserted into posts. Speaks to SillyTavern through public extension APIs only, keeps your API keys in SillyTavern's secret storage, and never sees your money. The detailed guide is in Russian: [USER_GUIDE.md](USER_GUIDE.md).
 
-Студия генерации картинок для [SillyTavern](https://docs.sillytavern.app/). Расширение читает сцену из чата: текстовая модель (Шаг 1) превращает последние посты в промпт для картинки, а модель-рисовальщик (Шаг 2) рисует по нему. Можно пропустить Шаг 1 и написать промпт самому. Текст чата не меняется — картинки складываются в галерею расширения, а в посты вставляются превью.
+Студия генерации картинок для [SillyTavern](https://docs.sillytavern.app/). Расширение читает сцену из чата: текстовая модель (Шаг 1) превращает последние посты в промпт для картинки, а модель генерации изображений (Шаг 2) рисует по нему. Можно пропустить Шаг 1 и написать промпт самому. Текст чата не меняется — картинки складываются в галерею расширения, а в посты вставляются превью (пока на доработке).
 
 > Расширение работает со SillyTavern только через публичные API расширений и пользовательских файлов и не содержит кода SillyTavern.
 >
@@ -21,7 +21,7 @@
 
 ### Источники картинок
 
-- **OpenAI Images** (gpt-image / DALL·E), **Gemini** (Nano Banana — включая новый Interactions API), **OpenRouter Images**, **шлюзы Chat Completions** (оба диалекта настроек картинки: OpenRouter и new-api), **Pollinations** (нужен `sk_`-токен), **Naistera** (токен из Telegram-бота), **Cloudflare Workers AI** (бесплатно 10 000 нейронов в день — десятки картинок FLUX), **локальный ComfyUI** (ключ не нужен).
+- **OpenAI Images** (gpt-image / DALL·E), **Gemini** (Nano Banana — включая новый Interactions API), **OpenRouter Images**, **шлюзы Chat Completions** (оба диалекта настроек картинки: OpenRouter и new-api), **Pollinations** (нужен `sk_`-токен), **Naistera** (токен из Telegram-бота), **Cloudflare Workers AI** (бесплатно 10 000 нейронов в день — десятки картинок FLUX), **локальный ComfyUI**.
 - ComfyUI: встроенные графы txt2img / img2img или свой workflow «Export (API)» с плейсхолдерами `%prompt%` / `%seed%` / `%model%` / `%width%` / `%height%`. Workflow можно загрузить из JSON — или просто из PNG-картинки, которую сохранил ComfyUI. Кнопка «Проверить» подтягивает список моделей с сервера.
 - Кнопка «Проверить» у каждого подключения: бесплатно проверяет ключ, список image-моделей и путь доставки (напрямую или через прокси).
 - У каждого подключения: режим референсов (авто / всегда / никогда), лимит референсов, таймаут, дополнительные параметры запроса, клонирование, сброс выученного о шлюзе.
@@ -108,4 +108,4 @@
 
 ## Лицензия
 
-[GNU AGPL-3.0](LICENSE) — форки и модификации только под той же лицензией.
+[GNU AGPL-3.0](LICENSE)
