@@ -56,7 +56,11 @@ export function setActiveTab(id, { persist = true, render = true } = {}) {
         body.className = 'uris-body';
         body.__urisRenderEpoch = renderEpoch;
         body.__urisTabId = id;
+        // Performance-метка рендера вкладки (план 2026-10-25, фаза 0); имя
+        // меры — uris:tab-render:<id>, для ленивых вкладок включает загрузку модуля.
+        performance.mark('uris:tab-render');
         const result = tab.render(body);
+        const measureRender = () => { performance.measure(`uris:tab-render:${id}`, 'uris:tab-render'); };
         const restore = () => {
             if (!body || renderEpoch !== _renderEpoch || _active !== id) return;
             body.scrollTop = savedScrollY;
@@ -67,7 +71,7 @@ export function setActiveTab(id, { persist = true, render = true } = {}) {
             : fn => setTimeout(fn, 0);
         if (result && typeof result.then === 'function') {
             // Async render: wait for layout to settle before restoring.
-            result.then(() => raf(restore)).catch(e => {
+            result.then(() => { measureRender(); raf(restore); }).catch(e => {
                 // A swallowed rejection left the user with an empty tab and no
                 // trace of why. The pool is the durable record (the header INFO
                 // badge); the console line stays for the developer.
@@ -75,6 +79,7 @@ export function setActiveTab(id, { persist = true, render = true } = {}) {
                 reportFailure({ scope: URIS_SCOPES.ui, message: `Вкладка «${tab.label}» не отрисовалась: ${e?.message || e}` });
             });
         } else {
+            measureRender();
             raf(restore);
         }
     }

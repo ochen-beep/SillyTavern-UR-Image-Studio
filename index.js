@@ -20,35 +20,24 @@ import {
     loadChatConfig, applyChatConfigToState,
 } from './src/chat-binding.js';
 import { bindEvents, unbindEvents } from './src/events.js';
-import { runStage1ForDraft, runFullPipelineForDraft, stopQueue } from './src/pipeline.js';
 import {
     mountPanel, syncPanelVisibility, initViewportSync, removeViewportSync, removePanel, isPanelVisible,
 } from './src/ui/window.js';
 import { ensureFloatingLauncher, removeFloatingLauncher, bindStage2Pulse } from './src/ui/floating-launcher.js';
 import { registerTab, setActiveTab, renderTabs, getActiveTab, refreshActive, resolveInitialTab } from './src/ui/tabs.js';
-import { render as renderApi } from './src/ui/tab-api.js';
-import { render as renderReferences } from './src/ui/tab-references.js';
-import { render as renderGenerate, bindAbortUI, unbindAbortUI } from './src/ui/tab-generate.js';
-import { render as renderGallery } from './src/ui/tab-gallery.js';
-import { render as renderTemplates } from './src/ui/tab-templates.js';
-import { render as renderBridge } from './src/ui/tab-bridge.js';
-import { render as renderSettings } from './src/ui/tab-settings.js';
-import { render as renderMedia, applyInlineRuntime } from './src/ui/tab-media.js';
-import { bindScanner, unbindScanner } from './src/inline/scanner.js';
-import { shutdownRender } from './src/inline/render.js';
+// Стартовый граф модулей держим минимальным: вкладки, pipeline и редкие
+// обработчики панели настроек догружаются динамическим импортом по факту
+// первого использования (см. lazyTabRender и обработчики ниже).
+import { bindAbortUI, unbindAbortUI } from './src/ui/generation-lifecycle-ui.js';
 import { setCurrentMsgId, getLastPostIndex } from './src/post-navigator.js';
-import { refreshPoolCache } from './src/refs-library.js';
-import { runExport, runImportInteractive } from './src/data-port.js';
+import { refreshPoolCache, ensureRefsStoreReady } from './src/refs-library.js';
 import { sweepStaleRunningDrafts } from './src/generation-drafts.js';
 import { reportFailure, URIS_SCOPES } from './src/error-pool.js';
-import { exportDiagnosticDump, clearAllDiagnostics } from './src/diagnostic-dump.js';
 import { loadDiagnosticEvents, flushDiagnosticEvents, recordDiagnosticEvent } from './src/diagnostic-events.js';
 import { flushAllFileStores, flushAllFileStoresOnUnload } from './src/file-store.js';
-import { ensureGalleryStoreReady, flushGalleryWrites } from './src/gallery-index.js';
-import { ensureRefsStoreReady, flushRefsWrites } from './src/refs-library.js';
-import { ensureParamPresetStoreReady, flushParamPresetWrites } from './src/param-presets.js';
-import { ensureStudioStoreReady, flushStudioWrites } from './src/studio-scope.js';
-import { exportNetDump } from './src/netdump.js';
+import { ensureGalleryStoreReady } from './src/gallery-index.js';
+import { ensureParamPresetStoreReady } from './src/param-presets.js';
+import { ensureStudioStoreReady } from './src/studio-scope.js';
 import { activateBridge, deactivateBridge, markBridgeReady, markBridgeFailed } from './src/bridge.js';
 import { acquireSingletonLock, releaseSingletonLock } from './src/cross-tab.js';
 
@@ -99,6 +88,9 @@ async function init() {
         return;
     }
     const ctx = getCtx(); if (!ctx) { warn('context unavailable'); markBridgeFailed(new Error('SillyTavern context is unavailable')); return; }
+    // Performance-метки (план 2026-10-25, фаза 0): uris:init виден в DevTools
+    // Performance/коноли через performance.getEntriesByName('uris:init').
+    performance.mark('uris:init');
     // Publish globalThis.URIS before any async work so consumers can grab the
     // global early and await URIS.ready for actual readiness.
     activateBridge();
@@ -137,17 +129,20 @@ async function init() {
     ]);
 
     // v4: 6 tabs (API / References / Generation / Gallery / Templates / Settings)
-    registerTab({ id: 'api',         label: 'API',         render: renderApi });
-    registerTab({ id: 'references',  label: 'Референсы',  render: renderReferences });
-    registerTab({ id: 'generate',    label: 'Генерация',   render: renderGenerate });
-    registerTab({ id: 'gallery',     label: 'Галерея',     render: renderGallery });
-    registerTab({ id: 'templates',   label: 'Шаблоны',     render: renderTemplates });
+    // Ленивый рендер: модуль вкладки грузится по факту первого открытия, а не
+    // на старте таверны (первое открытие платит один динамический импорт).
+    const lazyTabRender = (path) => (root) => import(path).then(m => m.render(root));
+    registerTab({ id: 'api',         label: 'API',         render: lazyTabRender('./src/ui/tab-api.js') });
+    registerTab({ id: 'references',  label: 'Референсы',  render: lazyTabRender('./src/ui/tab-references.js') });
+    registerTab({ id: 'generate',    label: 'Генерация',   render: lazyTabRender('./src/ui/tab-generate.js') });
+    registerTab({ id: 'gallery',     label: 'Галерея',     render: lazyTabRender('./src/ui/tab-gallery.js') });
+    registerTab({ id: 'templates',   label: 'Шаблоны',     render: lazyTabRender('./src/ui/tab-templates.js') });
     // Experimental bridge lab: hidden unless enabled on the Settings tab.
-    registerTab({ id: 'bridge',      label: 'Мост',        render: renderBridge, visible: () => state.settings?.bridgeTab === true });
+    registerTab({ id: 'bridge',      label: 'Мост',        render: lazyTabRender('./src/ui/tab-bridge.js'), visible: () => state.settings?.bridgeTab === true });
     // Inline media tab: hidden unless the inline master toggle is on (Settings / Media).
     // Experimental surface — marked with a warning sign in the tab bar.
-    registerTab({ id: 'media',       label: 'Медиа ⚠',     render: renderMedia, visible: () => state.settings?.inlineEnabled === true });
-    registerTab({ id: 'settings',    label: 'Настройки',   render: renderSettings });
+    registerTab({ id: 'media',       label: 'Медиа ⚠',     render: lazyTabRender('./src/ui/tab-media.js'), visible: () => state.settings?.inlineEnabled === true });
+    registerTab({ id: 'settings',    label: 'Настройки',   render: lazyTabRender('./src/ui/tab-settings.js') });
 
     // ST settings panel (minimal)
     createSettingsPanel();
@@ -193,13 +188,14 @@ async function init() {
             if (!state.settings.enabled) return;
             const input = { chatId, msgId, messageText, templateId };
             try {
+                const pipeline = await import('./src/pipeline.js');
                 if (requestedAction === 'build-prompt') {
-                    const run = await runStage1ForDraft(input);
+                    const run = await pipeline.runStage1ForDraft(input);
                     if (run.applied) {
                         if (isPanelVisible() && getActiveTab() === 'generate') refreshActive();
                     }
                 } else if (requestedAction === 'full-pipeline') {
-                    await runFullPipelineForDraft(input);
+                    await pipeline.runFullPipelineForDraft(input);
                     if (isPanelVisible() && getActiveTab() === 'gallery') refreshActive();
                 }
             } catch (e) {
@@ -216,7 +212,7 @@ async function init() {
         // the batch queue. Safe when idle — both calls are no-ops then.
         onStopAll: () => {
             abortAllGenerations();
-            stopQueue();
+            void import('./src/pipeline.js').then(m => m.stopQueue());
         },
     });
 
@@ -286,10 +282,11 @@ async function init() {
     // direct bindScanner/initRender calls left every chat that never touched
     // the Media toggle with a dead scanner while the checkbox showed enabled.
     if (state.settings.inlineEnabled) {
-        applyInlineRuntime();
+        (await import('./src/ui/tab-media.js')).applyInlineRuntime();
     }
 
     log('Initialized v2 · catalog-v3 · nanogpt-image-catalog · no-model-toggle.');
+    performance.measure('uris:init', 'uris:init');
     // External bridge opens for business only after a fully successful init.
     markBridgeReady();
 }
@@ -441,23 +438,33 @@ function bindSettingsPanel(host) {
     host.querySelector('#uris_open_window').addEventListener('click', () => {
         if (state.settings.collapsed) toggleLauncherPanel();
     });
-    host.querySelector('#uris_export_data').addEventListener('click', runExport);
+    host.querySelector('#uris_export_data').addEventListener('click', () => {
+        void import('./src/data-port.js').then(m => m.runExport());
+    });
     host.querySelector('#uris_import_data').addEventListener('click', async () => {
+        const { runImportInteractive } = await import('./src/data-port.js');
         const result = await runImportInteractive();
         if (result) refreshActive();
     });
-    host.querySelector('#uris_export_diagnostic').addEventListener('click', () => exportDiagnosticDump().catch(e => {
-        error('exportDiagnosticDump:', e);
-        reportFailure({ scope: URIS_SCOPES.diagnostics, message: e?.message || String(e) });
-    }));
-    host.querySelector('#uris_export_network').addEventListener('click', () => exportNetDump().catch(e => {
-        error('exportNetDump:', e);
-        reportFailure({ scope: URIS_SCOPES.netdump, message: e?.message || String(e) });
-    }));
+    host.querySelector('#uris_export_diagnostic').addEventListener('click', async () => {
+        const { exportDiagnosticDump } = await import('./src/diagnostic-dump.js');
+        exportDiagnosticDump().catch(e => {
+            error('exportDiagnosticDump:', e);
+            reportFailure({ scope: URIS_SCOPES.diagnostics, message: e?.message || String(e) });
+        });
+    });
+    host.querySelector('#uris_export_network').addEventListener('click', async () => {
+        const { exportNetDump } = await import('./src/netdump.js');
+        exportNetDump().catch(e => {
+            error('exportNetDump:', e);
+            reportFailure({ scope: URIS_SCOPES.netdump, message: e?.message || String(e) });
+        });
+    });
     host.querySelector('#uris_clear_diagnostic').addEventListener('click', async () => {
         const confirmed = await showConfirmModal('Очистить всю диагностику?\n\nБудут удалены события, логи, ошибки, сетевой дамп и локальные recovery-записи. Recovery может описывать уже оплаченный запрос с неизвестным результатом; действие не отменяет запрос у провайдера.');
         if (!confirmed) return;
         try {
+            const { clearAllDiagnostics } = await import('./src/diagnostic-dump.js');
             const { netCount, pendingCount } = await clearAllDiagnostics();
             toastr?.success(`Диагностика очищена: события, логи, ошибки, сетевой дамп (${netCount}) и recovery (${pendingCount})`, DISPLAY_NAME);
         } catch (e) {
@@ -488,8 +495,8 @@ function cleanup() {
     // must not drop a queued mutation.
     void flushAllFileStores();
     unbindEvents();
-    unbindScanner();
-    shutdownRender();
+    void import('./src/inline/scanner.js').then(m => m.unbindScanner());
+    void import('./src/inline/render.js').then(m => m.shutdownRender());
     removeViewportSync();
     if (_launcherObserver) { _launcherObserver.disconnect(); _launcherObserver = null; }
     if (_visibilityHandler) { document.removeEventListener('visibilitychange', _visibilityHandler); _visibilityHandler = null; }
