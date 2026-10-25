@@ -119,7 +119,8 @@ export function buildGenerateViewModel({ draft, snapshot, referenceResolution, a
 export function renderGenerateMarkup(vm) {
     const { draft, templates, isStale, stage1Action, canGenerateImage, isRunning, stage2RequestId, stage1Error, stage2Error, ambiguities, entities } = vm;
     const isStudio = vm.isStudio === true;
-    const excerpt = escapeHtml((vm.messageText || '').slice(0, 120));
+    // Stale badge lives in the references panel head now (the excerpt is gone —
+    // the post is readable in the chat itself).
     const staleBadge = isStale ? '<span class="uris-draft-stale">исходное сообщение изменилось</span>' : '';
     // The editor and action buttons are never disabled by generation state —
     // submissions are fire-and-forget; isRunning only drives the Stop button
@@ -147,19 +148,16 @@ export function renderGenerateMarkup(vm) {
     // Stage 1/2 errors are no longer rendered as a red inline block — they
     // live in the header error pool (reportFailure from the action handlers).
 
-    // Source block: in a chat it is the read-only excerpt of the selected post;
-    // in the studio the scene text is an input the user edits freely.
+    // Source block: in a chat the post text is already readable in the chat
+    // itself, so no excerpt — the ambiguity resolver lives in the references
+    // panel now. In the studio the scene text is an input the user edits freely.
     const sourceBlock = isStudio
         ? `
             <div class="uris-context-box uris-studio-scene">
                 <textarea class="text_pole uris-scene-area" id="urisScene" rows="3" placeholder="Текст сцены — по нему распознаются референсы. Можно оставить пустым и написать промпт напрямую.">${escapeHtml(vm.messageText || '')}</textarea>
                 <div class="uris-scene-context">${ambiguityList}</div>
             </div>`
-        : `
-            <div class="uris-context-box">
-                <div class="uris-source-excerpt">${excerpt}${staleBadge}</div>
-                <div class="uris-scene-context">${ambiguityList}</div>
-            </div>`;
+        : '';
 
     // Header: post navigator in a chat, a static studio badge on the welcome
     // screen (post navigation is meaningless there).
@@ -237,12 +235,30 @@ export function renderGenerateMarkup(vm) {
                 <div class="uris-gen-params">
                     ${chatOnlyParams}
                 </div>
+                <div class="uris-s1-ctx">
+                    <div class="uris-s1-ctx-title">Контекст Stage 1</div>
+                    <label class="checkbox_label"><input type="checkbox" id="uris_s1_persona" ${state.settings.stage1IncludePersona === true ? 'checked' : ''}><span>Карточка {{user}} (персона)</span></label>
+                    <label class="checkbox_label"><input type="checkbox" id="uris_s1_character" ${state.settings.stage1IncludeCharacter === true ? 'checked' : ''}><span>Карточка {{char}} (описание и личность)</span></label>
+                    <label class="checkbox_label"><input type="checkbox" id="uris_s1_lore" ${state.settings.stage1IncludeLore === true ? 'checked' : ''}><span>Лорбук чата и персонажа</span></label>
+                    <div class="uris-field">
+                        <label for="uris_s1_history">История чата (сообщений до выбранного поста)</label>
+                        <select class="text_pole" id="uris_s1_history">
+                            <option value="0" ${!state.settings.stage1HistoryDepth ? 'selected' : ''}>выключено</option>
+                            <option value="5" ${state.settings.stage1HistoryDepth === 5 ? 'selected' : ''}>5</option>
+                            <option value="10" ${state.settings.stage1HistoryDepth === 10 ? 'selected' : ''}>10</option>
+                            <option value="20" ${state.settings.stage1HistoryDepth === 20 ? 'selected' : ''}>20</option>
+                        </select>
+                    </div>
+                    <small class="uris-hint">Дополнительный контекст текстового Шага 1: выбранные блоки уходят в LLM вместе со сценой.</small>
+                </div>
             </details>
 
             <div class="uris-refs-panel" id="urisRefsPanel">
                 <div class="uris-refs-panel-head">
                     <span class="uris-refs-status-label">Референсы</span>
+                    ${staleBadge}
                 </div>
+                ${isStudio ? '' : `<div class="uris-scene-context uris-refs-ambiguities">${ambiguityList}</div>`}
                 <div class="uris-refs-keywords" id="urisRefsKeywords">
                     <div class="uris-refs-keywords-row" id="urisRefsStage1Keywords"></div>
                     <div class="uris-refs-keywords-row" id="urisRefsStage2Keywords"></div>
@@ -634,6 +650,24 @@ export function createCancellablePromptAutosave({ persist, delay = 400, setTimer
  * @param {HTMLElement} root
  */
 export function bindGenerate(root) {
+    // Stage 1 context toggles (moved here from Settings — a generation concern):
+    // same ids, same persistence as before.
+    for (const [id, key] of [
+        ['#uris_s1_persona', 'stage1IncludePersona'],
+        ['#uris_s1_character', 'stage1IncludeCharacter'],
+        ['#uris_s1_lore', 'stage1IncludeLore'],
+    ]) {
+        root.querySelector(id)?.addEventListener('change', e => {
+            state.settings[key] = e.target.checked === true;
+            saveSettings();
+        });
+    }
+    root.querySelector('#uris_s1_history')?.addEventListener('change', e => {
+        const depth = Number(e.target.value);
+        state.settings.stage1HistoryDepth = [5, 10, 20].includes(depth) ? depth : 0;
+        saveSettings();
+    });
+
     // Post navigator — re-render the whole tab on navigation so the draft switches.
     // Absent in the studio (no posts to navigate).
     root.querySelector('#urisPrev')?.addEventListener('click', () => { navigatePosts(-1); render(root); });

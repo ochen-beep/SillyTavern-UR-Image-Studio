@@ -94,22 +94,6 @@ export function render(root) {
                 <small class="uris-hint">Если прямой запрос к шлюзу ушёл «без ответа», задача один раз переотправится сама — следующая попытка пойдёт через прокси. Выключено по умолчанию: повтор возможной уже оплаченной генерации — на вашей совести.</small>
             </section>
             <section class="uris-settings-section">
-                <h3>Контекст Stage 1</h3>
-                <label class="checkbox_label"><input type="checkbox" id="uris_s1_persona" ${state.settings.stage1IncludePersona === true ? 'checked' : ''}><span>Карточка {{user}} (персона)</span></label>
-                <label class="checkbox_label"><input type="checkbox" id="uris_s1_character" ${state.settings.stage1IncludeCharacter === true ? 'checked' : ''}><span>Карточка {{char}} (описание и личность)</span></label>
-                <label class="checkbox_label"><input type="checkbox" id="uris_s1_lore" ${state.settings.stage1IncludeLore === true ? 'checked' : ''}><span>Лорбук чата и персонажа</span></label>
-                <div class="uris-field">
-                    <label for="uris_s1_history">История чата (сообщений до выбранного поста)</label>
-                    <select class="text_pole" id="uris_s1_history">
-                        <option value="0" ${!state.settings.stage1HistoryDepth ? 'selected' : ''}>выключено</option>
-                        <option value="5" ${state.settings.stage1HistoryDepth === 5 ? 'selected' : ''}>5</option>
-                        <option value="10" ${state.settings.stage1HistoryDepth === 10 ? 'selected' : ''}>10</option>
-                        <option value="20" ${state.settings.stage1HistoryDepth === 20 ? 'selected' : ''}>20</option>
-                    </select>
-                </div>
-                <small class="uris-hint">Дополнительный контекст текстового Шага 1: выбранные блоки уходят в LLM вместе со сценой (у профильного пути — отдельными сообщениями). Выключено по умолчанию — включайте то, что помогает строить промпты; каждый блок обрезается по бюджету символов.</small>
-            </section>
-            <section class="uris-settings-section">
                 <h3>Внешний мост <small class="uris-hint">(эксперимент)</small></h3>
                 <label class="checkbox_label"><input type="checkbox" id="uris_bridge_enabled" ${state.settings.bridgeEnabled !== false ? 'checked' : ''}><span>Разрешить генерацию другим расширениям</span></label>
                 <small class="uris-hint">Публикует globalThis.URIS: сторонние расширения (телефон, визуальная новелла) вызывают генерацию одним вызовом. Каждый вызов помечается caller'ом — видно в диагностике и галерее.</small>
@@ -267,22 +251,6 @@ function bindBehaviorToggles(root) {
     });
     root.querySelector('#uris_use_all_params')?.addEventListener('change', e => {
         state.settings.useParametersForAllChats = e.target.checked === true;
-        saveSettings();
-    });
-    // Контекст Stage 1: три тумблера + глубина истории.
-    for (const [id, key] of [
-        ['#uris_s1_persona', 'stage1IncludePersona'],
-        ['#uris_s1_character', 'stage1IncludeCharacter'],
-        ['#uris_s1_lore', 'stage1IncludeLore'],
-    ]) {
-        root.querySelector(id)?.addEventListener('change', e => {
-            state.settings[key] = e.target.checked === true;
-            saveSettings();
-        });
-    }
-    root.querySelector('#uris_s1_history')?.addEventListener('change', e => {
-        const depth = Number(e.target.value);
-        state.settings.stage1HistoryDepth = [5, 10, 20].includes(depth) ? depth : 0;
         saveSettings();
     });
     root.querySelector('#uris_inline_enabled')?.addEventListener('change', e => {

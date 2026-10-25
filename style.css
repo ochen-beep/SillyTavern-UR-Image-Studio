@@ -481,7 +481,8 @@
     overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 
-/* Контекст-блок: excerpt источника + scene-context (ambiguities). */
+/* Контекст-блок: studio-ввод сцены (в чате excerpt удалён, ambiguities живут
+   в панели «Референсы»). */
 .uris-context-box {
     display: flex; flex-direction: column; gap: 4px;
     padding: 6px 8px; background: var(--uris-surface-card);
@@ -591,6 +592,19 @@
 .uris-gen-acc[open] > summary::before { content: '▾ '; }
 .uris-gen-acc[open] > summary { color: var(--uris-text-strong); }
 .uris-gen-acc .uris-gen-params { margin-top: 4px; }
+/* Контекст Stage 1 внутри аккордеона: компактная секция с разделителем. */
+.uris-s1-ctx {
+    margin-top: 10px; padding-top: 8px;
+    border-top: 1px solid var(--uris-border-soft);
+    display: flex; flex-direction: column; gap: 4px;
+}
+.uris-s1-ctx-title {
+    font-size: var(--uris-font-sm); color: var(--uris-text-mut);
+    font-weight: 600; margin-bottom: 2px;
+}
+.uris-s1-ctx .checkbox_label { margin: 0; }
+/* Резолвер неоднозначностей переехал из context-box в панель «Референсы». */
+.uris-refs-ambiguities { margin: 2px 0 6px; }
 .uris-param { display: inline-flex; align-items: center; gap: 4px; }
 .uris-param-label { font-size: var(--uris-font-xs); color: var(--uris-text-mut); }
 .uris-gen-params select { min-width: 70px; padding: 3px 6px; font-size: var(--uris-font-sm); }
