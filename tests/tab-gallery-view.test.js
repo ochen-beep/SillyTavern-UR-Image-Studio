@@ -166,7 +166,7 @@ test('contextmenu по карточке открывает меню действ
     assert.ok(overlay, 'меню открыто');
     // fake-dom не понимает составных селекторов — берём пункты и читаем текст целиком
     const labels = [...overlay.querySelectorAll('.uris-action-menu-item')].map(b => b.textContent.trim());
-    assert.deepEqual(labels, ['В избранное', 'Регенерировать', 'Копировать промпт', 'Скопировать картинку', 'Папки…', 'Сохранить как референс', 'Скачать картинку', 'Удалить…'],
+    assert.deepEqual(labels, ['В избранное', 'Регенерировать', 'Копировать промпт', 'Скопировать', 'Папки…', 'Сохранить как референс', 'Скачать', 'Удалить…'],
         'без «К посту-источнику»: у тестовых карточек нет sourceMsgId');
     const del = overlay.querySelectorAll('.uris-action-menu-item').find(b => b.dataset.id === 'del');
     assert.ok(del.classList.contains('uris-action-menu-item-danger'), 'удаление помечено опасным');

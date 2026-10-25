@@ -1394,9 +1394,9 @@
     flex: 1; overflow-y: auto; padding: 10px;
     display: flex; flex-direction: column; gap: 4px;
 }
-/* Description textarea: в отличие от .uris-field, оверлей не даёт resize через
-   каскад, а ST .text_pole ставит resize:none. Явно разрешаем тянуть по вертикали. */
-.uris-ed-desc { resize: vertical; min-height: 72px; }
+/* Description textarea: ровное поле — ручка resize выглядела как «можно тянуть»,
+   но рост поля покрыт кнопкой «развернуть» (maximized-редактор). */
+.uris-ed-desc { resize: none; min-height: 72px; }
 .uris-editor-preview-wrap { position: relative; margin-bottom: 8px; }
 .uris-editor-preview-wrap .uris-editor-preview { margin-bottom: 0; }
 /* Обрезка / замена поверх нижнего угла превью. */

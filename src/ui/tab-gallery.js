@@ -333,7 +333,7 @@ export function galleryMenuItems(item, { chatId, root }) {
             onSelect: async () => { const a = await import('./gallery-actions.js'); await a.regenerate(item, root, null); } },
         { id: 'copy', icon: 'fa-copy', label: 'Копировать промпт',
             onSelect: async () => { const a = await import('./gallery-actions.js'); await a.copyItemText(item); } },
-        { id: 'copyImage', icon: 'fa-image', label: 'Скопировать картинку',
+        { id: 'copyImage', icon: 'fa-image', label: 'Скопировать',
             onSelect: async () => { const a = await import('./gallery-actions.js'); await a.copyImageToClipboard(item); } },
     ];
     if (item?.sourceMsgId != null) {
@@ -347,7 +347,7 @@ export function galleryMenuItems(item, { chatId, root }) {
             onSelect: async () => { const a = await import('./gallery-actions.js'); await a.saveAsReference(item); } },
         // Вернуть браузерное «скачать файл»: жест перехвачен кастомным меню,
         // нативного пункта контекстного меню больше нет (downloadImage).
-        { id: 'download', icon: 'fa-download', label: 'Скачать картинку',
+        { id: 'download', icon: 'fa-download', label: 'Скачать',
             onSelect: async () => { const a = await import('./gallery-actions.js'); a.downloadImage(item); } },
         { id: 'del', icon: 'fa-trash', label: 'Удалить…', danger: true,
             onSelect: async () => { const a = await import('./gallery-actions.js'); await a.deleteImage(item, chatId, root); } },

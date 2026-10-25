@@ -5,6 +5,7 @@
  * to avoid duplication and keep a single source of truth.
  */
 import { getCtx, showConfirmModal, showInputModal, log, saveSettings, abortGeneration, escapeHtml, uid } from '../core.js';
+import { editTextModal } from './text-editor.js';
 import { lockBodyScroll, unlockBodyScroll } from './window.js';
 import { addToGallery, deleteGalleryCard } from '../storage.js';
 import { updateCard } from '../gallery-index.js';
@@ -352,7 +353,18 @@ export async function regenerate(item, root, regenBtn, overrides = {}) {
  */
 export async function editPromptAndRegenerate(item, root) {
     const current = String(item?.prompt || '');
-    const edited = await showInputModal('Промпт для перегенерации:', current);
+    // Full-surface editor (same maximized popup as the template instruction):
+    // the old one-line INPUT popup squeezed a multi-line prompt into 2 rows.
+    let edited = await editTextModal({
+        value: current,
+        title: 'Промпт для перегенерации',
+        placeholder: 'Промпт картинки',
+        okButton: 'Перегенерировать',
+    });
+    if (edited === null && !getCtx()?.callGenericPopup) {
+        // No ST popups at all: keep the legacy one-line dialog as a fallback.
+        edited = await showInputModal('Промпт для перегенерации:', current);
+    }
     if (edited == null) return false;
     const prompt = String(edited).trim();
     if (!prompt || prompt === current) return false;
