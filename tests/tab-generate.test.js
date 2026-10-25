@@ -1480,3 +1480,33 @@ test('guard двойного запуска: дубликат с отказом 
         state.queue = [];
     }
 });
+
+test('stage-1 history depth: compact number field takes any value 0–100, clamped and mirrored back', async () => {
+    const els = new Map();
+    const makeEl = () => {
+        const el = { value: '', listeners: {} };
+        el.addEventListener = (type, fn) => { el.listeners[type] = fn; };
+        return el;
+    };
+    const root = { querySelector: sel => { if (!els.has(sel)) els.set(sel, makeEl()); return els.get(sel); } };
+    tabGenerate.bindGenerate(root);
+    const history = els.get('#uris_s1_history');
+    assert.ok(history, 'history depth field is bound');
+
+    const fire = value => { history.value = value; history.listeners.change({ target: history }); };
+    fire('37');
+    assert.equal(state.settings.stage1HistoryDepth, 37, 'arbitrary depth persists');
+    assert.equal(history.value, '37', 'field mirrors the effective value');
+
+    fire('150');
+    assert.equal(state.settings.stage1HistoryDepth, 100, 'above-range clamps to 100');
+    assert.equal(history.value, '100');
+
+    fire('-5');
+    assert.equal(state.settings.stage1HistoryDepth, 0, 'negative clamps to 0');
+
+    fire('abc');
+    assert.equal(state.settings.stage1HistoryDepth, 0, 'non-numeric falls back to 0');
+
+    state.settings.stage1HistoryDepth = 0;
+});

@@ -241,13 +241,9 @@ export function renderGenerateMarkup(vm) {
                     <label class="checkbox_label"><input type="checkbox" id="uris_s1_character" ${state.settings.stage1IncludeCharacter === true ? 'checked' : ''}><span>Карточка {{char}} (описание и личность)</span></label>
                     <label class="checkbox_label"><input type="checkbox" id="uris_s1_lore" ${state.settings.stage1IncludeLore === true ? 'checked' : ''}><span>Лорбук чата и персонажа</span></label>
                     <div class="uris-field">
-                        <label for="uris_s1_history">История чата (сообщений до выбранного поста)</label>
-                        <select class="text_pole" id="uris_s1_history">
-                            <option value="0" ${!state.settings.stage1HistoryDepth ? 'selected' : ''}>выключено</option>
-                            <option value="5" ${state.settings.stage1HistoryDepth === 5 ? 'selected' : ''}>5</option>
-                            <option value="10" ${state.settings.stage1HistoryDepth === 10 ? 'selected' : ''}>10</option>
-                            <option value="20" ${state.settings.stage1HistoryDepth === 20 ? 'selected' : ''}>20</option>
-                        </select>
+                        <label for="uris_s1_history">История чата — сообщений до выбранного поста (0 — выключено)</label>
+                        <input type="number" class="text_pole uris-w-num" id="uris_s1_history" min="0" max="100" step="1" inputmode="numeric"
+                            value="${Number.isFinite(state.settings.stage1HistoryDepth) ? state.settings.stage1HistoryDepth : 0}">
                     </div>
                     <small class="uris-hint">Дополнительный контекст текстового Шага 1: выбранные блоки уходят в LLM вместе со сценой.</small>
                 </div>
@@ -663,8 +659,11 @@ export function bindGenerate(root) {
         });
     }
     root.querySelector('#uris_s1_history')?.addEventListener('change', e => {
-        const depth = Number(e.target.value);
-        state.settings.stage1HistoryDepth = [5, 10, 20].includes(depth) ? depth : 0;
+        // Any depth 0–100 (was a fixed 0/5/10/20 select); clamped and mirrored
+        // back into the field so it always shows the effective value.
+        const depth = Math.max(0, Math.min(100, Math.floor(Number(e.target.value) || 0)));
+        state.settings.stage1HistoryDepth = depth;
+        e.target.value = String(depth);
         saveSettings();
     });
 

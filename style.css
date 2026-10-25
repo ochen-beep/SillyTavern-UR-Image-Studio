@@ -269,6 +269,8 @@
 
 /* Утилиты взамен inline-стилей в разметке. */
 .uris-w-full { width: 100%; }
+/* Compact numeric field (stage-1 history depth and friends). */
+.uris-w-num { width: 84px; }
 .uris-muted { margin-top: 6px; font-size: 0.8em; opacity: var(--uris-o-70); }
 
 /* ── Ресайзер ── */
