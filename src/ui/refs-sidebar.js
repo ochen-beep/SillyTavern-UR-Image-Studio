@@ -14,6 +14,7 @@ import { openFolderSheet, orderSidebarFolders, filterFolders } from './folder-pi
 import { showFolderManager } from './folder-manager.js';
 import { openCardActionMenu, bindCardContextMenu } from './card-action-menu.js';
 import { refsView } from './refs-view-shared.js';
+import { refreshActive } from './tabs.js';
 
 // ── Sidebar ──
 // Дерево папок (2 уровня) + поиск. Поиск уплощает дерево: совпадения плоским

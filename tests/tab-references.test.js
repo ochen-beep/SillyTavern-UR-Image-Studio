@@ -1099,3 +1099,36 @@ test('mobile render after a desktop pass falls back to the folder list (no blank
         'список папок достижим с любого экрана');
     root.removeChild(el);
 });
+
+test('sidebar: новая папка видна сразу после «＋», без смены вкладки', async () => {
+    const { document, root } = makeFakeDocument();
+    globalThis.document = document;
+    globalThis.document.body = root;
+
+    // Имя папки вводится через ST-шов callGenericPopup (паттерн folder-manager.test.js).
+    // Регрессия распила 2026-10-25: refs-sidebar.js терял import refreshActive —
+    // createFolder отрабатывал, но ReferenceError в обработчике гасил перерисовку.
+    _ctx.POPUP_TYPE = { INPUT: 'input' };
+    _ctx.callGenericPopup = async () => 'Quick Folder';
+
+    const { render } = await import('../src/ui/tab-references.js');
+    const tabs = await import('../src/ui/tabs.js');
+    tabs.registerTab({ id: 'references', label: 'Референсы', render });
+    const el = makeTabEl(document, 600);
+    el.setAttribute('id', 'urisBody');
+    root.appendChild(el);
+    await tabs.setActiveTab('references');
+    await new Promise(resolve => setTimeout(resolve, 10));
+
+    try {
+        await el.querySelector('#urisRefsAddFolderBtn').click();
+        await new Promise(resolve => setTimeout(resolve, 10));
+        const folderItems = [...el.querySelectorAll('.uris-folder-item')];
+        assert.ok(folderItems.some(b => b.textContent.includes('Quick Folder')),
+            'новая папка появляется в сайдбаре сразу после создания (refreshActive жив)');
+    } finally {
+        delete _ctx.callGenericPopup;
+        delete _ctx.POPUP_TYPE;
+        root.removeChild(el);
+    }
+});
