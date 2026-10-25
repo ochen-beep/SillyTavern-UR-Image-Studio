@@ -1203,12 +1203,6 @@
 }
 .uris-folder-row-child .uris-folder-item { padding-left: 24px; }
 /* Подсказка жеста внизу сайдбара (статичная, не на каждой строке). */
-.uris-folder-hint {
-    flex-shrink: 0; padding: 7px 10px;
-    border-top: 1px solid var(--uris-border-soft);
-    font-size: var(--uris-font-xs); color: var(--uris-text-dim);
-}
-.uris-folder-hint b { color: var(--uris-text-mut); font-weight: 600; }
 .uris-folder-count { font-size: var(--uris-font-xs); color: var(--uris-text-dim); }
 .uris-folder-header {
     display: flex; align-items: center; justify-content: space-between;
@@ -1430,14 +1424,14 @@
     font-size: var(--uris-font-xs); font-weight: 600; line-height: 1.5;
     text-transform: lowercase;
 }
-.uris-ed-autosave {
-    font-size: var(--uris-font-xs); color: var(--uris-text-dim);
-    text-align: right; min-height: 1em; padding-top: 2px;
-    transition: color .2s;
-}
-.uris-ed-autosave.uris-ed-autosave-on { color: var(--uris-accent); }
 /* Record footer: клонирование — тихая соседка слева, удаление остаётся
    прижатым вправо (margin-left:auto из .uris-ed-del работает и в этом ряду). */
+/* Чекбокс-строка редактора: подпись в линию с чекбоксом, не под ним. */
+.uris-ed-check {
+    display: flex; align-items: flex-start; gap: 6px;
+    margin: 2px 0; cursor: pointer; font-size: var(--uris-font-sm);
+}
+.uris-ed-check input { flex: 0 0 auto; margin-top: 3px; }
 .uris-ed-footer { display: flex; align-items: center; gap: 8px; margin-top: 4px; }
 /* Clone: quiet like delete, but neutral - accent on hover instead of red. */
 .uris-ed-clone {

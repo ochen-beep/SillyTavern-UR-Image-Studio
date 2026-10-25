@@ -153,7 +153,7 @@ test('render: дерево папок — шеврон у группы, подп
 
     assert.equal(el.querySelectorAll('.uris-folder-pin').length, 0, 'пин-кнопок в строках больше нет');
     assert.equal(el.querySelectorAll('.uris-folder-edit').length, 0, 'кнопок правки в строках больше нет');
-    assert.ok(el.querySelector('.uris-folder-hint'), 'подсказка жеста внизу сайдбара');
+    assert.ok(!el.querySelector('.uris-folder-hint'), 'подсказка жеста удалена (UI-ревизия)');
 
     const groupItem = [...el.querySelectorAll('.uris-folder-item')].find(b => b.dataset.folder === group.id);
     const childItem = [...el.querySelectorAll('.uris-folder-item')].find(b => b.dataset.folder === child.id);
@@ -723,7 +723,7 @@ test('render: editor text fields autosave on change (desktop)', async () => {   
     assert.ok(previewWrap.querySelector('.uris-ed-replace'), 'replace control is inside wrapper');
     // No explicit Save button: text fields persist on change (autosave model).
     assert.ok(!el.querySelector('.uris-ed-save'), 'no explicit save button');
-    assert.ok(el.querySelector('.uris-ed-autosave'), 'desktop editor shows autosave indicator');
+    assert.ok(!el.querySelector('.uris-ed-autosave'), 'autosave indicator removed — saves are silent');
     const name = el.querySelector('.uris-ed-name');
     name.value = 'Saved Char';
     await name.change();

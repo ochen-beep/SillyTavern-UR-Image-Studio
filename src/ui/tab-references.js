@@ -139,8 +139,7 @@ function _renderSidebar(root, folders, refs) {
             <input type="text" class="uris-folder-search-input" placeholder="Поиск папок…"
                 value="${escapeHtml(_folderSearchQuery)}" aria-label="Поиск папок" autocomplete="off">
         </div>
-        <div class="uris-folder-list" id="urisFolderList"></div>
-        <div class="uris-folder-hint"><b>ПКМ / долгий тап</b> — действия папки</div>`;
+        <div class="uris-folder-list" id="urisFolderList"></div>`;
     _renderFolderList(root, folders, refs);
     host.querySelector('.uris-folder-search-input')?.addEventListener('input', (e) => {
         _folderSearchQuery = e.target.value || '';
@@ -621,15 +620,13 @@ function refEditorBodyHtml(ref, { deleteLabel = 'Удалить карточку
         <input class="text_pole uris-ed-name" value="${escapeHtml(ref.name || '')}">
         <label class="uris-ed-label">Aliases</label>
         <input class="text_pole uris-ed-aliases" value="${escapeHtml(aliasesStr)}" placeholder="через запятую">
-        <small class="uris-hint">Сопоставление с промптом идёт по алиасам — перечислите имена и прозвища через запятую. Имя — только подпись. Поддерживаются {{char}}/{{user}}.</small>
         <div class="uris-field-head"><label class="uris-ed-label">Описание</label>
             <button class="uris-expand-btn" type="button" data-act="expand-desc" title="Развернуть редактор" aria-label="Развернуть редактор"><i class="fa-solid fa-maximize"></i></button></div>
         <textarea class="text_pole uris-ed-desc" rows="3" placeholder="Текст для Stage1">${escapeHtml(ref.description || '')}</textarea>
-        <label class="uris-ed-check"><input type="checkbox" class="uris-ed-binding-mode" ${ref.bindingMode === 'description' ? 'checked' : ''}> Только описание</label>
+        <label class="uris-ed-check"><input type="checkbox" class="uris-ed-binding-mode" ${ref.bindingMode === 'description' ? 'checked' : ''}><span>Только описание</span></label>
         <small class="uris-hint">Без картинки в генерацию попадёт только это описание.</small>
         <label class="uris-ed-label">Папки</label>
         <div class="uris-fp-host"></div>
-        <div class="uris-ed-autosave" aria-live="polite">Автосохранение</div>
         <div class="uris-ed-footer">
             <button class="uris-btn uris-btn-ghost uris-ed-clone"><i class="fa-solid fa-clone"></i> Клонировать</button>
             <button class="uris-btn uris-btn-ghost uris-ed-del"><i class="fa-solid fa-trash"></i> ${escapeHtml(deleteLabel)}</button>
@@ -1080,18 +1077,7 @@ function _bindEditorBody(root, host, ref, folders, opts = {}) {
     });
     // Text fields (name/aliases/desc) persist on change (blur/commit); folders
     // and image replace persist immediately in their own handlers. There is no
-    // explicit "Save" button - flashSaved confirms each autosave instead.
-    let saveFlashTimer;
-    const flashSaved = () => {
-        const ind = host.querySelector('.uris-ed-autosave');
-        if (!ind) return;
-        ind.textContent = '✓ Сохранено';
-        ind.classList.add('uris-ed-autosave-on');
-        clearTimeout(saveFlashTimer);
-        saveFlashTimer = setTimeout(() => {
-            if (ind.isConnected) { ind.classList.remove('uris-ed-autosave-on'); ind.textContent = 'Автосохранение'; }
-        }, 1400);
-    };
+    // explicit "Save" button — saves are silent, like templates/connections.
     const saveBasic = async () => {
         await updateRef(ref.id, {
             name: nameInput.value,
@@ -1099,7 +1085,6 @@ function _bindEditorBody(root, host, ref, folders, opts = {}) {
             description: descInput.value,
             bindingMode: bindingModeInput?.checked ? 'description' : 'image',
         });
-        flashSaved();
     };
     nameInput.addEventListener('change', saveBasic);
     aliasesInput.addEventListener('change', saveBasic);
@@ -1157,7 +1142,6 @@ function _bindEditorBody(root, host, ref, folders, opts = {}) {
             releaseRefImage(oldImage);
             const img = host.querySelector('.uris-editor-preview');
             if (img) img.src = optimized.imagePath;
-            flashSaved();
         } catch (err) {
             reportFailure({ scope: URIS_SCOPES.refs, message: 'Не удалось обрезать: ' + (err?.message || err), toast: true, toastText: 'Не удалось обрезать: ' + err.message });
         }
