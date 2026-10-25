@@ -4,9 +4,11 @@
  */
 import { state, escapeHtml, saveSettings, getApiKey, setApiKey } from '../core.js';
 import { listImageConnections } from '../connections.js';
+import { reorderConnections } from '../connection-store.js';
 import { patchChatConfig } from '../chat-binding.js';
 import { getProfiles, getProfileDetails } from '../text-connection.js';
 import { bindHeaderToggle } from './accordion-state.js';
+import { makeCardReorderable } from './card-drag.js';
 import { reportFailure, URIS_SCOPES } from '../error-pool.js';
 import {
     bindServerConnectionForm, renderServerConnectionForm,
@@ -253,6 +255,26 @@ export async function renderImageConnSection(host) {
             ${imageConnections.map(connection => renderServerConnectionForm(connection, { isActive: connection.id === state.activeImageProfileId })).join('')}
             <button class="uris-btn uris-btn-outline uris-add-btn" id="urisAddImageConn" type="button"><i class="fa-solid fa-plus"></i> Добавить коннект</button>
         </div>`, 'api:image-conn');
+
+    // Drag & drop порядка карточек (мышь и тач): после drop переставляем
+    // записи в settings.connections и перерисовываем секцию.
+    const cardsHost = host.querySelector('.uris-server-connections');
+    if (cardsHost) {
+        makeCardReorderable(cardsHost, {
+            selector: '.uris-preset-card',
+            onReorder: async (from, to) => {
+                const ordered = imageConnections.map(c => c.id);
+                const [moved] = ordered.splice(from, 1);
+                ordered.splice(to, 0, moved);
+                try {
+                    await reorderConnections(ordered);
+                    await rerender();
+                } catch (e) {
+                    reportFailure({ scope: URIS_SCOPES.api, message: 'Порядок коннектов: ' + (e?.message || e), toast: true });
+                }
+            },
+        });
+    }
 
     const rerender = async () => {
         // probe / delete / add change which cards exist, so they need a full

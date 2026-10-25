@@ -1,12 +1,13 @@
 // @ts-check
 /** Templates tab: instruction templates only. */
 import { state, escapeHtml, showConfirmModal, showInputModal, error } from '../core.js';
-import { listTemplates, saveTemplate, deleteTemplate, createInstructionTemplate } from '../prompt-templates.js';
+import { listTemplates, saveTemplate, deleteTemplate, createInstructionTemplate, reorderTemplates } from '../prompt-templates.js';
 import { patchChatConfig } from '../chat-binding.js';
 import { refreshActive } from './tabs.js';
 import { reportFailure, URIS_SCOPES } from '../error-pool.js';
 import { generatePromptText } from '../text-api.js';
 import { editTextModal } from './text-editor.js';
+import { makeCardReorderable } from './card-drag.js';
 
 /** @param {HTMLElement} root */
 export function render(root) {
@@ -66,6 +67,20 @@ async function renderList(root) {
     if (_listRenderEpoch !== epoch || root.__urisTabId !== 'templates' || !host?.isConnected) return;
     host.innerHTML = templates.map(renderTemplateCard).join('');
     bindCards(host);
+    makeCardReorderable(host, {
+        selector: '.uris-preset-card',
+        onReorder: async (from, to) => {
+            const ordered = templates.map(t => t.id);
+            const [moved] = ordered.splice(from, 1);
+            ordered.splice(to, 0, moved);
+            try {
+                await reorderTemplates(ordered);
+                refreshActive();
+            } catch (e) {
+                reportFailure({ scope: URIS_SCOPES.templates, message: 'Порядок шаблонов: ' + (e?.message || e), toast: true });
+            }
+        },
+    });
 }
 
 /** @param {{id:string,name:string,instruction:string,collapsed?:boolean}} template */
@@ -76,11 +91,11 @@ export function renderTemplateCard(template) {
     return `<div class="uris-preset-card uris-template-instruction ${active ? 'uris-template-active' : ''}${collapsed ? ' uris-collapsed' : ''}" data-id="${safeId}" data-type="instruction">
         <div class="uris-preset-card-header">
             <button class="uris-template-status${active ? ' uris-status-active' : ''}" type="button" title="${active ? 'Активен' : 'Сделать активным'}" aria-label="${active ? 'Активен' : 'Сделать активным'}"></button>
-            <input class="text_pole uris-name" value="${escapeHtml(template.name)}" placeholder="Название шаблона">
+            <span class="uris-name" title="${escapeHtml(template.name)}">${escapeHtml(template.name)}</span>
             <button class="uris-name-edit" type="button" title="Переименовать" aria-label="Переименовать"><i class="fa-solid fa-pencil"></i></button>
         </div>
         <div class="uris-preset-card-body"${collapsed ? ' hidden' : ''}>
-            <div class="uris-field"><div class="uris-field-head"><label>Инструкция для Stage1</label>
+            <div class="uris-field"><div class="uris-field-head">
                 <button class="uris-expand-btn" type="button" data-act="expand-instruction" title="Развернуть редактор" aria-label="Развернуть редактор"><i class="fa-solid fa-maximize"></i></button></div>
                 <textarea class="text_pole uris-instruction" rows="8" placeholder="Системная инструкция, которая отправляется к текстовой модели...">${escapeHtml(template.instruction || '')}</textarea>
                 <small class="uris-hint">Макросы ST: {{char}}, {{user}}.</small></div>
@@ -99,7 +114,7 @@ function bindCards(host) {
         const id = card.dataset.id;
         const collect = () => ({
             id,
-            name: card.querySelector('.uris-name')?.value || 'Шаблон',
+            name: card.querySelector('.uris-name')?.textContent?.trim() || 'Шаблон',
             type: 'instruction',
             instruction: card.querySelector('.uris-instruction')?.value || '',
         });
@@ -129,10 +144,19 @@ function bindCards(host) {
             card.classList.toggle('uris-collapsed', willClose);
             saveTemplate({ ...collect(), collapsed: willClose });
         });
-        // The name is a label by default (pointer-events:none); the pencil
-        // switches it into edit mode, and Enter commits (blur -> change -> save).
-        card.querySelector('.uris-name-edit')?.addEventListener('click', () => card.querySelector('.uris-name')?.focus());
-        card.querySelector('.uris-name')?.addEventListener('keydown', e => { if (e.key === 'Enter') e.target.blur(); });
+        // Rename via the ST input popup (same flow as gallery folders): the old
+        // inline header input stretched over the whole header row and committed
+        // by a stray click on a neighbour. The popup commits explicitly.
+        card.querySelector('.uris-name-edit')?.addEventListener('click', async () => {
+            const current = card.querySelector('.uris-name')?.textContent?.trim() || '';
+            const name = await showInputModal('Имя шаблона:', current);
+            if (!name || name === current) return;
+            const nameEl = card.querySelector('.uris-name');
+            if (nameEl) nameEl.textContent = name;
+            await saveTemplate({ ...collect(), name });
+            toastr?.success(`Переименовано: ${name}`);
+            refreshActive();
+        });
         const activate = async () => {
             state.activeTemplateId = id || null;
             await patchChatConfig({ templateId: id || null });

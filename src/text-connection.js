@@ -101,6 +101,23 @@ export async function getProfileDetails(profileId) {
 // 5 минут — дефолт провайдеров custom-пути (providers/*.js: p.timeoutMs ?? 300000).
 const STAGE1_PROFILE_TIMEOUT_MS = 300000;
 
+/**
+ * Сообщения профильного запроса. userPrompt — строка ИЛИ массив user-блоков
+ * (контекст Stage 1 из stage1-context.js): каждый блок — отдельное
+ * {role:'user'} сообщение, CM передаёт массив as-is (как у DS-Comments —
+ * request log показывает, где persona/карточка/лорбук/история).
+ * Экспортировано для тестов формы запроса.
+ */
+export function buildProfileMessages(systemPrompt, userPrompt) {
+    const userBlocks = (Array.isArray(userPrompt) ? userPrompt : [userPrompt])
+        .map(block => String(block ?? ''))
+        .filter(block => block.trim());
+    return [
+        { role: 'system', content: systemPrompt },
+        ...userBlocks.map(content => ({ role: 'user', content })),
+    ];
+}
+
 export async function generateWithProfile(profileIdOrName, systemPrompt, userPrompt, signal = null, requestId = null, opts = {}) {
     const ctx = getCtx();
 
@@ -128,10 +145,7 @@ export async function generateWithProfile(profileIdOrName, systemPrompt, userPro
     }
 
     log(`generateWithProfile: профиль «${profile.name}»`);
-    const messages = [
-        { role: 'system', content: systemPrompt },
-        { role: 'user',   content: userPrompt },
-    ];
+    const messages = buildProfileMessages(systemPrompt, userPrompt);
 
     let response;
     try {

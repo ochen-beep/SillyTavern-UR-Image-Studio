@@ -166,7 +166,7 @@ test('contextmenu по карточке открывает меню действ
     assert.ok(overlay, 'меню открыто');
     // fake-dom не понимает составных селекторов — берём пункты и читаем текст целиком
     const labels = [...overlay.querySelectorAll('.uris-action-menu-item')].map(b => b.textContent.trim());
-    assert.deepEqual(labels, ['В избранное', 'Регенерировать', 'Копировать промпт', 'Папки…', 'Сохранить как референс', 'Удалить…'],
+    assert.deepEqual(labels, ['В избранное', 'Регенерировать', 'Копировать промпт', 'Скопировать картинку', 'Папки…', 'Сохранить как референс', 'Скачать картинку', 'Удалить…'],
         'без «К посту-источнику»: у тестовых карточек нет sourceMsgId');
     const del = overlay.querySelectorAll('.uris-action-menu-item').find(b => b.dataset.id === 'del');
     assert.ok(del.classList.contains('uris-action-menu-item-danger'), 'удаление помечено опасным');
@@ -186,8 +186,32 @@ test('galleryMenuItems: «К посту-источнику» появляетс�
     // Избранное и папки — всегда в меню; подпись избранного зависит от состояния.
     assert.equal(without.some(i => i.id === 'fav'), true);
     assert.equal(without.some(i => i.id === 'folders'), true);
+    assert.equal(without.some(i => i.id === 'download'), true, 'меню возвращает браузерное «Скачать картинку»');
     assert.equal(without.find(i => i.id === 'fav').label, 'В избранное');
     assert.equal(mod.galleryMenuItems({ id: 'x', favorite: true }, { chatId: 'c', root }).find(i => i.id === 'fav').label,
         'Убрать из избранного');
     assert.equal(withMsg.at(-1).danger, true, 'удаление — последнее и опасное');
+});
+
+test('downloadImage: кликает <a download> с href карточки и именем uris_<id>.<ext>', async () => {
+    const { document, root } = makeFakeDocument();
+    globalThis.document = document;
+    globalThis.document.body = root;
+    const mod = await import('../src/ui/gallery-actions.js');
+    const clicked = [];
+    const origCreate = document.createElement.bind(document);
+    document.createElement = (tag) => {
+        const el = origCreate(tag);
+        if (tag === 'a') el.click = () => clicked.push({ href: el.href, download: el.download, el });
+        return el;
+    };
+    mod.downloadImage({ id: 'abc', src: '/user/images/uris_abc.png' });
+    mod.downloadImage({ id: 'def', src: 'data:image/webp;base64,AAAA' });
+    mod.downloadImage({ id: 'g', src: 'data:image/jpeg;base64,AAAA' });
+    assert.deepEqual(clicked.map(({ href, download }) => ({ href, download })), [
+        { href: '/user/images/uris_abc.png', download: 'uris_abc.png' },
+        { href: 'data:image/webp;base64,AAAA', download: 'uris_def.webp' },
+        { href: 'data:image/jpeg;base64,AAAA', download: 'uris_g.jpg' },
+    ]);
+    assert.ok(clicked.every(({ el }) => el.parentNode == null), 'якорь удаляется после клика');
 });

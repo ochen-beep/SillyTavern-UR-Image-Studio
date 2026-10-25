@@ -4,7 +4,8 @@
  * Layout: post-navigator, excerpt/stale badge, prompt editor, actions Stage 1 / Stage 2,
  * compact aspect/size/quality controls, references panel, Advanced (template/automation/queue).
  */
-import { state, getCtx, escapeHtml, error, warn, showConfirmModal, VALID_ASPECT_RATIOS, VALID_IMAGE_SIZES, abortGeneration } from '../core.js';
+import { state, getCtx, escapeHtml, error, warn, showConfirmModal, VALID_ASPECT_RATIOS, VALID_IMAGE_SIZES, abortGeneration, saveSettings } from '../core.js';
+import { bindDetailsToggle } from './accordion-state.js';
 import { recordDiagnosticEvent, hashDiagnosticId } from '../diagnostic-events.js';
 import { POST_FILTER, navigatePosts, getPostInfo, setFilter, getFilter, setCurrentMsgId, getLastPostIndex } from '../post-navigator.js';
 import { runStage1ForDraft, enqueueGeneration, createQueueItem, findQueuedDuplicate, buildCandidates } from '../pipeline.js';
@@ -180,19 +181,20 @@ export function renderGenerateMarkup(vm) {
 
     // Automation and message-flow selectors need chat messages to ever fire —
     // they are hidden in the studio (the studio envelope keeps their defaults).
+    // Row order per UI revision #14: «Флоу» first, «Автоматизация» second.
     const chatOnlyParams = isStudio ? '' : `
-                <span class="uris-param"><span class="uris-param-label">Автоматизация</span>
-                    <select class="text_pole" id="urisAutomationMode">
-                        <option value="manual" ${vm.automationMode === 'manual' ? 'selected' : ''}>Вручную</option>
-                        <option value="build-prompt" ${vm.automationMode === 'build-prompt' ? 'selected' : ''}>Строить промпт</option>
-                        <option value="full-pipeline" ${vm.automationMode === 'full-pipeline' ? 'selected' : ''}>Полный pipeline</option>
-                    </select></span>
-                <span class="uris-param"><span class="uris-param-label">Флоу генерации</span>
+                <span class="uris-param"><span class="uris-param-label">Флоу</span>
                     <select class="text_pole" id="urisGenerationFlow">
                         <option value="${POST_FILTER.AI_ONLY}" ${getFilter() === POST_FILTER.AI_ONLY ? 'selected' : ''}>Только AI</option>
                         <option value="${POST_FILTER.USER_ONLY}" ${getFilter() === POST_FILTER.USER_ONLY ? 'selected' : ''}>Только пользователь</option>
                         <option value="${POST_FILTER.ALL}" ${getFilter() === POST_FILTER.ALL ? 'selected' : ''}>Все сообщения</option>
                         <option value="${POST_FILTER.MANUAL}" ${getFilter() === POST_FILTER.MANUAL ? 'selected' : ''}>Ручной выбор</option>
+                    </select></span>
+                <span class="uris-param"><span class="uris-param-label">Автоматизация</span>
+                    <select class="text_pole" id="urisAutomationMode">
+                        <option value="manual" ${vm.automationMode === 'manual' ? 'selected' : ''}>Вручную</option>
+                        <option value="build-prompt" ${vm.automationMode === 'build-prompt' ? 'selected' : ''}>Строить промпт</option>
+                        <option value="full-pipeline" ${vm.automationMode === 'full-pipeline' ? 'selected' : ''}>Полный pipeline</option>
                     </select></span>`;
 
     return `
@@ -218,17 +220,24 @@ export function renderGenerateMarkup(vm) {
             <div class="uris-gen-params">
                 <span class="uris-param"><span class="uris-param-label">Стороны</span>
                     <select class="text_pole" id="urisAspect">${VALID_ASPECT_RATIOS.map(r => `<option ${r === draft.aspectRatio ? 'selected' : ''}>${r}</option>`).join('')}</select></span>
-                <span class="uris-param"><span class="uris-param-label">Размер</span>
-                    <select class="text_pole" id="urisImgSize">${VALID_IMAGE_SIZES.map(s => `<option ${s === draft.imageSize ? 'selected' : ''}>${s}</option>`).join('')}</select></span>
-                <span class="uris-param"><span class="uris-param-label">Quality</span>
-                    <select class="text_pole" id="urisQuality">${vm.qualityOptions || qualityOptionsFor('', draft.quality)}</select></span>
                 <span class="uris-param"><span class="uris-param-label">Модель</span>${renderModelSelectMarkup(vm.modelChoices)}</span>
             </div>
             <div class="uris-gen-params">
                 <span class="uris-param"><span class="uris-param-label">Шаблон</span>
                     <select class="text_pole" id="urisTemplate">${templateOptions}</select></span>
-                ${chatOnlyParams}
             </div>
+            <details class="uris-gen-acc" data-accordion-id="generate:params" id="urisGenParamsAcc">
+                <summary>Дополнительно</summary>
+                <div class="uris-gen-params">
+                    <span class="uris-param"><span class="uris-param-label">Размер</span>
+                        <select class="text_pole" id="urisImgSize">${VALID_IMAGE_SIZES.map(s => `<option ${s === draft.imageSize ? 'selected' : ''}>${s}</option>`).join('')}</select></span>
+                    <span class="uris-param"><span class="uris-param-label">Quality</span>
+                        <select class="text_pole" id="urisQuality">${vm.qualityOptions || qualityOptionsFor('', draft.quality)}</select></span>
+                </div>
+                <div class="uris-gen-params">
+                    ${chatOnlyParams}
+                </div>
+            </details>
 
             <div class="uris-refs-panel" id="urisRefsPanel">
                 <div class="uris-refs-panel-head">
@@ -381,6 +390,36 @@ export function renderModelSelectMarkup(choices) {
 }
 
 /**
+ * Write one generation default with the «для всех чатов» semantics: when the
+ * global mode is on AND the chat has no own value for the key, the change
+ * lands in settings.globalGenerationDefaults (visible to every chat); an
+ * existing chat value is overridden as usual (patchChatConfig). Reading side
+ * (chat ?? global) already lives in chat-binding.js / pipeline-config.js.
+ */
+/**
+ * Exported for tests: the «для всех чатов» write semantics of one default.
+ */
+export async function saveGenerationDefaultByKey(key, value) {
+    let toGlobal = false;
+    if (state.settings?.useParametersForAllChats === true) {
+        try {
+            const binding = await loadChatConfig();
+            toGlobal = binding?.config?.generationDefaults?.[key] == null;
+        } catch { toGlobal = false; }
+    }
+    if (toGlobal) {
+        state.settings.globalGenerationDefaults = {
+            ...(state.settings.globalGenerationDefaults || {}),
+            [key]: value || null,
+        };
+        saveSettings();
+    } else {
+        await patchChatConfig({ generationDefaults: { [key]: value || null } });
+    }
+    state.generationDefaults = { ...(state.generationDefaults || {}), [key]: value || null };
+}
+
+/**
  * Bind the model dropdown: write-through to the connection, with the visible
  * prompt/params flushed into the draft first so the re-render loses nothing.
  */
@@ -392,7 +431,7 @@ export function bindModelSelect(root, choices, options = {}) {
         if (!modelId) return;
         try {
             const ctx = getCtx();
-            await patchChatConfig({ generationDefaults: { modelId } });
+            await saveGenerationDefaultByKey('modelId', modelId);
             state.generationDefaults = { ...(state.generationDefaults || {}), modelId };
             const scope = activeScope(root);
             if (scope.studio || (scope.msgId != null && ctx.chat?.[scope.msgId])) {
@@ -494,6 +533,10 @@ export async function render(root) {
     if (!isCurrent()) return;
     root.innerHTML = renderGenerateMarkup({ ...vm, modelChoices, qualityOptions: qualityOptionsFor(modelChoices?.current || '', effectiveDraft.quality), isStudio: studio });
     bindGenerate(root);
+    // №14 UI-ревизии: строка «Дополнительно» (Размер/Quality/Флоу/Автоматизация)
+    // под гармошкой; положение запоминается в settings.accordionState и
+    // переживает перезагрузку страницы (accordion-state.js).
+    bindDetailsToggle(root.querySelector('#urisGenParamsAcc'), 'generate:params');
     syncCancelState(root);
     bindModelSelect(root, modelChoices, { onSwitched: () => render(root) });
     if (!studio) updatePostInfo(root);
@@ -776,10 +819,10 @@ export function bindGenerate(root) {
     });
 
     // Format/quality selectors are chat-scoped defaults. Persist on change so a
-    // manual choice survives re-render, navigation, and chat reloads.
+    // manual choice survives re-render, navigation, and chat reloads. With the
+    // global mode on, a first-time choice writes the global default instead.
     const saveGenerationDefault = async (key, value) => {
-        await patchChatConfig({ generationDefaults: { [key]: value || null } });
-        state.generationDefaults = { ...(state.generationDefaults || {}), [key]: value || null };
+        await saveGenerationDefaultByKey(key, value);
         const scope = activeScope(root);
         const ctx = getCtx();
         if (scope.studio || (scope.msgId != null && ctx.chat?.[scope.msgId])) {

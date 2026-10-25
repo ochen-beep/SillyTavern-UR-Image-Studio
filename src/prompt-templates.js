@@ -80,15 +80,43 @@ export async function listTemplates() {
         const result = await (await store()).list();
         cachedTemplates = Array.isArray(result) ? result : [];
     }
-    return cachedTemplates.filter(template => {
-        if (isSupportedTemplate(template)) return true;
-        log('Ignoring unsupported template record', template?.id || '(missing id)');
-        return false;
-    });
+    // Ручной порядок (drag & drop): поле order; у записей без него — индекс
+    // вставки (стабильно для legacy и новых шаблонов).
+    return cachedTemplates
+        .map((template, index) => [template, index])
+        .filter(([template]) => {
+            if (isSupportedTemplate(template)) return true;
+            log('Ignoring unsupported template record', template?.id || '(missing id)');
+            return false;
+        })
+        .sort((a, b) => (Number.isFinite(a[0].order) ? a[0].order : a[1]) - (Number.isFinite(b[0].order) ? b[0].order : b[1]))
+        .map(([template]) => template);
 }
 
 export async function getTemplate(id) {
     return (await listTemplates()).find(template => template.id === id) || null;
+}
+
+/**
+ * Ручной порядок после drag & drop: пишет order=i для каждого id в новом
+ * порядке. Записи без изменений не трогает (лишних серверных write нет).
+ * @param {string[]} orderedIds полный список id в новом порядке
+ * @returns {Promise<boolean>} были ли записи обновлены
+ */
+export async function reorderTemplates(orderedIds) {
+    if (cachedTemplates === null) await listTemplates();
+    let changed = false;
+    for (let i = 0; i < orderedIds.length; i++) {
+        const index = cachedTemplates.findIndex(template => template.id === orderedIds[i]);
+        if (index === -1 || cachedTemplates[index].order === i) continue;
+        const next = { ...cachedTemplates[index], order: i, updatedAt: Date.now() };
+        const persisted = await (await store()).update(next.id, next);
+        if (persisted) {
+            cachedTemplates[index] = persisted;
+            changed = true;
+        }
+    }
+    return changed;
 }
 
 export async function createInstructionTemplate(data = {}) {

@@ -6,7 +6,8 @@
  * runFullPipelineForDraft orchestrates Stage 1 + Stage 2; it lives here
  * (entry point is Stage 1) and imports Stage 2 to avoid circular dependencies.
  */
-import { state, fnv1aHex } from './core.js';
+import { state, fnv1aHex, getCtx } from './core.js';
+import { buildStage1ContextParts } from './stage1-context.js';
 import { recordDiagnosticEvent, hashDiagnosticId } from './diagnostic-events.js';
 import { generatePromptText } from './text-api.js';
 import { getTemplate } from './prompt-templates.js';
@@ -131,6 +132,11 @@ export async function runStage1ForDraft(input, onStatus = () => {}, signal, opts
         const template = await resolveTemplateForDraft(effectiveTemplateId);
         throwIfAborted();
 
+        // Опциональный контекст Stage 1 (персона/карточка/лорбук/история):
+        // тумблеры выключены по умолчанию — с пустым списком поведение прежнее.
+        throwIfAborted();
+        const contextParts = await buildStage1ContextParts(getCtx(), { msgId });
+
         let runToken = null;
         let runPromptRevision = null;
         try {
@@ -139,7 +145,7 @@ export async function runStage1ForDraft(input, onStatus = () => {}, signal, opts
                 template,
                 messageText,
                 snapshot,
-                generateText: (system, user, sig, status) => generatePromptText(system, user, status, sig, stage1RequestId),
+                generateText: (system, user, sig, status) => generatePromptText(system, user, status, sig, stage1RequestId, contextParts),
                 signal: useSignal,
                 onStatus,
             });

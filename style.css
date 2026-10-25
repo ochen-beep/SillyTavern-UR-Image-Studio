@@ -341,24 +341,28 @@
     border: 1px solid var(--uris-border-soft); margin-bottom: 8px;
     display: flex; flex-direction: column; gap: 6px;
 }
-/* Шапка карты (accordion): вся полоса - тумблер сворачивания. Имя - подпись
-   по умолчанию (pointer-events:none, клик проваливается в шапку); кнопка-карандаш
-   переводит его в режим ввода через :focus. Кнопки в шапке (радио, карандаш)
-   не сворачивают. */
+/* Шапка карты (accordion): вся полоса - тумблер сворачивания. Имя — подпись
+   (span в шаблонах; переименование — через модалку карандаша, инлайн-ввод
+   удалён: он растягивался на всю строку и коммитился случайным кликом).
+   В коннектах .uris-server-name остался инпутом: pointer-events:none по
+   умолчанию, карандаш переводит в режим ввода через :focus. Кнопки в шапке
+   (радио, карандаш) не сворачивают. */
 .uris-preset-card-header {
     display: flex; align-items: center; gap: 8px; cursor: pointer;
 }
 .uris-preset-card-header:hover { background: var(--uris-tint-hover); }
-.uris-preset-card-header .uris-name,
+.uris-preset-card-header .uris-name {
+    flex: 1; min-width: 0;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
 .uris-preset-card-header .uris-server-name {
     flex: 1; min-width: 0;
     pointer-events: none; background: transparent; border-color: transparent; cursor: default;
 }
-.uris-preset-card-header .uris-name:focus,
 .uris-preset-card-header .uris-server-name:focus {
     pointer-events: auto; background: var(--uris-surface-btn); border-color: var(--uris-border);
 }
-.uris-preset-card-header .uris-name::placeholder { color: var(--uris-text-dim); }
+.uris-preset-card-header .uris-server-name::placeholder { color: var(--uris-text-dim); }
 .uris-name-edit {
     flex: 0 0 auto; display: inline-flex; align-items: center; justify-content: center;
     width: 24px; height: 24px; padding: 0; border: 0; border-radius: var(--uris-radius);
@@ -366,6 +370,11 @@
     transition: color .12s, background .12s;
 }
 .uris-name-edit:hover { color: var(--uris-text-strong); background: var(--uris-surface-btn); }
+
+/* Drag & drop порядка карточек (шаблоны, коннекты): ghost и grabbing-курсор
+   переиспользуют блок .uris-drag-ghost у чипов референсов (z-слой --uris-z-ghost);
+   тут только приглушение исходной карточки. */
+.uris-drag-source { opacity: .4; }
 .uris-preset-card.uris-collapsed .uris-preset-card-body { display: none; }
 .uris-preset-card-body { display: flex; flex-direction: column; gap: 6px; }
 .uris-add-btn { width: 100%; }
@@ -570,6 +579,18 @@
 /* Параметры: компактный inline-ряд без тяжёлых label'ов. */
 .uris-gen-params { display: flex; flex-wrap: wrap; gap: var(--uris-gap); align-items: center; }
 .uris-gen-params + .uris-gen-params { margin-top: 4px; }
+/* №14: «Дополнительно» — гармошка с Размер/Quality/Флоу/Автоматизация. */
+.uris-gen-acc { margin-top: 2px; }
+.uris-gen-acc > summary {
+    cursor: pointer; user-select: none; list-style: none;
+    color: var(--uris-text-dim); font-size: var(--uris-font-sm);
+    padding: 3px 0;
+}
+.uris-gen-acc > summary::-webkit-details-marker { display: none; }
+.uris-gen-acc > summary::before { content: '▸ '; }
+.uris-gen-acc[open] > summary::before { content: '▾ '; }
+.uris-gen-acc[open] > summary { color: var(--uris-text-strong); }
+.uris-gen-acc .uris-gen-params { margin-top: 4px; }
 .uris-param { display: inline-flex; align-items: center; gap: 4px; }
 .uris-param-label { font-size: var(--uris-font-xs); color: var(--uris-text-mut); }
 .uris-gen-params select { min-width: 70px; padding: 3px 6px; font-size: var(--uris-font-sm); }
@@ -701,7 +722,7 @@
 .uris-card-actions { display: flex; justify-content: space-around; padding: 4px; background: rgba(0,0,0,.3); }
 .uris-card-btn { background: none; border: none; color: var(--uris-text-mut); cursor: pointer; padding: 6px; font-size: var(--uris-font); }
 .uris-card-btn:hover { color: var(--uris-text-strong); }
-.uris-gallery-empty { text-align: center; color: var(--uris-text-dim); padding: 40px 0; }
+.uris-gallery-empty { grid-column: 1 / -1; text-align: center; color: var(--uris-text-dim); padding: 40px 0; }
 /* Сентинел чанковой догрузки: нулевую высоту IntersectionObserver ловит плохо. */
 .uris-gallery-sentinel { height: 1px; }
 
@@ -1391,6 +1412,18 @@
    метки ломает выравнивание по центру строки. */
 .uris-field-head .uris-ed-label { margin-top: 0; }
 .uris-hint { font-size: var(--uris-font-xs); color: var(--uris-text-dim); }
+
+/* Пометка экспериментальной функции (инлайн-генерация). */
+.uris-badge-unstable {
+    display: inline-block; vertical-align: 1px;
+    padding: 0 5px; margin-left: 4px;
+    border-radius: 8px;
+    background: rgba(230, 145, 30, .18);
+    border: 1px solid rgba(230, 145, 30, .55);
+    color: #e6911e;
+    font-size: var(--uris-font-xs); font-weight: 600; line-height: 1.5;
+    text-transform: lowercase;
+}
 .uris-ed-autosave {
     font-size: var(--uris-font-xs); color: var(--uris-text-dim);
     text-align: right; min-height: 1em; padding-top: 2px;

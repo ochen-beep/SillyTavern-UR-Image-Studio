@@ -145,7 +145,8 @@ async function init() {
     // Experimental bridge lab: hidden unless enabled on the Settings tab.
     registerTab({ id: 'bridge',      label: 'Мост',        render: renderBridge, visible: () => state.settings?.bridgeTab === true });
     // Inline media tab: hidden unless the inline master toggle is on (Settings / Media).
-    registerTab({ id: 'media',       label: 'Медиа',       render: renderMedia, visible: () => state.settings?.inlineEnabled === true });
+    // Experimental surface — marked with a warning sign in the tab bar.
+    registerTab({ id: 'media',       label: 'Медиа ⚠',     render: renderMedia, visible: () => state.settings?.inlineEnabled === true });
     registerTab({ id: 'settings',    label: 'Настройки',   render: renderSettings });
 
     // ST settings panel (minimal)

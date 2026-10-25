@@ -18,6 +18,8 @@ export function makeFakeDocument() {
             },
             dataset: {},
             attributes: {},
+            // Инлайн-стили: плоский реестр свойств (ghost.style.width = '…').
+            style: {},
             children: [],
             childNodes: [],
             parentNode: null,
@@ -153,6 +155,25 @@ export function makeFakeDocument() {
                 return child;
             },
             remove() { if (this.parentNode) this.parentNode.removeChild(this); },
+            // Поверхностное/глубокое клонирование (drag-ghost в card-drag.js):
+            // копия tagName/id/классов/dataset + при deep — поддерево.
+            cloneNode(deep) {
+                const copy = createNode(this.tagName);
+                copy.id = this.id;
+                copy.className = this.className;
+                for (const cls of this.classList._set) copy.classList.add(cls);
+                copy.dataset = { ...this.dataset };
+                copy._value = this._value;
+                copy.checked = this.checked;
+                copy.hidden = this.hidden;
+                copy.disabled = this.disabled;
+                if (deep) {
+                    for (const child of this.children) {
+                        copy.appendChild(isElement(child) ? child.cloneNode(true) : { ...child, parentNode: copy });
+                    }
+                }
+                return copy;
+            },
             // Поддерево (winEl.contains(target) в Esc-гарде окна): узел сам,
             // потомок или чужой — false.
             contains(node) {

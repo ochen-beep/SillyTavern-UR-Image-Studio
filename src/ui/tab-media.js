@@ -2,22 +2,18 @@
 /**
  * Вкладка «Медиа»: инлайн-генерация в текущем чате. Видима только при
  * settings.inlineEnabled (мастер-тумблер — здесь и на вкладке «Настройки»).
- * Четыре блока: тумблер чата + слова-триггеры юзера, реестр триггер-профилей
- * (общий с мостом: bridge generate({trigger}) резолвится сюда), тестовый стенд
- * (очередь через автолейн с msgId=-1) и лента готовых картинок чата
- * (chatMetadata.uris_inline, только ready-результаты).
+ * Два блока: тумблер чата + слова-триггеры юзера, реестр триггер-профилей
+ * (общий с мостом: bridge generate({trigger}) резолвится сюда).
+ * Готовые инлайн-картинки уходят в общую галерею (runner.js → galleryEntry),
+ * отдельная лента чата и тестовый стенд удалены как дубли функционала.
  */
-import { state, getCtx, saveSettings, escapeHtml, error, DISPLAY_NAME, VALID_ASPECT_RATIOS } from '../core.js';
+import { state, saveSettings, escapeHtml, UNSTABLE_BADGE, VALID_ASPECT_RATIOS } from '../core.js';
 import { getConfig, setConfig } from '../inline/store.js';
 import { sanitizeTriggerList, DEFAULT_TRIGGERS } from '../inline/triggers.js';
 import { queueInlineJob } from '../inline/runner.js';
 import { bindScanner, unbindScanner } from '../inline/scanner.js';
 import { initRender, shutdownRender } from '../inline/render.js';
-import { showSingleImage } from './lightbox.js';
 import { renderTabs } from './tabs.js';
-
-/** Лимит ленты: последние готовые картинки чата. */
-const FEED_LIMIT = 20;
 
 // Счётчик пользовательских профилей: id custom-<N> не должен повторяться,
 // иначе sanitizeTriggerList (первый wins) молча выбросит копию.
@@ -55,43 +51,25 @@ export function render(root) {
     const triggers = currentTriggers();
     root.innerHTML = `
         <div class="uris-settings">
-            <small class="uris-hint">Инлайн: URIS распознаёт [[тип: описание]] в ответах персонажа
+            <small class="uris-hint">Инлайн ${UNSTABLE_BADGE}: URIS распознаёт [[тип: описание]] в ответах персонажа
             и кнопку 📷 у сообщений. Профили триггеров общие с мостом (generate({trigger})).</small>
             <section class="uris-settings-section">
-                <h3>Инлайн в этом чате</h3>
+                <h3>Инлайн в этом чате ${UNSTABLE_BADGE}</h3>
                 <label class="checkbox_label"><input type="checkbox" id="urisMediaEnabled" ${state.settings.inlineEnabled ? 'checked' : ''}><span>Включить инлайн-генерацию</span></label>
                 <label class="checkbox_label"><input type="checkbox" id="urisMediaListen" ${cfg.listenUser ? 'checked' : ''}><span>Реагировать на мои сообщения (слова-триггеры)</span></label>
                 <small class="uris-hint">Слова-триггеры: ${triggers.flatMap(t => t.aliases).slice(0, 8).map(escapeHtml).join(', ')}…</small>
             </section>
             <section class="uris-settings-section">
-                <h3>Триггеры</h3>
+                <h3>Триггеры ${UNSTABLE_BADGE}</h3>
                 <div id="urisMediaTriggers"></div>
                 <div class="uris-settings-actions">
                     <button type="button" class="uris-btn uris-btn-ghost" id="urisMediaTriggerAdd"><i class="fa-solid fa-plus"></i> Свой тип</button>
                 </div>
                 <small class="uris-hint">Профиль: алиасы — слова в тексте и типы [[маркеров]]; префикс/суффикс дописываются к описанию ({{char}}/{{user}} разворачиваются).</small>
             </section>
-            <section class="uris-settings-section">
-                <h3>Тестовый стенд</h3>
-                <div class="uris-field">
-                    <label for="urisMediaBenchType">Триггер</label>
-                    <select class="text_pole" id="urisMediaBenchType">${triggers.map(t => `<option value="${escapeHtml(t.id)}">${escapeHtml(t.name)}</option>`).join('')}</select>
-                    <label for="urisMediaBenchDesc">Описание</label>
-                    <textarea class="text_pole" id="urisMediaBenchDesc" rows="2">на пляже на закате</textarea>
-                </div>
-                <div class="uris-settings-actions">
-                    <button type="button" class="uris-btn uris-btn-outline" id="urisMediaBenchRun"><i class="fa-solid fa-image"></i> Сгенерировать</button>
-                </div>
-                <div id="urisMediaBenchOut"><small class="uris-hint">Ровно та оболочка, что появится в чате.</small></div>
-            </section>
-            <section class="uris-settings-section">
-                <h3>Лента чата</h3>
-                <div id="urisMediaFeed"></div>
-            </section>
         </div>`;
     bindMedia(root);
     renderTriggersBlock(root);
-    renderFeed(root);
 }
 
 function bindMedia(root) {
@@ -113,7 +91,6 @@ function bindMedia(root) {
         saveSettings();
         renderTriggersBlock(root);
     });
-    root.querySelector('#urisMediaBenchRun')?.addEventListener('click', () => { runBench(root); });
 }
 
 /** Уникальный id пользовательского профиля в пределах сессии. */
@@ -197,63 +174,4 @@ function commitTriggers(box) {
     }
     state.settings.inlineTriggers = sanitizeTriggerList(raw);
     saveSettings();
-}
-
-// ── Тестовый стенд: платная генерация вне чата (msgId=-1) ──
-
-async function runBench(root) {
-    const out = root?.querySelector?.('#urisMediaBenchOut');
-    const type = String(root?.querySelector?.('#urisMediaBenchType')?.value || 'img');
-    const descEl = root?.querySelector?.('#urisMediaBenchDesc');
-    const desc = (String(descEl?.value ?? '') || String(descEl?.textContent || '')).trim();
-    if (!desc) {
-        toastr?.error('Введите описание для тестовой генерации.', DISPLAY_NAME);
-        return;
-    }
-    if (out) out.innerHTML = '<small class="uris-hint">Генерация…</small>';
-    try {
-        const res = await queueInlineJob({ msgId: -1, idx: 0, type, desc });
-        if (out) {
-            out.innerHTML = `<img class="uris-media-img" src="/${escapeHtml(res?.imagePath || '')}" alt="">`
-                + '<small class="uris-hint">Готово — ровно та оболочка, что появится в чате.</small>';
-        }
-    } catch (e) {
-        if (out) out.innerHTML = `<small class="uris-hint">Ошибка: ${escapeHtml(String(e?.message || e))}</small>`;
-        toastr?.error('Тестовая генерация не удалась: ' + (e?.message || e), DISPLAY_NAME);
-        error('media bench:', e);
-    }
-}
-
-// ── Лента чата: готовые инлайн-картинки из chatMetadata ──
-
-function collectFeedItems() {
-    let msgs = null;
-    try { msgs = getCtx()?.chatMetadata?.uris_inline?.msgs || null; } catch { return []; }
-    if (!msgs || typeof msgs !== 'object') return [];
-    const items = [];
-    for (const [msgId, slot] of Object.entries(msgs)) {
-        const list = Array.isArray(slot?.items) ? slot.items : [];
-        for (const item of list) {
-            if (item && item.status === 'ready' && item.imagePath) items.push({ ...item, msgId });
-        }
-    }
-    items.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
-    return items.slice(0, FEED_LIMIT);
-}
-
-function renderFeed(root) {
-    const box = root?.querySelector?.('#urisMediaFeed');
-    if (!box) return;
-    const items = collectFeedItems();
-    if (!items.length) {
-        box.innerHTML = '<small class="uris-hint">Пока пусто: готовые инлайн-картинки этого чата появятся здесь.</small>';
-        return;
-    }
-    box.innerHTML = `<div class="uris-media-feed">${items.map((it, i) => `<img class="uris-media-feed-item" src="/${escapeHtml(it.imagePath)}" data-feed-idx="${i}" alt="" title="${escapeHtml(`${it.type || 'img'} · ${new Date(it.createdAt || Date.now()).toLocaleString()}`)}">`).join('')}</div>`;
-    for (const img of Array.from(box.querySelectorAll('img'))) {
-        img.addEventListener('click', () => {
-            const it = items[Number(img.getAttribute('data-feed-idx')) || 0];
-            if (it) showSingleImage({ src: `/${it.imagePath}` });
-        });
-    }
 }

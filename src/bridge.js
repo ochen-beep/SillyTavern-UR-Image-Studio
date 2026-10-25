@@ -26,10 +26,12 @@
 import {
     state,
     abortGeneration,
+    getCtx,
     CANCELLATION_REASONS,
     VALID_ASPECT_RATIOS,
     VALID_IMAGE_SIZES,
 } from './core.js';
+import { buildStage1ContextParts } from './stage1-context.js';
 import { resolveChatConfigSnapshot, buildCandidates } from './pipeline-config.js';
 import { resolveConnection, listImageConnections } from './connections.js';
 import { resolveDispatchPlan } from './dispatch-plan.js';
@@ -820,7 +822,12 @@ async function buildPrompt(request, opts = {}) {
             template,
             messageText,
             snapshot,
-            generateText: (system, user, sig, status) => generatePromptText(system, user, status, sig, requestId),
+            generateText: async (system, user, sig, status) => generatePromptText(
+                system, user, status, sig, requestId,
+                // Мост строит промпт над произвольным текстом: чат-история не
+                // привязана к якорю (msgId=null — хвост чата).
+                await buildStage1ContextParts(getCtx(), { msgId: null }),
+            ),
             signal: controller.signal,
             onStatus,
         });

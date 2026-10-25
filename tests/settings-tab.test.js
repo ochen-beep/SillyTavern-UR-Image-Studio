@@ -221,10 +221,10 @@ test('uiScale slider stays enabled when CSS zoom is supported', () => {
         render(root);
         assert.equal(root.querySelector('#urisUiScale').disabled, false);
         assert.equal(root.querySelector('#urisUiScaleReset').disabled, false);
-        // Старая оговорка «мобильный полноэкранный режим остаётся 100%» удалена:
-        // подсказка теперь сообщает, что fullscreen масштабируется.
-        assert.match(root.textContent, /Работает и в мобильном полноэкранном режиме/);
-        assert.doesNotMatch(root.textContent, /остаются 100%/);
+        // Подсказки под слайдерами масштаба/шрифта удалены (UI-чистка):
+        // слайдеры говорят сами за себя.
+        assert.doesNotMatch(root.textContent, /Масштаб содержимого окна/);
+        assert.doesNotMatch(root.textContent, /произведение двух значений/);
     } finally {
         if (hadCss) globalThis.CSS = originalCss;
         else delete globalThis.CSS;

@@ -15,6 +15,9 @@ import { sanitizeTriggerList, DEFAULT_TRIGGERS } from './inline/triggers.js';
 export const MODULE_NAME = 'ur_image_studio';
 export const DISPLAY_NAME = 'UR Image Studio';
 
+/** Пометка экспериментальной функции: может измениться или быть удалённой. */
+export const UNSTABLE_BADGE = '<span class="uris-badge-unstable" title="Экспериментальная функция: поведение может измениться">unstable</span>';
+
 // localforage keys.
 // ЛЕГАСИ: LF_IMAGE_PARAMS / LF_TEXT_PARAMS / LF_GALLERY_PREFIX / LF_HISTORY_PREFIX
 // больше никем не читаются и не пишутся — коллекции переехали в серверные файлы
@@ -249,6 +252,13 @@ export const defaultSettings = Object.freeze({
         imageSize: null,
         quality: null,
     }),
+    // Контекст Stage 1 (по образцу DS-Comments): персона/карточка {{char}}/
+    // лорбук/история чата. Всё выключено по умолчанию — промпт строится
+    // только из сцены, пока пользователь явно включит блоки (см. stage1-context.js).
+    stage1IncludePersona: false,
+    stage1IncludeCharacter: false,
+    stage1IncludeLore: false,
+    stage1HistoryDepth: 0,
     // UI accordion state: sectionId -> true (open) | false (collapsed).
     // Default for a missing key = open. See src/ui/accordion-state.js.
     accordionState: {},
@@ -492,6 +502,12 @@ export function loadSettings() {
     if (typeof s.accordionState !== 'object' || s.accordionState === null || Array.isArray(s.accordionState)) {
         s.accordionState = {};
     }
+    // Контекст Stage 1 (персона/карточка/лорбук/история): строгие booleans,
+    // depth — 0/5/10/20, всё остальное → 0 (выключено).
+    s.stage1IncludePersona = s.stage1IncludePersona === true;
+    s.stage1IncludeCharacter = s.stage1IncludeCharacter === true;
+    s.stage1IncludeLore = s.stage1IncludeLore === true;
+    s.stage1HistoryDepth = [5, 10, 20].includes(s.stage1HistoryDepth) ? s.stage1HistoryDepth : 0;
     // Инлайн: флаги — строгие booleans; триггер-профили всегда нормализованы.
     // null/мусор (дефолт) разворачивается в sanitizeTriggerList(DEFAULT_TRIGGERS),
     // а не в [img] — иначе нормализация стёрла бы дефолтные selfie/scene.

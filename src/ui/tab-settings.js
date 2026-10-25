@@ -4,7 +4,7 @@
  * settings panel) and data/diagnostics actions shared with that panel.
  */
 import {
-    state, saveSettings, applyUiScale, applyFontScale, showConfirmModal, error, DISPLAY_NAME, escapeHtml,
+    state, saveSettings, applyUiScale, applyFontScale, showConfirmModal, error, DISPLAY_NAME, escapeHtml, UNSTABLE_BADGE,
     UI_SCALE_MIN, UI_SCALE_MAX, UI_SCALE_STEP, UI_SCALE_DEFAULT, normalizeUiScale,
     FONT_SCALE_MIN, FONT_SCALE_MAX, FONT_SCALE_STEP, FONT_SCALE_DEFAULT, normalizeFontScale,
     NOTIFY_SOUNDS, normalizeNotifyVolume, debounce,
@@ -59,7 +59,7 @@ export function render(root) {
                         <button type="button" class="uris-btn uris-btn-ghost" id="urisUiScaleReset" title="Вернуть ${percent(UI_SCALE_DEFAULT)}%"${zoomOk ? '' : ' disabled'}>Сброс</button>
                     </div>
                     ${zoomOk
-                        ? '<small class="uris-hint">Масштаб содержимого окна: вкладок и рабочей области целиком (текст, отступы, контролы). Работает и в мобильном полноэкранном режиме; шапка окна — 100%.</small>'
+                        ? ''
                         : '<small class="uris-hint">Браузер не поддерживает масштабирование интерфейса (CSS zoom) — используйте «Размер шрифта»: он действует на любых устройствах.</small>'}
                 </div>
                 <div class="uris-field">
@@ -69,7 +69,6 @@ export function render(root) {
                         <span class="uris-scale-value" id="urisFontScaleValue">${percent(fontScale)}%</span>
                         <button type="button" class="uris-btn uris-btn-ghost" id="urisFontScaleReset" title="Вернуть ${percent(FONT_SCALE_DEFAULT)}%">Сброс</button>
                     </div>
-                    <small class="uris-hint">Только текст, поверх масштаба интерфейса: итоговый размер текста — произведение двух значений. Действует и на шапку окна.</small>
                 </div>
             </section>
             <section class="uris-settings-section">
@@ -86,13 +85,29 @@ export function render(root) {
                 <label class="checkbox_label"><input type="checkbox" id="uris_debug_mode" ${state.settings.debugMode === true ? 'checked' : ''}><span>Debug-режим</span></label>
                 <small class="uris-hint">Подробный технический trace для диагностики. Секреты и бинарные изображения не записываются.</small>
                 <label class="checkbox_label"><input type="checkbox" id="uris_use_all_params" ${state.settings.useParametersForAllChats === true ? 'checked' : ''}><span>Использовать параметры генерации для всех чатов</span></label>
-                <small class="uris-hint">Глобальные значения используются только если в текущем чате параметр не задан.</small>
-                <label class="checkbox_label"><input type="checkbox" id="uris_inline_enabled" ${state.settings.inlineEnabled ? 'checked' : ''}><span>Инлайн-генерация в чате (вкладка «Медиа»)</span></label>
-                <small class="uris-hint">[[тип: описание]] в ответах персонажа и 📷-кнопка превращаются в картинки. Профили триггеров и тестовый стенд — вкладка «Медиа».</small>
-                <label class="checkbox_label"><input type="checkbox" id="uris_inline_chips" ${state.settings.inlineChips === true ? 'checked' : ''}><span>Компакт-режим инлайна (чипы вместо картинок)</span></label>
+                <small class="uris-hint">Глобальные значения (стороны/размер/quality/модель) действуют, только если в текущем чате свой не задан. Изменение параметра во вкладке «Генерация» пишет глобальный дефолт, пока у чата нет собственного значения; как только задали — значение становится чат-локальным.</small>
+                <label class="checkbox_label"><input type="checkbox" id="uris_inline_enabled" ${state.settings.inlineEnabled ? 'checked' : ''}><span>Инлайн-генерация в чате (вкладка «Медиа») ${UNSTABLE_BADGE}</span></label>
+                <small class="uris-hint">[[тип: описание]] в ответах персонажа и 📷-кнопка превращаются в картинки. Профили триггеров — вкладка «Медиа».</small>
+                <label class="checkbox_label"><input type="checkbox" id="uris_inline_chips" ${state.settings.inlineChips === true ? 'checked' : ''}><span>Компакт-режим инлайна (чипы вместо картинок) ${UNSTABLE_BADGE}</span></label>
                 <small class="uris-hint">На месте маркера — чип «📷 тип»; клик раскрывает картинку, ⌃ сворачивает обратно. Удобно, когда картинок в посте много.</small>
                 <label class="checkbox_label"><input type="checkbox" id="uris_auto_retry_ambiguous" ${state.settings.autoRetryAmbiguous === true ? 'checked' : ''}><span>Авто-повтор при неоднозначной доставке (очередь)</span></label>
                 <small class="uris-hint">Если прямой запрос к шлюзу ушёл «без ответа», задача один раз переотправится сама — следующая попытка пойдёт через прокси. Выключено по умолчанию: повтор возможной уже оплаченной генерации — на вашей совести.</small>
+            </section>
+            <section class="uris-settings-section">
+                <h3>Контекст Stage 1</h3>
+                <label class="checkbox_label"><input type="checkbox" id="uris_s1_persona" ${state.settings.stage1IncludePersona === true ? 'checked' : ''}><span>Карточка {{user}} (персона)</span></label>
+                <label class="checkbox_label"><input type="checkbox" id="uris_s1_character" ${state.settings.stage1IncludeCharacter === true ? 'checked' : ''}><span>Карточка {{char}} (описание и личность)</span></label>
+                <label class="checkbox_label"><input type="checkbox" id="uris_s1_lore" ${state.settings.stage1IncludeLore === true ? 'checked' : ''}><span>Лорбук чата и персонажа</span></label>
+                <div class="uris-field">
+                    <label for="uris_s1_history">История чата (сообщений до выбранного поста)</label>
+                    <select class="text_pole" id="uris_s1_history">
+                        <option value="0" ${!state.settings.stage1HistoryDepth ? 'selected' : ''}>выключено</option>
+                        <option value="5" ${state.settings.stage1HistoryDepth === 5 ? 'selected' : ''}>5</option>
+                        <option value="10" ${state.settings.stage1HistoryDepth === 10 ? 'selected' : ''}>10</option>
+                        <option value="20" ${state.settings.stage1HistoryDepth === 20 ? 'selected' : ''}>20</option>
+                    </select>
+                </div>
+                <small class="uris-hint">Дополнительный контекст текстового Шага 1: выбранные блоки уходят в LLM вместе со сценой (у профильного пути — отдельными сообщениями). Выключено по умолчанию — включайте то, что помогает строить промпты; каждый блок обрезается по бюджету символов.</small>
             </section>
             <section class="uris-settings-section">
                 <h3>Внешний мост <small class="uris-hint">(эксперимент)</small></h3>
@@ -134,7 +149,7 @@ export function render(root) {
                     <button type="button" class="uris-btn uris-btn-outline" id="urisTabGalleryRefresh" title="Пересканировать папки на сервере: подхватить внешние добавления и пометить внешние удаления"><i class="fa-solid fa-rotate"></i> Обновить галерею</button>
                     <button type="button" class="uris-btn uris-btn-danger" id="urisTabGalleryClear"><i class="fa-solid fa-trash"></i> Очистить галерею</button>
                 </div>
-                <small class="uris-hint">Диагностика содержит технические события и ошибки текущей сессии. Сетевой дамп выгружается отдельно и содержит только метаданные — без промптов и тел запросов/ответов; API-ключи и полные бинарные изображения не экспортируются. Рендер галереи сервер не сканирует — «Обновить галерею» запускает сверку с папками вручную; «Очистить галерею» удаляет генерации текущего чата (вне чата — студии).</small>
+                <small class="uris-hint">Диагностика содержит технические события и ошибки текущей сессии. Сетевой дамп выгружается отдельно и содержит только метаданные — без промптов и тел запросов/ответов; API-ключи и полные бинарные изображения не экспортируются. Рендер галереи сервер не сканирует — «Обновить галерею» запускает сверку с папками вручную; «Очистить галерею» удаляет генерации текущего чата.</small>
             </section>
         </div>`;
     bindScaleControls(root);
@@ -252,6 +267,22 @@ function bindBehaviorToggles(root) {
     });
     root.querySelector('#uris_use_all_params')?.addEventListener('change', e => {
         state.settings.useParametersForAllChats = e.target.checked === true;
+        saveSettings();
+    });
+    // Контекст Stage 1: три тумблера + глубина истории.
+    for (const [id, key] of [
+        ['#uris_s1_persona', 'stage1IncludePersona'],
+        ['#uris_s1_character', 'stage1IncludeCharacter'],
+        ['#uris_s1_lore', 'stage1IncludeLore'],
+    ]) {
+        root.querySelector(id)?.addEventListener('change', e => {
+            state.settings[key] = e.target.checked === true;
+            saveSettings();
+        });
+    }
+    root.querySelector('#uris_s1_history')?.addEventListener('change', e => {
+        const depth = Number(e.target.value);
+        state.settings.stage1HistoryDepth = [5, 10, 20].includes(depth) ? depth : 0;
         saveSettings();
     });
     root.querySelector('#uris_inline_enabled')?.addEventListener('change', e => {

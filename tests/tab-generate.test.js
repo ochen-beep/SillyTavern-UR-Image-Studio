@@ -163,6 +163,39 @@ test('renderGenerateMarkup renders rebuild and enabled Stage 2 for nonempty prom
     assert.match(markup, /a cat/);
 });
 
+test('Generate rows per UI revision #14: Стороны+Модель, Шаблон, «Дополнительно» аккордеон с остальными', () => {
+    const messageText = 'm';
+    const draft = { prompt: 'a cat', aspectRatio: '1:1', imageSize: '1K', quality: 'auto', templateId: null, messageHash: hashMessage(messageText) };
+    const markup = renderGenerateMarkup(buildGenerateViewModel({
+        draft,
+        snapshot: null,
+        automationMode: 'manual',
+        templates: [],
+        messageText,
+    }));
+    // Строка 1: Стороны + Модель в одном uris-gen-params
+    const row1 = markup.match(/<div class="uris-gen-params">[\s\S]*?<\/div>/)?.[0] || '';
+    assert.match(row1, /id="urisAspect"/);
+    assert.match(row1, /id="urisModel"/);
+    assert.doesNotMatch(row1, /id="urisImgSize"/);
+    // Строка 2: только Шаблон
+    const rows = markup.match(/<div class="uris-gen-params">[\s\S]*?<\/div>/g) || [];
+    assert.ok(rows[1], 'вторая строка есть');
+    assert.match(rows[1], /id="urisTemplate"/);
+    assert.doesNotMatch(rows[1], /id="urisAspect"|id="urisImgSize"|id="urisAutomationMode"/);
+    // Остальное — под details «Дополнительно» (аккордеон с персистентным id)
+    assert.match(markup, /<details[^>]*id="urisGenParamsAcc"[^>]*>/);
+    assert.match(markup, /<summary>Дополнительно<\/summary>/);
+    const acc = markup.match(/<details[^>]*id="urisGenParamsAcc"[\s\S]*<\/details>/)?.[0] || '';
+    assert.match(acc, /id="urisImgSize"/);
+    assert.match(acc, /id="urisQuality"/);
+    assert.match(acc, /id="urisGenerationFlow"/, 'Флоу внутри аккордеона');
+    assert.match(acc, /id="urisAutomationMode"/, 'Автоматизация внутри аккордеона');
+    // «Флоу генерации» переименован в «Флоу»
+    assert.match(markup, /Флоу</);
+    assert.doesNotMatch(markup, /Флоу генерации/);
+});
+
 test('renderGenerateMarkup renders the insert-template action inside the prompt card', () => {
     const messageText = 'message text';
     const draft = { prompt: 'a cat', aspectRatio: '9:16', imageSize: '2K', quality: 'high', templateId: null, messageHash: hashMessage(messageText) };
@@ -175,20 +208,25 @@ test('renderGenerateMarkup renders the insert-template action inside the prompt 
     assert.ok(card.indexOf('id="urisBuildPrompt"') < card.indexOf('id="urisInsertTemplate"'), 'Stage 1 sits before insert');
 });
 
-test('renderGenerateMarkup splits params into two rows (format + behavior)', () => {
+test('renderGenerateMarkup splits params into rows (format + template + «Дополнительно» аккордеон)', () => {
     const messageText = 'message text';
     const draft = { prompt: 'a cat', aspectRatio: '9:16', imageSize: '2K', quality: 'high', templateId: null, messageHash: hashMessage(messageText) };
     const markup = renderGenerateMarkup(baseVm({ draft, messageText }));
-    // Two .uris-gen-params rows: format (Стороны/Размер/Quality) + behavior (Шаблон/Автоматизация/Флоу).
-    assert.equal((markup.match(/class="uris-gen-params"/g) || []).length, 2);
+    // UI-ревизия №14: 4 строки uris-gen-params (2 открытые + 2 внутри аккордеона).
+    assert.equal((markup.match(/class="uris-gen-params"/g) || []).length, 4);
     for (const id of ['urisAspect', 'urisImgSize', 'urisQuality', 'urisTemplate', 'urisAutomationMode', 'urisGenerationFlow']) {
         assert.match(markup, new RegExp(`id="${id}"`));
     }
-    // Split point: Quality ends row 1, Шаблон opens row 2.
+    // Split point: row 1 ends after Модель, Шаблон opens row 2, Размер/Quality/Флоу/Автоматизация — внутри details.
     const first = markup.indexOf('class="uris-gen-params"');
     const second = markup.indexOf('class="uris-gen-params"', first + 1);
-    assert.ok(markup.indexOf('id="urisQuality"') < second, 'Quality sits in row 1');
-    assert.ok(second < markup.indexOf('id="urisTemplate"'), 'Шаблон sits in row 2');
+    const details = markup.indexOf('<details');
+    assert.ok(markup.indexOf('id="urisAspect"') < second, 'Стороны в строке 1');
+    assert.ok(markup.indexOf('id="urisModel"') < second, 'Модель в строке 1');
+    assert.ok(second < markup.indexOf('id="urisTemplate"'), 'Шаблон в строке 2');
+    assert.ok(markup.indexOf('id="urisTemplate"') < details, 'details идёт после Шаблона');
+    assert.ok(details < markup.indexOf('id="urisImgSize"'), 'Размер внутри аккордеона');
+    assert.ok(details < markup.indexOf('id="urisGenerationFlow"'), 'Флоу внутри аккордеона');
 });
 
 test('renderGenerateMarkup renders build and disabled Stage 2 for whitespace prompt', () => {

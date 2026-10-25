@@ -1,9 +1,11 @@
 // @ts-check
 /**
  * Experimental "Bridge" tab (visible only when settings.bridgeTab is on):
- * a lab for the external-bridge surface — templates (headless Stage 1),
- * the reference pool, the scene resolver and manual bridge calls, exactly as
- * an external extension would issue them via globalThis.URIS.
+ * a lab for the external-bridge surface — manual generate calls, the reference
+ * pool, capabilities and read-surface (triggers / gallery / recovery), exactly
+ * as an external extension would issue them via globalThis.URIS.
+ * (The headless Stage-1 lab was removed — buildPrompt stays available through
+ * the bridge API and its tests.)
  */
 import { state, escapeHtml, DISPLAY_NAME, error } from '../core.js';
 import { getBridge } from '../bridge.js';
@@ -14,13 +16,6 @@ import { reportFailure, URIS_SCOPES } from '../error-pool.js';
 const _lab = {
     caller: 'bridge-test',
     statusText: 'Статус: неизвестен.',
-    // Stage 1 lab
-    templateId: '',
-    sceneText: 'Пост в соцсети от {{char}}: собираемся на пляж на закате, лёгкое летнее платье, тёплое настроение.',
-    useScene: true,
-    builtPrompt: '',
-    matchedLine: '',
-    building: false,
     // Generation lab
     prompt: '',
     autoRefs: false,
@@ -28,7 +23,6 @@ const _lab = {
     aspect: '1:1',
     connectionId: '',
     running: false,
-    templates: null,     // cache: [{id,name,type}]
     refs: null,          // cache: [{id,name,folders,bindingMode}]
     connections: null,   // cache: [{id,label,modelId,ready}]
     ctl: null,
@@ -54,38 +48,13 @@ export function render(root) {
     }
     root.innerHTML = `
         <div class="uris-settings">
-            <small class="uris-hint">Лаборатория моста: те же вызовы, что делает стороннее расширение через globalThis.URIS — шаблоны (Stage 1), референсы и резолвер сцены. Включается тумблером «Показывать вкладку „Мост"» в Настройках.</small>
+            <small class="uris-hint">Лаборатория моста: те же вызовы, что делает стороннее расширение через globalThis.URIS — генерация, референсы и чтение состояния. Включается тумблером «Показывать вкладку „Мост"» в Настройках. Контракт API: <a href="https://github.com/ochen-beep/SillyTavern-UR-Image-Studio/blob/main/docs/guide/bridge-api.md" target="_blank" rel="noopener noreferrer">docs/guide/bridge-api.md</a>.</small>
 
             <section class="uris-settings-section">
                 <h3>Статус</h3>
                 <small class="uris-hint" id="urisLabStatus">${escapeHtml(_lab.statusText)}</small>
                 <div class="uris-settings-actions">
                     <button type="button" class="uris-btn uris-btn-ghost" id="urisLabRefresh"><i class="fa-solid fa-rotate"></i> Обновить</button>
-                </div>
-            </section>
-
-            <section class="uris-settings-section">
-                <h3>Шаблон → промпт <small class="uris-hint">(headless Stage 1, платный текстовый запрос)</small></h3>
-                <div class="uris-field">
-                    <label for="urisLabTemplate">Шаблон URIS</label>
-                    <select class="text_pole" id="urisLabTemplate">
-                        <option value="">без шаблона (базовый режим)</option>
-                        ${(_lab.templates || []).map(t => `<option value="${escapeHtml(t.id)}"${t.id === _lab.templateId ? ' selected' : ''}>${escapeHtml(t.name)} · ${escapeHtml(t.type)}</option>`).join('')}
-                    </select>
-                    <small class="uris-hint">Те же шаблоны, что во вкладке «Шаблоны». {{char}}/{{user}} и другие макросы ST разворачиваются по текущему чату.</small>
-                </div>
-                <div class="uris-field">
-                    <label for="urisLabScene">Текст сцены (не обязан быть сообщением чата)</label>
-                    <textarea class="text_pole" id="urisLabScene" rows="3">${escapeHtml(_lab.sceneText)}</textarea>
-                </div>
-                <label class="checkbox_label"><input type="checkbox" id="urisLabUseScene" ${_lab.useScene ? 'checked' : ''}><span>Резолвер сцены: сопоставить текст с референсами текущего чата</span></label>
-                <div class="uris-settings-actions">
-                    <button type="button" class="uris-btn uris-btn-outline" id="urisLabBuild"${_lab.building ? ' disabled' : ''}><i class="fa-solid fa-wand-magic-sparkles"></i> Построить промпт</button>
-                </div>
-                <div class="uris-field">
-                    <label for="urisLabBuilt">Готовый промпт (можно править — уйдёт в генерацию ниже)</label>
-                    <textarea class="text_pole" id="urisLabBuilt" rows="4">${escapeHtml(_lab.builtPrompt)}</textarea>
-                    <small class="uris-hint" id="urisLabMatched">${escapeHtml(_lab.matchedLine)}</small>
                 </div>
             </section>
 
@@ -227,10 +196,6 @@ function bindLab(root) {
     _labRoot = root;
     wireBridgeEventsOnce();
     root.querySelector('#urisLabRefresh')?.addEventListener('click', () => refreshLabData(root));
-    root.querySelector('#urisLabTemplate')?.addEventListener('change', e => { _lab.templateId = e.target.value; });
-    root.querySelector('#urisLabScene')?.addEventListener('input', e => { _lab.sceneText = e.target.value; });
-    root.querySelector('#urisLabUseScene')?.addEventListener('change', e => { _lab.useScene = e.target.checked === true; });
-    root.querySelector('#urisLabBuilt')?.addEventListener('input', e => { _lab.builtPrompt = e.target.value; });
     root.querySelector('#urisLabPrompt')?.addEventListener('input', e => { _lab.prompt = e.target.value; });
     root.querySelector('#urisLabAutoRefs')?.addEventListener('change', e => { _lab.autoRefs = e.target.checked === true; });
     root.querySelector('#urisLabAspect')?.addEventListener('change', e => { _lab.aspect = e.target.value; });
@@ -281,51 +246,11 @@ function bindLab(root) {
         }
     });
 
-    root.querySelector('#urisLabBuild')?.addEventListener('click', async () => {
-        const bridge = getBridge();
-        if (!bridge || _lab.building) return;
-        const text = _lab.sceneText.trim();
-        if (!text) { labOut(root, 'Введите текст сцены.'); return; }
-        const ctl = new AbortController();
-        _lab.ctl = ctl;
-        _lab.building = true;
-        const btn = root.querySelector('#urisLabBuild');
-        if (btn) btn.disabled = true;
-        labOut(root, 'Строю промпт (Stage 1 — текстовый запрос к LLM)…');
-        try {
-            const res = await bridge.buildPrompt(
-                { text, templateId: _lab.templateId || undefined, useScene: _lab.useScene },
-                { caller: _lab.caller.trim() || 'bridge-test', signal: ctl.signal },
-            );
-            _lab.builtPrompt = res.prompt;
-            _lab.prompt = res.prompt;
-            const ta = root.querySelector('#urisLabBuilt');
-            if (ta) ta.value = res.prompt;
-            const pt = root.querySelector('#urisLabPrompt');
-            if (pt) pt.value = res.prompt;
-            const matched = res.matchedReferences
-                .map(r => `${r.name}${r.effective ? '' : ' (исключён)'}`)
-                .join(', ');
-            _lab.matchedLine = matched
-                ? `Резолвер нашёл: ${matched}`
-                : 'Резолвер не нашёл совпадений в тексте.';
-            const mEl = root.querySelector('#urisLabMatched');
-            if (mEl) mEl.textContent = _lab.matchedLine;
-            labOut(root, `Промпт готов [${res.requestId}] — перенесён в поле генерации ниже.`);
-        } catch (e) {
-            labOut(root, formatBridgeError(e));
-        } finally {
-            _lab.building = false;
-            _lab.ctl = null;
-            if (btn) btn.disabled = false;
-        }
-    });
-
     root.querySelector('#urisLabRun')?.addEventListener('click', async () => {
         const bridge = getBridge();
         if (!bridge || _lab.running) return;
-        const prompt = (_lab.builtPrompt || _lab.prompt).trim();
-        if (!prompt) { labOut(root, 'Промпт пуст — постройте его выше или введите вручную.'); return; }
+        const prompt = _lab.prompt.trim();
+        if (!prompt) { labOut(root, 'Промпт пуст — введите его вручную.'); return; }
         const references = [..._lab.refIds].map(refId => ({ refId }));
         const ctl = new AbortController();
         _lab.ctl = ctl;
@@ -373,9 +298,8 @@ async function refreshLabData(root) {
         return;
     }
     try {
-        const [status, templates, refs, connections] = await Promise.all([
+        const [status, refs, connections] = await Promise.all([
             bridge.getStatus(),
-            bridge.listTemplates().catch(() => null),
             bridge.listRefs().catch(() => null),
             bridge.listConnections().catch(() => null),
         ]);
@@ -385,14 +309,6 @@ async function refreshLabData(root) {
         _lab.statusText = `apiVersion ${bridge.apiVersion} · ready=${status.ready}, accepting=${status.accepting}; соединение чата: ${conn}; в работе: ${status.active.length}.`;
         const el = root?.querySelector?.('#urisLabStatus');
         if (el) el.textContent = _lab.statusText;
-        if (templates) {
-            _lab.templates = templates;
-            const sel = root?.querySelector?.('#urisLabTemplate');
-            if (sel) {
-                sel.innerHTML = '<option value="">без шаблона (базовый режим)</option>'
-                    + templates.map(t => `<option value="${escapeHtml(t.id)}"${t.id === _lab.templateId ? ' selected' : ''}>${escapeHtml(t.name)} · ${escapeHtml(t.type)}</option>`).join('');
-            }
-        }
         if (refs) {
             _lab.refs = refs;
             const box = root?.querySelector?.('#urisLabRefs');

@@ -100,6 +100,74 @@ export async function copyItemText(item, deps = {}) {
 }
 
 /**
+ * Копирование самой картинки в буфер обмена (№15 из UI-ревизии): пункт
+ * контекстного меню карточки и кнопка лайтбокса. Clipboard API принимает
+ * только image/png — webp/jpeg перегоняются через canvas. Возврат true/false
+ * для контракта «закрывать ли просмотрщик»; ошибки — тост + error pool.
+ * @param {{imagePath?:string, stGalleryPath?:string, src?:string}} item
+ * @param {{fetch?:Function, write?:Function, ClipboardItem?:Function, createImageBitmap?:Function, canvas?:Function}} [deps]
+ */
+export async function copyImageToClipboard(item, deps = {}) {
+    const src = item?.imagePath || item?.stGalleryPath || item?.src;
+    if (!src) { toastr?.info('У картинки нет файла'); return false; }
+    try {
+        const f = deps.fetch || globalThis.fetch?.bind(globalThis);
+        if (!f) throw new Error('fetch недоступен');
+        const url = /^(https?:|data:|blob:|\/)/.test(src) ? src : `/${src}`;
+        const res = await f(url);
+        if (!res.ok) throw new Error(`Не удалось получить файл (${res.status})`);
+        let blob = await res.blob();
+        if (blob.type && blob.type !== 'image/png') {
+            blob = await toPngBlob(blob, deps);
+        }
+        const write = deps.write || (navigator?.clipboard?.write ? navigator.clipboard.write.bind(navigator.clipboard) : null);
+        if (!write) throw new Error('Буфер обмена недоступен (Clipboard API)');
+        const Ctor = deps.ClipboardItem || globalThis.ClipboardItem;
+        if (!Ctor) throw new Error('ClipboardItem не поддерживается этим браузером');
+        await write([new Ctor({ 'image/png': blob })]);
+        toastr?.success('Картинка скопирована в буфер');
+        return true;
+    } catch (err) {
+        reportFailure({ scope: URIS_SCOPES.copy, message: String(err?.message || err), toast: true, toastText: 'Не удалось скопировать картинку: ' + (err?.message || err) });
+        return false;
+    }
+}
+
+/** Декод blob → canvas → PNG (буфер обмена принимает только image/png). */
+async function toPngBlob(blob, deps = {}) {
+    const createBitmap = deps.createImageBitmap || globalThis.createImageBitmap?.bind(globalThis) || null;
+    if (!createBitmap) throw new Error('Не удалось декодировать картинку (createImageBitmap недоступен)');
+    const bitmap = await createBitmap(blob);
+    const canvas = deps.canvas ? deps.canvas() : document.createElement('canvas');
+    canvas.width = bitmap.width;
+    canvas.height = bitmap.height;
+    canvas.getContext('2d').drawImage(bitmap, 0, 0);
+    const out = await new Promise(resolve => canvas.toBlob(resolve, 'image/png'));
+    if (!out) throw new Error('Canvas.toBlob вернул пустой результат');
+    return out;
+}
+
+/**
+ * «Скачать картинку»: нативное сохранение файла браузером (<a download>).
+ * Жест ПКМ/долгого тапа отдаёт кастомному меню, у которого своего «Скачать»
+ * нет — этот пункт возвращает потерянную браузерную опцию. src карточки —
+ * same-origin путь ST или data URL, атрибут download для обоих работает.
+ */
+export function downloadImage(item) {
+    const src = item?.src;
+    if (!src) { toastr?.info('У картинки нет файла'); return; }
+    const dataMime = src.match(/^data:image\/([\w.+-]+)/);
+    const ext = dataMime ? dataMime[1].replace('jpeg', 'jpg')
+        : (src.split('?')[0].match(/\.(\w{2,5})$/)?.[1] || 'png');
+    const a = document.createElement('a');
+    a.href = src;
+    a.download = `uris_${item.id || 'image'}.${ext}`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+}
+
+/**
  * Избранное: карточка закрепляется наверху сетки (в обоих режимах — «Все» и
  * «Папки»). Возвращает новое состояние. Просмотрщик НЕ закрывается: действие
  * безопасное и обратимое — контракт «закрывать только при успехе деструктивных
@@ -308,25 +376,40 @@ export async function deleteImage(item, chatId, root) {
     return removed !== false;
 }
 
-async function confirmDeleteModal(ctx) {
+/** Exported for tests: the delete-popup with the "erase file too" checkbox. */
+export async function confirmDeleteModal(ctx) {
     // Returns: true (delete file too), false (hide only), null (cancelled).
     if (!ctx?.callGenericPopup || !ctx?.POPUP_TYPE) {
         // Fallback: simple confirm = hide only.
         return await showConfirmModal('Удалить картинку из галереи расширения?') ? false : null;
     }
-    const result = await ctx.callGenericPopup(
-        'Удалить картинку из галереи расширения?' +
-        '<label class="checkbox_label uris-label-block">' +
-        '<input type="checkbox" id="urisDeleteFile">' +
-        '<span>Также стереть файл и убрать из галереи чата (Show Gallery)</span>' +
-        '</label>',
-        ctx.POPUP_TYPE.CONFIRM,
-        '',
-        { okButton: 'Удалить', cancelButton: 'Отмена' },
-    );
+    // ST Popup удаляет DOM диалога до того, как resolve вернёт управление
+    // (popup.js: complete → #hide → remove → resolver), поэтому прочитать
+    // чекбокс после await нельзя. Ловим его состояние capture-фазой change —
+    // живые переключения видны, пока диалог открыт.
+    const deleteFileRef = { checked: false };
+    const onChange = (e) => {
+        const input = e.target?.closest?.('#urisDeleteFile') || (e.target?.id === 'urisDeleteFile' ? e.target : null);
+        if (input) deleteFileRef.checked = input.checked === true;
+    };
+    document.addEventListener('change', onChange, { capture: true });
+    let result;
+    try {
+        result = await ctx.callGenericPopup(
+            'Удалить картинку из галереи расширения?' +
+            '<label class="checkbox_label uris-label-block">' +
+            '<input type="checkbox" id="urisDeleteFile">' +
+            '<span>Также стереть файл и убрать из галереи чата (Show Gallery)</span>' +
+            '</label>',
+            ctx.POPUP_TYPE.CONFIRM,
+            '',
+            { okButton: 'Удалить', cancelButton: 'Отмена' },
+        );
+    } finally {
+        document.removeEventListener('change', onChange, { capture: true });
+    }
     if (result === ctx.POPUP_RESULT.AFFIRMATIVE) {
-        const cb = document.querySelector('#urisDeleteFile');
-        return cb?.checked ? true : false;
+        return deleteFileRef.checked;
     }
     return null;
 }

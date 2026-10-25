@@ -60,6 +60,21 @@ export async function listConnections() {
     return currentConnections();
 }
 
+/**
+ * Ручной порядок после drag & drop в списке коннектов: переставляет
+ * browser-owned записи по orderedIds и persist'ит. Серверные записи
+ * (executionOwner=server) остаются на своих местах перед ними.
+ * @param {string[]} orderedIds полный список id в новом порядке
+ * @returns {Promise<Array>} актуальный список
+ */
+export async function reorderConnections(orderedIds) {
+    const connections = currentConnections();
+    const byId = new Map(connections.map(connection => [connection.id, connection]));
+    const next = orderedIds.map(id => byId.get(id)).filter(Boolean);
+    if (next.length !== connections.length) return currentConnections();
+    return persist(next);
+}
+
 export async function getConnection(id) {
     return currentConnections().find(connection => connection.id === id) || null;
 }

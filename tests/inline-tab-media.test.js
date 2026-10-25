@@ -1,8 +1,9 @@
 // @ts-check
-// Тесты вкладки «Медиа» (src/ui/tab-media.js): мастер-тумблер инлайна, слова-
-// триггеры юзера, реестр триггер-профилей, тестовый стенд и лента чата, плюс
-// общий рантайм-хелпер applyInlineRuntime (сканер/рендер). Паттерн:
-// tests/settings-tab.test.js (fake-dom + SillyTavern mock).
+// Тесты вкладки «Медиа» (src/ui/tab-media.js): мастер-тумблер инлайна,
+// слова-триггеры юзера, реестр триггер-профилей, плюс общий рантайм-хелпер
+// applyInlineRuntime (сканер/рендер). Паттерн: tests/settings-tab.test.js
+// (fake-dom + SillyTavern mock). Лента чата и тестовый стенд удалены как
+// дубли функционала галереи/чата — вкладка не должна их рендерить.
 import { test, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { makeFakeDocument } from './fake-dom.js';
@@ -97,18 +98,27 @@ test('loadSettings: inlineEnabled/inlineListenUser строгие booleans, inli
 
 // ── Рендер вкладки ──
 
-test('render создаёт тумблеры, стенд и карточки триггеров; enabled отражает настройки', () => {
+test('render создаёт тумблеры и карточки триггеров; enabled отражает настройки', () => {
     state.settings.inlineEnabled = true;
     state.settings.inlineTriggers = null; // → DEFAULT_TRIGGERS
     const root = makeRoot();
     render(root);
     assert.equal(root.querySelector('#urisMediaEnabled').checked, true);
     assert.equal(root.querySelector('#urisMediaListen').checked, false, 'chat-cfg listenUser по умолчанию выключен');
-    assert.ok(root.querySelector('#urisMediaBenchRun'), 'кнопка тестового стенда');
-    assert.ok(root.querySelector('#urisMediaBenchType'), 'селект триггера стенда');
     const box = root.querySelector('#urisMediaTriggers');
     assert.ok(box, 'блок триггеров');
     assert.equal(box.querySelectorAll('details').length, 3, 'три дефолтных профиля карточками');
+});
+
+test('лента чата и тестовый стенд удалены — секций нет, unstable-бейджи есть', () => {
+    state.settings.inlineEnabled = true;
+    const root = makeRoot();
+    render(root);
+    assert.equal(root.querySelector('#urisMediaFeed'), null, 'лента чата удалена (дубль галереи)');
+    assert.equal(root.querySelector('#urisMediaBenchRun'), null, 'тестовый стенд удалён');
+    assert.equal(root.querySelector('#urisMediaBenchType'), null);
+    assert.ok(root.querySelector('.uris-badge-unstable'), 'пометка unstable на вкладке');
+    assert.match(root.textContent, /unstable/);
 });
 
 test('render без загруженных настроек показывает подсказку', () => {
@@ -179,37 +189,6 @@ test('«Свой тип» добавляет карточку custom-<N> с ко
     await root.querySelector('#urisMediaTriggerAdd').click();
     const ids = state.settings.inlineTriggers.filter(t => t.id.startsWith('custom-')).map(t => t.id);
     assert.equal(new Set(ids).size, 2, 'id повторных профилей уникальны');
-});
-
-// ── Лента чата ──
-
-test('лента показывает готовые инлайн-картинки чата, новые сверху; pending не попадает', () => {
-    chatMetadata.uris_inline = {
-        v: 1,
-        cfg: { enabled: true, listenUser: false },
-        msgs: {
-            1: { messageHash: 'h', items: [{ idx: 0, type: 'img', descHash: 'a', status: 'ready', imagePath: 'old.png', createdAt: 100 }] },
-            2: { messageHash: 'h', items: [
-                { idx: 0, type: 'selfie', descHash: 'b', status: 'ready', imagePath: 'new.png', createdAt: 300 },
-                { idx: 1, type: 'scene', descHash: 'c', status: 'pending', imagePath: null, createdAt: 400 },
-            ] },
-        },
-    };
-    const root = makeRoot();
-    render(root);
-    const imgs = Array.from(root.querySelector('#urisMediaFeed').querySelectorAll('img'));
-    assert.equal(imgs.length, 2, 'только ready с файлом');
-    assert.equal(imgs[0].getAttribute('src'), '/new.png', 'новые сверху');
-    assert.equal(imgs[1].getAttribute('src'), '/old.png');
-    assert.match(imgs[0].getAttribute('title'), /selfie/, 'title содержит тип');
-});
-
-test('пустая лента показывает подсказку', () => {
-    const root = makeRoot();
-    render(root);
-    const feed = root.querySelector('#urisMediaFeed');
-    assert.equal(feed.querySelectorAll('img').length, 0);
-    assert.match(feed.textContent, /Пока пусто/);
 });
 
 // ── Общий рантайм-хелпер (tab-media + tab-settings + index.init) ──

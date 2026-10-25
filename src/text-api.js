@@ -19,8 +19,19 @@ import * as gemini from './providers/gemini.js';
  * @param {(s: string) => void} [onStatus]
  * @param {AbortSignal} [signal]
  * @returns {Promise<string>}
+/**
+ * @param {string} systemPrompt
+ * @param {string} userPrompt основной user-блок (Scene-сообщение из template-runtime)
+ * @param {(s: string) => void} [onStatus]
+ * @param {AbortSignal} [signal]
+ * @param {string|null} [requestId]
+ * @param {string[]} [extraUserMessages] дополнительные user-блоки контекста
+ *   Stage 1 (persona/character/lore/history из stage1-context.js): профильный
+ *   путь отправляет их отдельными {role:'user'} сообщениями, кастомный —
+ *   склеивает '\n\n' в один user.
+ * @returns {Promise<string>}
  */
-export async function generatePromptText(systemPrompt, userPrompt, onStatus, signal = null, requestId = null) {
+export async function generatePromptText(systemPrompt, userPrompt, onStatus, signal = null, requestId = null, extraUserMessages = []) {
     const s = state.settings;
     const source = s.apiSource;
     log('generatePromptText: source =', source);
@@ -28,12 +39,13 @@ export async function generatePromptText(systemPrompt, userPrompt, onStatus, sig
     if (source !== 'profile' && source !== 'custom') {
         throw new Error('Источник text-LLM не выбран. Выберите «Профиль» или «Свой» в настройках.');
     }
+    const extras = (Array.isArray(extraUserMessages) ? extraUserMessages : []).filter(m => typeof m === 'string' && m.trim());
 
     return callWithRetry(async (attempt) => {
         onStatus?.(`Промпт${attempt ? ` (повтор ${attempt})` : ''}...`);
 
         if (source === 'profile') {
-            return await generateWithProfile(s.profileId, systemPrompt, userPrompt, signal, requestId);
+            return await generateWithProfile(s.profileId, systemPrompt, [userPrompt, ...extras], signal, requestId);
         }
 
         // source === 'custom' — delegate to provider
@@ -43,6 +55,8 @@ export async function generatePromptText(systemPrompt, userPrompt, onStatus, sig
 
         const apiKey = await getApiKey();
         if (!apiKey) throw new Error('API ключ не задан — введите в настройках (Источник = «Свой»).');
+
+        const joinedUser = [userPrompt, ...extras].join('\n\n');
 
         // Auto-detect provider by URL
         const apiType = resolveApiType(endpoint, model);
@@ -54,8 +68,8 @@ export async function generatePromptText(systemPrompt, userPrompt, onStatus, sig
         };
 
         if (apiType === 'gemini') {
-            return await gemini.generateText(profile, systemPrompt, userPrompt, onStatus, signal);
+            return await gemini.generateText(profile, systemPrompt, joinedUser, onStatus, signal);
         }
-        return await openai.generateText(profile, systemPrompt, userPrompt, onStatus, signal);
+        return await openai.generateText(profile, systemPrompt, joinedUser, onStatus, signal);
     }, 'text-api', 'network', signal);
 }
