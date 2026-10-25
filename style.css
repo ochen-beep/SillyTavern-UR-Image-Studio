@@ -1160,6 +1160,15 @@
     overflow: hidden;
 }
 .uris-folder-list { flex: 1; overflow-y: auto; padding: 4px 0; }
+/* Тащим за бочок: полоска правее сайдбара, ширина — device-local pref. */
+.uris-refs-sidebar-resizer {
+    flex: 0 0 6px; cursor: col-resize; background: transparent;
+    transition: background .15s;
+}
+.uris-refs-sidebar-resizer:hover {
+    background: linear-gradient(to right, transparent 40%, var(--uris-accent) 50%, transparent 60%);
+    opacity: .5;
+}
 .uris-folder-item {
     display: flex; align-items: center; gap: 8px;
     width: 100%; padding: 6px 10px; background: none; border: none;
@@ -1275,11 +1284,13 @@
    фон темнее, рамка ярче, текст ярче. Акцентный hover оставлен только
    «добавить»-кнопкам, красный — деструктивным. */
 .uris-refs-folder-menu:hover { background: var(--uris-surface-btn-hover); border-color: var(--uris-border); color: var(--uris-text-strong); }
-/* Нет контекста (Все/Без папки) — кнопка гаснет, но не исчезает. Фон в hover
-   закреплён за базовым: общий hover-рул ниже по каскаду не должен «оживлять»
-   выключенную кнопку подливкой. */
-.uris-refs-folder-menu-off { opacity: var(--uris-o-40); cursor: default; }
-.uris-refs-folder-menu-off:hover { background: var(--uris-surface-btn); border-color: var(--uris-border); color: var(--uris-text-strong); }
+/* Нет контекста (Все/Без папки) — кнопка полностью приглушена: без hover-оживления
+   (общий hover-рул ниже по каскаду не должен «оживлять» выключенную кнопку). */
+.uris-refs-folder-menu-off {
+    opacity: .35; cursor: default;
+    background: transparent; border-color: transparent; color: var(--uris-text-dim);
+}
+.uris-refs-folder-menu-off:hover { background: transparent; border-color: transparent; color: var(--uris-text-dim); }
 .uris-refs-search { flex: 1 1 160px; min-width: 120px; }
 .uris-refs-search input {
     width: 100%; padding: 4px 8px; font-size: var(--uris-font-sm);

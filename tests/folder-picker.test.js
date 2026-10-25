@@ -95,7 +95,17 @@ test('nextFolderSortMode: цикл manual → name → count → manual', async 
 test('folderPrefs: roundtrip, нормализация мусора, кап избранного', async () => {
     const { getFolderPrefs, saveFolderPrefs, FOLDER_PREFS_MAX_PINNED } = await import('../src/refs-library.js');
 
-    assert.deepEqual(getFolderPrefs(), { pinned: [], sort: 'manual', hideEmpty: false, collapsed: [] }, 'дефолты на пустых настройках');
+    assert.deepEqual(
+        getFolderPrefs(),
+        { pinned: [], sort: 'manual', hideEmpty: false, collapsed: [], sidebarWidth: 170 },
+        'дефолты на пустых настройках');
+
+    saveFolderPrefs({ sidebarWidth: 99999 });
+    assert.equal(getFolderPrefs().sidebarWidth, 400, 'ширина сайдбара зажимается сверху');
+    saveFolderPrefs({ sidebarWidth: 1 });
+    assert.equal(getFolderPrefs().sidebarWidth, 130, 'ширина сайдбара зажимается снизу');
+    saveFolderPrefs({ sidebarWidth: 'мусор' });
+    assert.equal(getFolderPrefs().sidebarWidth, 170, 'мусор → дефолт');
 
     const many = Array.from({ length: FOLDER_PREFS_MAX_PINNED + 5 }, (_, i) => `f${i}`);
     saveFolderPrefs({ pinned: many, sort: 'чтопопало', hideEmpty: true });

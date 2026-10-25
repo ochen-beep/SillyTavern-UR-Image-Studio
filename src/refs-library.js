@@ -657,6 +657,10 @@ export function normalizeFolderPrefs(data = {}) {
         hideEmpty: data.hideEmpty === true,
         // Свёрнутые группы дерева (device-local UI state, как pinned).
         collapsed: uniqueStrings(Array.isArray(data.collapsed) ? data.collapsed : []),
+        // Ширина сайдбара папок (device-local); мусор → дефолт 170.
+        sidebarWidth: Number.isFinite(data.sidebarWidth)
+            ? Math.min(400, Math.max(130, Math.round(data.sidebarWidth)))
+            : 170,
     };
 }
 

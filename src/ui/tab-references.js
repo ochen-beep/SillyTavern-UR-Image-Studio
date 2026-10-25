@@ -67,6 +67,7 @@ export function render(root) {
     root.innerHTML = `
         <div class="uris-references">
             <div class="uris-refs-sidebar" id="urisRefsSidebar"></div>
+            <div class="uris-refs-sidebar-resizer" id="urisRefsSidebarResizer" title="Потянуть, чтобы изменить ширину"></div>
             <div class="uris-refs-main">
                 <div class="uris-refs-toolbar" id="urisRefsToolbar"></div>
                 <div class="uris-refs-grid-wrap">
@@ -78,9 +79,57 @@ export function render(root) {
     _cw = root.clientWidth;
     root.classList.toggle('uris-refs-mobile', _cw > 0 && _cw < REFS_MOBILE_BREAK);
     _setupResize(root);
+    if (_cw > 0 && _cw >= REFS_MOBILE_BREAK) _setupSidebarResizer(root);
     if (_cw <= 0) return;
     if (_cw < REFS_MOBILE_BREAK) return _renderMobileAll(root);
     return _renderAll(root);
+}
+
+const SIDEBAR_W_MIN = 130;
+const SIDEBAR_W_MAX = 400;
+
+function _applySidebarWidth(root, width) {
+    const sidebar = root.querySelector('#urisRefsSidebar');
+    if (!sidebar) return;
+    sidebar.style.flexBasis = width + 'px';
+    sidebar.style.width = width + 'px';
+}
+
+/**
+ * Drag handle on the folder sidebar edge: the stored folderPrefs.sidebarWidth
+ * drives the flex-basis; the pointer drag updates it live and persists once
+ * on release (device-local pref, like collapsed/sort).
+ */
+function _setupSidebarResizer(root) {
+    const handle = root.querySelector('#urisRefsSidebarResizer');
+    if (!handle) return;
+    _applySidebarWidth(root, getFolderPrefs().sidebarWidth);
+    handle.addEventListener('pointerdown', (e) => {
+        if (e.button !== 0) return;
+        // A dedicated 6px strip: cancelling the pointerdown never hurts
+        // scrolling and keeps a touch drag on the strip, not the page.
+        e.preventDefault();
+        const startX = e.clientX;
+        const startW = root.querySelector('#urisRefsSidebar')?.getBoundingClientRect().width
+            || getFolderPrefs().sidebarWidth;
+        let last = startW;
+        const move = (ev) => {
+            last = Math.min(SIDEBAR_W_MAX, Math.max(SIDEBAR_W_MIN, Math.round(startW + ev.clientX - startX)));
+            if (last !== startW) ev.preventDefault?.();
+            _applySidebarWidth(root, last);
+        };
+        const finish = () => {
+            document.removeEventListener('pointermove', move);
+            document.removeEventListener('pointerup', finish);
+            document.removeEventListener('pointercancel', finish);
+            document.body.classList.remove('uris-dragging-active');
+            if (last !== startW) saveFolderPrefs({ sidebarWidth: last });
+        };
+        document.body.classList.add('uris-dragging-active');
+        document.addEventListener('pointermove', move);
+        document.addEventListener('pointerup', finish);
+        document.addEventListener('pointercancel', finish);
+    });
 }
 
 function _setupResize(root) {
