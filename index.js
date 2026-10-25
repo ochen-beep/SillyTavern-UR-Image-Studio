@@ -25,9 +25,8 @@ import {
 } from './src/ui/window.js';
 import { ensureFloatingLauncher, removeFloatingLauncher, bindStage2Pulse } from './src/ui/floating-launcher.js';
 import { registerTab, setActiveTab, renderTabs, getActiveTab, refreshActive, resolveInitialTab } from './src/ui/tabs.js';
-// Стартовый граф модулей держим минимальным: вкладки, pipeline и редкие
-// обработчики панели настроек догружаются динамическим импортом по факту
-// первого использования (см. lazyTabRender и обработчики ниже).
+// Keep the startup module graph minimal: tabs, pipeline and the rare settings
+// panel handlers load dynamically on first use (see lazyTabRender below).
 import { bindAbortUI, unbindAbortUI } from './src/ui/generation-lifecycle-ui.js';
 import { setCurrentMsgId, getLastPostIndex } from './src/post-navigator.js';
 import { refreshPoolCache, ensureRefsStoreReady } from './src/refs-library.js';
@@ -88,8 +87,7 @@ async function init() {
         return;
     }
     const ctx = getCtx(); if (!ctx) { warn('context unavailable'); markBridgeFailed(new Error('SillyTavern context is unavailable')); return; }
-    // Performance-метки (план 2026-10-25, фаза 0): uris:init виден в DevTools
-    // Performance/коноли через performance.getEntriesByName('uris:init').
+    // Perf marks: read in DevTools via performance.getEntriesByType('measure').
     performance.mark('uris:init');
     // Publish globalThis.URIS before any async work so consumers can grab the
     // global early and await URIS.ready for actual readiness.
@@ -129,8 +127,8 @@ async function init() {
     ]);
 
     // v4: 6 tabs (API / References / Generation / Gallery / Templates / Settings)
-    // Ленивый рендер: модуль вкладки грузится по факту первого открытия, а не
-    // на старте таверны (первое открытие платит один динамический импорт).
+    // Lazy render: a tab module loads on first open, not at tavern startup
+    // (the first open pays a single dynamic import).
     const lazyTabRender = (path) => (root) => import(path).then(m => m.render(root));
     registerTab({ id: 'api',         label: 'API',         render: lazyTabRender('./src/ui/tab-api.js') });
     registerTab({ id: 'references',  label: 'Референсы',  render: lazyTabRender('./src/ui/tab-references.js') });

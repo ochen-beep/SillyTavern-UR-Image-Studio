@@ -56,8 +56,8 @@ export function setActiveTab(id, { persist = true, render = true } = {}) {
         body.className = 'uris-body';
         body.__urisRenderEpoch = renderEpoch;
         body.__urisTabId = id;
-        // Performance-метка рендера вкладки (план 2026-10-25, фаза 0); имя
-        // меры — uris:tab-render:<id>, для ленивых вкладок включает загрузку модуля.
+        // Perf mark; the measure is uris:tab-render:<id> — for lazy tabs it
+        // includes the dynamic module load.
         performance.mark('uris:tab-render');
         const result = tab.render(body);
         const measureRender = () => { performance.measure(`uris:tab-render:${id}`, 'uris:tab-render'); };

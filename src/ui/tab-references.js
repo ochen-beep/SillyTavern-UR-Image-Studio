@@ -50,9 +50,9 @@ let _folderSearchQuery = '';
 // mobile fullscreen mode. Deliberate single semantics: dense scale → compact
 // layout.
 const REFS_MOBILE_BREAK = 480;
-// Поиск перерисовывает сетку с дебаунсом: каждое нажатие клавиши раньше
-// сбрасывало innerHTML сетки (рестарт загрузки всех видимых миниатюр) —
-// на пуле в сотни карточек это был главный источник лага набора.
+// Search re-renders the grid debounced: every keystroke used to wipe the
+// grid's innerHTML (restarting loads for all visible tiles) — the main
+// typing-lag source on pools of hundreds of refs.
 const REFS_SEARCH_DEBOUNCE_MS = 150;
 
 export function render(root) {
@@ -643,8 +643,8 @@ function poolTileHtml(ref, foldersById, { maxDots = 4, selected = false } = {}) 
     const dots = (ref.folders || []).map(fid => foldersById.get(fid)).filter(Boolean)
         .slice(0, maxDots).map(f => `<span class="uris-pool-tile-dot" style="background:${escapeHtml(f.color)}"></span>`).join('');
     const selectedClass = selected ? ' uris-pool-tile-selected' : '';
-    // Нативные width/height из метаданных записи (инжест их сохраняет): браузер
-    // резервирует место до загрузки — без CLS и прыжков скроллбара.
+    // Native width/height from the record metadata (ingest saves them): the
+    // browser reserves the box before load — no CLS, no scrollbar jumps.
     const dims = Number(ref?.width) > 0 && Number(ref?.height) > 0
         ? ` width="${Number(ref.width)}" height="${Number(ref.height)}"` : '';
     return `<button type="button" class="uris-pool-tile${selectedClass}" data-ref-id="${escapeHtml(ref.id)}" aria-label="${escapeHtml(ref.name)}" title="${escapeHtml(ref.name)}">
@@ -689,12 +689,12 @@ function refEditorBodyHtml(ref, { deleteLabel = 'Удалить карточку
         </div>`;
 }
 
-// ── Делегирование плиток пула ──
-// Один click/contextmenu-слушатель на контейнер сетки вместо двух на каждую
-// плитку (паттерн bindCards из tab-gallery.js): поиск и перерисовки сетки
-// больше не перевешивают O(n) слушателей. Слушатель переживает innerHTML-вайпы
-// контента, поэтому обработчики читают только module-state (_gridRefs/_gridFolders),
-// а не замыкания конкретной отрисовки.
+// ── Pool tile delegation ──
+// One click/contextmenu listener pair on the grid host instead of two per
+// tile (the bindCards pattern from tab-gallery.js): search and grid re-renders
+// no longer rebind O(n) listeners. The listener outlives the host's innerHTML
+// wipes, so handlers read module state (_gridRefs/_gridFolders) instead of
+// closing over a specific render's locals.
 let _gridRefs = [];
 let _gridFolders = [];
 
@@ -717,7 +717,7 @@ function _bindPoolGridDelegation(host, { onOpen, menuItems }) {
     });
 }
 
-/** Выделение плитки без перерисовки сетки (бывший полный _renderGrid по клику). */
+/** Highlight the selected tile without a full grid re-render. */
 function _selectPoolTile(host, refId) {
     for (const tile of host.querySelectorAll('.uris-pool-tile')) {
         tile.classList.toggle('uris-pool-tile-selected', tile.dataset.refId === refId);

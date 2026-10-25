@@ -708,9 +708,9 @@
 .uris-card {
     border-radius: var(--uris-radius-card); overflow: hidden; position: relative;
     border: 1px solid var(--uris-border-soft);
-    /* Вне вьюпорта плитка не лэйаутится и не красится (длинные галереи).
-       auto в contain-intrinsic-size запоминает первый реальный размер —
-       числовая оценка работает только до первой отрисовки плитки. */
+    /* Off-screen cards skip layout and paint (long galleries). The auto
+       keyword in contain-intrinsic-size remembers the first real size; the
+       numeric estimate applies only before a card's first paint. */
     content-visibility: auto; contain-intrinsic-size: auto 240px;
 }
 /* Картинка-кнопка: клик/тап открывает просмотрщик (expand-кнопка выпилена).
@@ -1355,8 +1355,8 @@
     background: var(--uris-surface-card); border: 1px solid transparent;
     transition: border-color .12s; display: block; isolation: isolate;
     aspect-ratio: 3 / 4; align-self: start;
-    /* Как у .uris-card: невидимые плитки пула пропускают layout/paint;
-       130px — оценка высоты до первого рендера (реальную запомнит auto). */
+    /* Same as .uris-card: off-screen pool tiles skip layout/paint; 130px is
+       the height estimate until first paint (auto remembers the real one). */
     content-visibility: auto; contain-intrinsic-size: auto 130px;
     /* The tile is a real <button> so it is keyboard-focusable; reset the UA
        button chrome so it keeps the card appearance. */

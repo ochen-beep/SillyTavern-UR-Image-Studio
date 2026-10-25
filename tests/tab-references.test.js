@@ -781,7 +781,7 @@ test('render: mobile grid searches names and aliases without changing stored ref
 
     search.value = 'cApTaIn';
     await search.dispatchEvent({ type: 'input', target: search, currentTarget: search });
-    // Поиск дебаунсится (REFS_SEARCH_DEBOUNCE_MS=150) — ждём таймер.
+    // Search is debounced (REFS_SEARCH_DEBOUNCE_MS=150) — wait out the timer.
     await new Promise(resolve => setTimeout(resolve, 200));
     assert.deepEqual([...el.querySelectorAll('.uris-pool-tile')].map(tile => tile.dataset.refId), [char.id], 'alias search is case-insensitive');
     assert.equal((await listRefs()).length, 2, 'search does not persist any reference changes');
