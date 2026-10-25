@@ -1011,7 +1011,8 @@ test('whitelist renders folder groups above a merged actions row with direct chi
 });
 
 test('reference library source has aliases editor but no role or keywords editor', async () => {
-    const src = await readFile(new URL('../src/ui/tab-references.js', import.meta.url), 'utf8');
+    // The editor body markup lives in ref-editor.js since the hygiene split.
+    const src = await readFile(new URL('../src/ui/ref-editor.js', import.meta.url), 'utf8');
     assert.match(src, /uris-ed-aliases/);
     assert.doesNotMatch(src, /uris-ed-role/);
     assert.doesNotMatch(src, /uris-ed-keywords|Keywords/);

@@ -54,7 +54,7 @@ export function refEditorBodyHtml(ref, { deleteLabel = 'Удалить карт�
 }
 
 /** Shared editor body binding for both overlay panel and mobile card screen. */
-function _bindEditorBody(root, host, ref, folders, opts = {}) {
+export function bindEditorBody(root, host, ref, folders, opts = {}) {
     const nameInput = host.querySelector('.uris-ed-name');
     const aliasesInput = host.querySelector('.uris-ed-aliases');
     const descInput = host.querySelector('.uris-ed-desc');
