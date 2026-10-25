@@ -4,6 +4,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
+import { readAllStyles } from './_helpers.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const projectRoot = join(here, '..');
@@ -21,7 +22,7 @@ function ruleBodyFor(css, selector) {
 test('gallery refresh/clear buttons live in settings «Данные и диагностика»', () => {
     const gallery = read('src/ui/tab-gallery.js');
     const settings = read('src/ui/tab-settings.js');
-    const css = read('style.css');
+    const css = readAllStyles();
     // Кнопки переехали из тулбара галереи в раздел данных настроек (v0.9.5):
     // тулбар остаётся счётчиком, старые классы/правила не должны оставаться.
     assert.doesNotMatch(gallery, /urisGalleryRefresh|urisGalleryClear|uris-gallery-clear/);

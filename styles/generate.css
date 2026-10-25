@@ -1,0 +1,493 @@
+/* Generate tab: layout, prompt-first flow, templates, reference plate, studio scope. Split from style.css (hygiene 2026-10-25); imported by the root sheet. */
+
+/* ── Генерация ── */
+.uris-gen { display: flex; flex-direction: column; gap: var(--uris-gap); }
+
+/* Пост-навигатор: стрелка-кнопка + центральная плашка + стрелка. */
+.uris-postnav { display: flex; align-items: center; gap: 6px; }
+.uris-postnav-btn {
+    flex: 0 0 auto; width: 28px; height: 28px; padding: 0;
+    display: flex; align-items: center; justify-content: center;
+    background: var(--uris-surface-btn); border: 1px solid var(--uris-border-soft);
+    border-radius: var(--uris-radius); color: var(--uris-text-mut); cursor: pointer;
+    transition: color .12s, border-color .12s;
+}
+.uris-postnav-btn:hover { color: var(--uris-text-strong); background: var(--uris-surface-btn-hover); border-color: var(--uris-border); }
+.uris-postnav-btn:disabled { opacity: var(--uris-o-50); cursor: default; }
+/* Follow-last-post toggle: иконка-магнит после #urisPostInfo. */
+.uris-follow-toggle.is-active {
+    color: var(--uris-accent);
+    border-color: var(--uris-accent);
+    background: var(--uris-accent-soft);
+}
+.uris-postnav-info {
+    flex: 1; min-width: 0;
+    font-size: var(--uris-font-sm); color: var(--uris-text-mut);
+    padding: 5px 8px; background: var(--uris-surface-card);
+    border: 1px solid var(--uris-border-soft); border-radius: var(--uris-radius);
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+
+/* Контекст-блок: studio-ввод сцены (в чате excerpt удалён, ambiguities живут
+   в панели «Референсы»). */
+.uris-context-box {
+    display: flex; flex-direction: column; gap: 4px;
+    padding: 6px 8px; background: var(--uris-surface-card);
+    border: 1px solid var(--uris-border-soft); border-radius: var(--uris-radius-card);
+    max-height: 96px; overflow-y: auto;
+}
+
+/* Единая кнопка: ghost (вторичная) / primary (акцент). */
+.uris-btn {
+    flex: 1; min-height: 32px; padding: 6px 10px;
+    border-radius: var(--uris-radius); cursor: pointer;
+    font-size: var(--uris-font-sm); font-weight: 500;
+    display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+    border: 1px solid transparent; transition: background .12s, border-color .12s, color .12s;
+}
+/* Единый фокус с клавиатуры для ВСЕХ кнопок окна и оверлеев: раньше outline
+   был только у пяти точечных элементов (.uris_fab, .uris-pool-tile, свитч
+   диалекта, pending-действия, pswp) — остальные фокусировались «по-браузерному».
+   Существующие точечные правила (fab, pswp-белый) перекрывают эту базу. */
+.uris-window button:focus-visible,
+.uris-picker-overlay button:focus-visible {
+    outline: 2px solid var(--uris-accent);
+    outline-offset: 2px;
+}
+.uris-btn:disabled { opacity: var(--uris-o-50); cursor: default; }
+/* [hidden] обязан побеждать авторский display: UA-стиль `[hidden]{display:none}`
+   слабее `.uris-btn { display: inline-flex }`, из-за чего скрытая «Остановить»
+   рисовалась в покое. Специфичности (0,2,0) хватает — !important не нужен. */
+.uris-btn[hidden] { display: none; }
+.uris-btn-ghost {
+    background: var(--uris-surface-btn); border-color: var(--uris-border-soft);
+    color: var(--uris-text-strong);
+}
+.uris-btn-ghost:not(:disabled):hover { background: var(--uris-surface-btn-hover); border-color: var(--uris-border); }
+.uris-btn-primary {
+    background: var(--uris-accent); color: #fff; border-color: var(--uris-accent);
+}
+.uris-btn-primary:not(:disabled):hover { filter: brightness(1.08); }
+
+/* Danger: красный для удаления/очистки */
+.uris-btn-danger {
+    background: var(--uris-err-soft); border-color: var(--uris-err-line);
+    color: var(--uris-err);
+}
+.uris-btn-danger:not(:disabled):hover { background: var(--uris-err-hover); border-color: var(--uris-err); }
+
+/* Accent outline: пунктирная обводка для «добавить» (как .uris-refs-add, но через uris-btn) */
+.uris-btn-outline {
+    background: var(--uris-accent-soft); border-style: dashed; border-color: var(--uris-accent-line);
+    color: var(--uris-accent);
+}
+.uris-btn-outline:not(:disabled):hover { background: var(--uris-accent-hover); border-color: var(--uris-accent); }
+
+/* Subtle: нейтральная вторичная кнопка (копировать, заменить) */
+.uris-btn-subtle {
+    background: var(--uris-surface-btn); border-color: var(--uris-border-soft);
+    color: var(--uris-text-mut);
+}
+.uris-btn-subtle:not(:disabled):hover { background: var(--uris-surface-btn-hover); border-color: var(--uris-border); color: var(--uris-text-strong); }
+
+/* Confirm: зелёная для «сделать активным/применить» */
+.uris-btn-confirm {
+    background: var(--uris-accent-soft); border-color: var(--uris-accent-line);
+    color: var(--uris-accent);
+}
+.uris-btn-confirm:not(:disabled):hover { background: var(--uris-accent-hover); border-color: var(--uris-accent); }
+.uris-btn-confirm:disabled { opacity: var(--uris-o-50); }
+
+/* Кнопки внутри actions шаблонов — без цветного фона */
+#urisTemplatesActions .uris-btn {
+    background: var(--uris-surface-btn);
+    border-color: var(--uris-border-soft);
+    border-style: solid;
+    color: var(--uris-text-strong);
+}
+#urisTemplatesActions .uris-btn:not(:disabled):hover {
+    background: var(--uris-surface-btn-hover);
+    border-color: var(--uris-border);
+}
+
+.uris-prompt-area { font-size: var(--uris-font-sm); line-height: 1.45; resize: vertical; min-height: 80px; }
+.uris-gen-actions { display: flex; gap: 6px; flex-wrap: wrap; }
+.uris-gen-actions button { flex: 1; }
+.uris-gen-actions .uris-btn-primary { flex: 2; }
+
+/* Server-request recovery notices emitted by tab-generate. State is encoded by
+   the available actions: no action = checking, Resume = not submitted, and a
+   lone Discard action = failed or provider result uncertain. */
+/* reduce-глушение этих спиннеров — в консолидированном блоке в конце файла. */
+.uris-advanced { display: flex; flex-direction: column; gap: 6px; padding: var(--uris-pad); border: 1px solid var(--uris-border-soft); border-radius: var(--uris-radius-card); background: var(--uris-surface-card); }
+.uris-advanced > summary { cursor: pointer; font-size: var(--uris-font-sm); color: var(--uris-text-mut); }
+.uris-advanced .uris-row label { min-width: var(--uris-label-w, 90px); }
+.uris-advanced .checkbox_label { font-size: var(--uris-font-sm); color: var(--uris-text-mut); }
+
+/* Параметры: компактный inline-ряд без тяжёлых label'ов. */
+.uris-gen-params { display: flex; flex-wrap: wrap; gap: var(--uris-gap); align-items: center; }
+.uris-gen-params + .uris-gen-params { margin-top: 4px; }
+/* №14: «Дополнительно» — гармошка с Размер/Quality/Флоу/Автоматизация. */
+.uris-gen-acc { margin-top: 2px; }
+.uris-gen-acc > summary {
+    cursor: pointer; user-select: none; list-style: none;
+    color: var(--uris-text-dim); font-size: var(--uris-font-sm);
+    padding: 3px 0;
+}
+.uris-gen-acc > summary::-webkit-details-marker { display: none; }
+.uris-gen-acc > summary::before { content: '▸ '; }
+.uris-gen-acc[open] > summary::before { content: '▾ '; }
+.uris-gen-acc[open] > summary { color: var(--uris-text-strong); }
+.uris-gen-acc .uris-gen-params { margin-top: 4px; }
+/* Контекст Stage 1 внутри аккордеона: компактная секция с разделителем. */
+.uris-s1-ctx {
+    margin-top: 10px; padding-top: 8px;
+    border-top: 1px solid var(--uris-border-soft);
+    display: flex; flex-direction: column; gap: 4px;
+}
+.uris-s1-ctx-title {
+    font-size: var(--uris-font-sm); color: var(--uris-text-mut);
+    font-weight: 600; margin-bottom: 2px;
+}
+.uris-s1-ctx .checkbox_label { margin: 0; }
+/* Резолвер неоднозначностей переехал из context-box в панель «Референсы». */
+.uris-refs-ambiguities { margin: 2px 0 6px; }
+.uris-param { display: inline-flex; align-items: center; gap: 4px; }
+.uris-param-label { font-size: var(--uris-font-xs); color: var(--uris-text-mut); }
+.uris-gen-params select { min-width: 70px; padding: 3px 6px; font-size: var(--uris-font-sm); }
+
+/* ── v2.2: prompt-first generation ── */
+.uris-prompt-card {
+    position: relative;
+    display: flex; flex-direction: column; gap: 8px;
+    padding: 10px; border-radius: var(--uris-radius-card);
+    background: var(--uris-surface-card); border: 1px solid var(--uris-border-soft);
+}
+.uris-source-excerpt {
+    font-size: var(--uris-font-sm); color: var(--uris-text-mut); line-height: 1.4;
+    display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+}
+.uris-draft-stale {
+    font-size: var(--uris-font-xs); color: var(--uris-warn); background: var(--uris-warn-soft);
+    padding: 2px 6px; border-radius: var(--uris-radius-pill); white-space: nowrap;
+}
+.uris-gen-params .uris-row { flex-wrap: wrap; }
+
+/* Scene context / ambiguities */
+.uris-scene-context {
+    display: flex; flex-direction: column; gap: 6px;
+}
+.uris-ambiguity {
+    display: flex; flex-direction: column; gap: 4px;
+    padding: 6px 8px; border-radius: var(--uris-radius-card);
+    background: var(--uris-surface-card); border: 1px solid var(--uris-border-soft);
+}
+.uris-ambiguity-mention {
+    font-size: var(--uris-font-sm); color: var(--uris-text-strong); font-weight: 600;
+}
+.uris-ambiguity-candidates {
+    display: flex; flex-wrap: wrap; gap: 6px; align-items: center;
+}
+.uris-ambiguity-candidate {
+    display: inline-flex; align-items: center; gap: 4px;
+    font-size: var(--uris-font-sm); padding: 2px 6px; border-radius: var(--uris-radius-pill);
+    background: var(--uris-surface-btn);
+}
+.uris-ambiguity-candidate .uris-candidate-name { margin-right: 4px; }
+.uris-ref-include, .uris-ref-exclude {
+    padding: 2px 5px; font-size: var(--uris-font-sm); line-height: 1;
+    background: transparent; border: none; color: inherit; cursor: pointer; opacity: var(--uris-o-70);
+}
+.uris-ref-include:hover, .uris-ref-exclude:hover { opacity: 1; }
+
+/* Mobile */
+@media (max-width: 768px) {
+    .uris-gen-params .uris-row { gap: 6px 12px; }
+    .uris-gen-params .uris-row label { min-width: 0; }
+}
+
+/* ── Templates ── */
+.uris-templates-create { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 8px; }
+.uris-templates-create .uris-btn { flex: 1; min-width: 120px; }
+/* Header radio in the template card: doubles as the "make active" click target
+   (visible when collapsed). Filled accent = active, hollow ring = inactive.
+   20px — это в первую очередь кликабельная зона активации, не только индикатор. */
+.uris-template-status {
+    flex: 0 0 auto; width: 20px; height: 20px; padding: 0; border: none; border-radius: 50%;
+    cursor: pointer; transition: filter .12s, box-shadow .12s;
+}
+.uris-template-status:hover { filter: brightness(1.15); }
+.uris-template-status.uris-status-active { background: var(--uris-accent); box-shadow: none; }
+.uris-template-status:not(.uris-status-active) {
+    background: transparent; box-shadow: inset 0 0 0 2px var(--uris-text-mut);
+}
+/* Active template: тот же язык, что у активного коннекта во вкладке API —
+   заливка, акцентная линия рамки и левый акцент-бар на всей карточке.
+   Inset box-shadow рисует бар внутри карточки, layout не сдвигается. */
+.uris-template-instruction.uris-template-active {
+    background: var(--uris-accent-soft);
+    border-color: var(--uris-accent-line);
+    box-shadow: inset 3px 0 0 var(--uris-accent);
+}
+/* Template-name label affordance lives on the shared .uris-preset-card-header
+   rule above (pointer-events:none + :focus), so no collapsed-only override. */
+/* Delete: quiet, right-aligned, no fill - destructive action should not
+   compete with "Сделать активным". Turns red only on hover. */
+.uris-template-instruction .uris-del {
+    flex: 0 0 auto; margin-left: auto;
+    background: transparent; border-color: transparent; color: var(--uris-text-mut);
+}
+.uris-template-instruction .uris-del:not(:disabled):hover {
+    color: var(--uris-err); background: var(--uris-err-soft); border-color: var(--uris-err-line);
+}
+
+/* ── v2.3 Phase 1: Плашка референсов на вкладке «Генерация» ── */
+/* (стили status-label/panel-head см. в блоке .uris-refs-panel ниже) */
+.uris-refs-empty { font-size: var(--uris-font-sm); color: var(--uris-text-mut); padding: 2px 0; }
+
+/* Единая панель референсов (Generate tab) */
+.uris-refs-panel {
+    background: var(--uris-surface-card);
+    border: 1px solid var(--uris-border-soft);
+    border-radius: var(--uris-radius-card);
+    padding: var(--uris-pad);
+    margin-bottom: 8px;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+.uris-refs-panel-head {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+}
+.uris-refs-status-label { font-size: var(--uris-font); font-weight: 600; color: var(--uris-text-strong); flex: 1; }
+.uris-refs-panel-preview {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    padding-top: 4px;
+    /* Разделитель — как во всём приложении: сплошная линия --uris-border-soft
+       (раньше здесь был пунктир из белого .1, которого нет больше нигде). */
+    border-top: 1px solid var(--uris-border-soft);
+}
+.uris-refs-keywords {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    padding: 2px 0;
+}
+.uris-refs-keywords-row {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 4px;
+    min-height: 18px;
+}
+.uris-refs-keywords-label {
+    color: var(--uris-text-mut);
+    font-size: var(--uris-font-sm);
+    margin-right: 3px;
+    white-space: nowrap;
+}
+.uris-refs-keyword-chip {
+    display: inline-flex;
+    align-items: baseline;
+    gap: 3px;
+    max-width: 100%;
+    padding: 2px 6px;
+    border: 1px solid var(--uris-border-soft);
+    /* Пилюля + поверхность кнопок — язык чипов .uris-crumb/.uris-folder-chip
+       (были свой радиус 10px и белая подложка .04). */
+    border-radius: var(--uris-radius-pill);
+    background: var(--uris-surface-btn);
+    font-size: var(--uris-font-sm);
+    line-height: 1.25;
+}
+.uris-refs-keyword-chip small { opacity: var(--uris-o-70); }
+.uris-refs-whitelist-group {
+    display: block;
+    width: 100%;
+    margin-top: 10px;
+}
+.uris-refs-whitelist-group-head {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    margin-bottom: 5px;
+    color: var(--uris-text-mut);
+    font-size: var(--uris-font-sm);
+}
+.uris-refs-whitelist-group-head > span { flex: 1; }
+.uris-refs-whitelist-group-cards {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    align-items: flex-start;
+    width: 100%;
+}
+.uris-refs-whitelist-actions {
+    display: flex;
+    flex: 0 0 auto;
+    flex-wrap: wrap;
+    gap: 6px;
+    align-items: flex-start;
+    width: 100%;
+    margin: 2px 0 0;
+}
+/* Отдельные карточки живут в этой же строке; когда выше есть группы папок —
+   строка отделяется тем же пунктиром, что раньше был у группы карточек. */
+.uris-refs-whitelist-actions:not(:first-child) {
+    margin-top: 10px;
+    padding-top: 8px;
+    border-top: 1px solid var(--uris-border-soft);
+}
+.uris-refs-whitelist-actions .uris-refs-add-tile {
+    width: 56px;
+    min-width: 56px;
+    min-height: 56px;
+    aspect-ratio: 3 / 4;
+    padding: 0;
+    font-size: calc(22px * var(--uris-font-scale, 1));
+    gap: 0;
+}
+.uris-refs-whitelist-group:first-child { margin-top: 2px; }
+.uris-ref-stale { opacity: var(--uris-o-70); }
+.uris-folder-remove {
+    min-width: 26px;
+    min-height: 26px;
+    padding: 3px 7px;
+    border: 1px solid var(--uris-border-soft);
+    border-radius: var(--uris-radius);
+    background: transparent;
+    color: inherit;
+    cursor: pointer;
+}
+.uris-folder-picker-item.uris-pick-selected { border-color: var(--uris-accent); }
+
+/* Миниатюра-чип превью: 44×44 вариант удалён — был мёртвым,
+   каскад CSS выбирал 64×64 декларацию ниже (v3-redesign).
+   Оставшиеся правила (.uris-ref-chip-icon) не дублируются. */
+.uris-effective-ref-remove {
+    position: absolute;
+    top: 1px;
+    right: 1px;
+    width: 18px;
+    height: 18px;
+    padding: 0;
+    border: 0;
+    border-radius: var(--uris-radius);
+    display: grid;
+    place-items: center;
+    background: rgba(0,0,0,.6);
+    color: #fff;
+    cursor: pointer;
+}
+.uris-effective-ref-remove:hover { background: var(--uris-err); }
+
+.uris-refs-stage2-cap {
+    font-size: var(--uris-font-sm);
+    font-weight: 600;
+    color: var(--uris-text-strong);
+    margin-bottom: 6px;
+}
+.uris-refs-policy-info {
+    display: block;
+    margin-top: 0.35rem;
+    padding: 5px 8px;
+    border: 1px solid var(--uris-border-soft);
+    border-radius: var(--uris-radius);
+    background: var(--uris-surface-card);
+    color: var(--uris-accent);
+    line-height: 1.4;
+}
+.uris-refs-policy-info.uris-warning {
+    border-color: var(--uris-warn-line);
+    color: var(--uris-warn);
+}
+.uris-refs-dialect-switch {
+    display: inline-flex;
+    align-items: center;
+    min-height: 26px;
+    margin-left: 4px;
+    padding: 3px 8px;
+    border: 1px solid var(--uris-warn-line);
+    border-radius: var(--uris-radius);
+    background: var(--uris-surface-btn);
+    color: var(--uris-warn);
+    font: inherit;
+    cursor: pointer;
+    transition: background .12s, border-color .12s, color .12s;
+}
+.uris-refs-dialect-switch:hover {
+    background: var(--uris-surface-btn-hover);
+    border-color: var(--uris-warn);
+    color: var(--uris-text-strong);
+}
+.uris-refs-dialect-switch:focus-visible {
+    outline: 2px solid var(--uris-accent);
+    outline-offset: 2px;
+}
+.uris-refs-strip {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    align-items: flex-start;
+}
+.uris-ref-chip-preview {
+    position: relative;
+    width: 56px;
+    aspect-ratio: 3 / 4;
+    border-radius: var(--uris-radius-card);
+    overflow: hidden;
+    border: 1px solid var(--SmartThemeBorderColor, #444);
+    background: rgba(0,0,0,.3);
+    flex: 0 0 56px;
+    cursor: zoom-in; /* тап по тайлу — открыть просмотрщик (крестик — удаление) */
+}
+.uris-ref-chip-preview img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.uris-refs-add-tile {
+    width: 56px; aspect-ratio: 3 / 4;
+    border: 2px dashed var(--SmartThemeBorderColor, #666);
+    background: transparent; color: var(--SmartThemeBodyColor, #aaa);
+    border-radius: var(--uris-radius-card); cursor: pointer;
+    display: flex; align-items: center; justify-content: center;
+    font-size: calc(22px * var(--uris-font-scale, 1));
+    flex: 0 0 56px;
+}
+.uris-refs-add-tile:hover {
+    border-color: var(--uris-accent);
+    color: var(--uris-accent);
+}
+/* Pinned-indicator (reserved for future use) */
+.uris-ref-chip-preview.uris-ref-pinned {
+    outline: 2px solid var(--uris-accent);
+    outline-offset: -2px;
+}
+
+.uris-refs-sources-section {
+    margin-top: 6px;
+    border-top: 1px solid var(--uris-border-soft);
+    padding-top: 6px;
+}
+.uris-refs-sources-label {
+    font-size: var(--uris-font-sm);
+    font-weight: 600;
+    color: var(--uris-text-strong);
+    margin-bottom: 6px;
+}
+
+/* ── Studio scope (генерация вне чата, welcome screen) ── */
+/* Сцена в студии: редактируемый источник Stage 1 вместо read-only эксерпта. */
+.uris-studio-scene { max-height: none; }
+.uris-scene-area {
+    width: 100%; resize: vertical; min-height: 54px;
+    font-size: var(--uris-font-sm); line-height: 1.4;
+}
+/* Бейдж скоупа студии в тулбаре галереи. */
+.uris-gallery-scope {
+    font-size: var(--uris-font-xs); color: var(--uris-text-mut);
+    background: var(--uris-surface-card); border: 1px solid var(--uris-border-soft);
+    padding: 2px 8px; border-radius: var(--uris-radius-pill); white-space: nowrap;
+}

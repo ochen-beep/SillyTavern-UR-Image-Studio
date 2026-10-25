@@ -14,12 +14,12 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
+import { readAllStyles } from './_helpers.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
-const cssPath = join(here, '..', 'style.css');
 
 /** @returns {string} CSS без /* … *​/ комментариев (как в tab-interactive-css.test.js) */
-function readCss() { return readFileSync(cssPath, 'utf8').replace(/\/\*[\s\S]*?\*\//g, ''); }
+function readCss() { return readAllStyles().replace(/\/\*[\s\S]*?\*\//g, ''); }
 
 /**
  * Извлечь декларации первого rule для селектора. Грубо, но для нашего файла

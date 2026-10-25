@@ -1,0 +1,895 @@
+/* Shared overlay chrome: badges, action/copy menus, crop handles, inline wrappers, reduced motion. Split from style.css (hygiene 2026-10-25); imported by the root sheet. */
+
+/* ── Header badges (QUEUE + INFO) ── */
+/* Оба бейджа собраны одной функцией (badgeButtonHtml в window.js) и живут по
+   одному правилу состояний: есть актуальное (непрочитанное / выполняется) —
+   яркий бейдж с цифрой; иначе — приглушённый idle. Из DOM бейджи не удаляются
+   никогда: шапка не прыгает, панели очереди и событий достижимы всегда. */
+.uris-error-badge {
+    /* Значения прикалены тестом tests/badge-css.test.js — не токенизировать. */
+    font-size: calc(12px * var(--uris-font-scale, 1));
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    opacity: 0.75;
+    border: 1px solid currentColor;
+    /* Пилюля — как у остальных бейджей (.uris-draft-stale, .uris-gallery-scope). */
+    border-radius: var(--uris-radius-pill);
+    padding: 2px 8px;
+    position: relative;
+    transition: opacity .12s;
+}
+.uris-error-badge:hover { opacity: 1; }
+/* Ничего актуального: бейдж остаётся на месте, но явно приглушён.
+   Класс вешает sync в window.js (badgeIsIdle) обоим бейджам одинаково. */
+.uris-error-badge--idle { opacity: 0.45; }
+.uris-error-badge--idle:hover { opacity: 0.8; }
+/* В покое цифра не нужна: ноль не несёт информации, idle читается словом. */
+.uris-error-badge--idle .uris-error-count { display: none; }
+/* Красная точка = среди непрочитанного есть жёсткая ошибка (не warn).
+   Внимание кодируется точкой, а не покраской цифры — бейдж остаётся
+   нейтральным элементом шапки (см. 8abb722, «шумопонижение заголовка»). */
+.uris-badge-dot {
+    position: absolute;
+    top: -3px;
+    right: -3px;
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: var(--uris-err, #e05050);
+    box-shadow: 0 0 0 2px var(--uris-surface-header, #141414);
+}
+.uris-badge-dot[hidden] { display: none; }
+.uris-error-count { font-weight: 400; opacity: var(--uris-o-85); margin-left: 2px; }
+.uris-error-panel {
+    position: fixed;
+    top: 0;
+    right: 0;
+    /* Выше любого содержимого вкладок: на мобиле тулбар галереи — sticky с
+       z-index: 5 (см. media ≤768px) в том же stacking-контексте .uris-window,
+       и при z=3 он рисовался поверх открытой панели и перехватывал её тапы.
+       Панель — транзиентный оверлей, ниже шапки окна не опускается. */
+    z-index: 30;
+    width: min(380px, calc(100% - 20px));
+    max-height: min(70vh, 420px);
+    overflow-y: auto;
+    box-sizing: border-box;
+    padding: 10px;
+    font-size: var(--uris-font);
+    background: var(--uris-bg);
+    color: var(--uris-text-strong);
+    border: 1px solid var(--uris-border-soft);
+    border-radius: var(--uris-radius-card);
+    box-shadow: 0 8px 28px rgba(0,0,0,.35);
+}
+.uris-error-panel[hidden] { display: none; }
+.uris-error-rows { display: flex; flex-direction: column; gap: 3px; }
+.uris-error-row { display: flex; align-items: flex-start; gap: 5px; opacity: var(--uris-o-85); word-break: break-word; }
+.uris-error-row small { flex: 1 1 100%; color: var(--uris-text-mut); }
+.uris-error-empty { opacity: var(--uris-o-50); }
+/* Тоны строк пула: жёсткая ошибка — красная заливка (как fail-строки
+   очереди), предупреждение (level:'warn', обычно quiet) — приглушено. */
+.uris-pool-fail { background: color-mix(in srgb, var(--uris-err, #e05050) 18%, transparent); border-radius: var(--uris-radius-card); padding: 2px 6px; }
+.uris-pool-warn { color: var(--uris-text-mut); border-left: 2px solid var(--uris-warn-line, rgba(204, 153, 0, 0.35)); padding-left: 6px; }
+/* Строки очереди: успех зелёным, неудача красным. Отмена остаётся без заливки. */
+.uris-queue-row { flex-wrap: wrap; border-radius: var(--uris-radius-card); padding: 3px 6px; }
+.uris-queue-row small { flex: 1 1 100%; }
+.uris-queue-ok { background: color-mix(in srgb, var(--uris-accent) 28%, transparent); }
+.uris-queue-fail { background: color-mix(in srgb, var(--uris-err, #b34141) 32%, transparent); }
+.uris-queue-row-cancel { margin-left: auto; flex: 0 0 auto; background: none; border: none; color: var(--uris-text-mut); font-size: var(--uris-icon); line-height: 1; cursor: pointer; padding: 0 2px; }
+.uris-queue-row-cancel:hover { color: var(--uris-err, #b34141); }
+.uris-queue-row-retry { margin-left: auto; flex: 0 0 auto; background: var(--uris-surface-btn); border: 1px solid var(--uris-border-soft); color: var(--uris-text-mut); border-radius: var(--uris-radius); padding: 1px 8px; font-size: var(--uris-font-sm); cursor: pointer; }
+.uris-queue-row-retry:hover { background: var(--uris-surface-btn-hover); border-color: var(--uris-border); color: var(--uris-text-strong); }
+.uris-pending-discard { margin-left: auto; flex: 0 0 auto; font-size: var(--uris-font); }
+/* Recovery-строка: статус+контекст первой строкой, текст ошибки — полной
+   строкой ниже (без wrap узкая панель жмёт ошибку в колонку в 5 слов). */
+.uris-pending-row { flex-wrap: wrap; }
+.uris-pending-row small { padding-left: 2px; }
+.uris-error-panel-actions { display: flex; justify-content: flex-end; margin-bottom: 8px; }
+
+@media (max-width: 768px) {
+    .uris-error-panel {
+        position: fixed;
+        /* top-привязка вместо bottom: в ST-мобиле body { position: fixed }
+           схлопывает контейнер fixed-элементов, и bottom:N уводит панель
+           за верхний край. top + max-height работают всегда. Лист открывается
+           под шапкой окна (высота шапки ~44px от --uris-st-top). */
+        top: calc(var(--uris-st-top, 0px) + 48px);
+        right: 8px;
+        left: 8px;
+        bottom: auto;
+        width: auto;
+        max-height: min(65dvh, 440px);
+        border-radius: var(--uris-radius-card);
+    }
+}
+
+/* ── Классы взамен inline-стилей (вкладки «Bridge»/«Медиа», подтверждения) ──
+   Радиусы картинок/превью — общий --uris-radius-card; рамки — токены границ:
+   внутри окна адаптив к теме дают --uris-* токены, как у остальных вкладок. */
+.uris-media-img {
+    display: block; max-width: 100%; max-height: 240px;
+    border-radius: var(--uris-radius-card); border: 1px solid var(--uris-border-soft);
+}
+.uris-media-feed { display: flex; flex-wrap: wrap; gap: var(--uris-gap); }
+.uris-media-feed-item {
+    display: block; max-width: 96px; max-height: 96px;
+    border-radius: var(--uris-radius-card); border: 1px solid var(--uris-border-soft);
+    cursor: pointer;
+}
+.uris-flex-wrap { display: flex; flex-wrap: wrap; gap: var(--uris-gap); }
+.uris-pre { white-space: pre-wrap; }
+.uris-label-block { display: block; margin-top: 10px; }
+.uris-tpl-chip {
+    display: inline-block; padding: 1px 8px; margin: 2px;
+    border: 1px solid var(--uris-border-soft); border-radius: var(--uris-radius-pill);
+    background: var(--uris-surface-btn); font-size: var(--uris-font-xs);
+}
+/* Карточки галереи caller'а в Bridge (72×72) и бокс списка референсов. */
+.uris-lab-box {
+    border: 1px solid var(--uris-border-soft); border-radius: var(--uris-radius-card);
+    padding: 4px; margin: 4px 0;
+}
+.uris-lab-refs { max-height: 160px; overflow: auto; }
+.uris-lab-refs .checkbox_label { margin: 2px 0; }
+.uris-lab-card {
+    position: relative; border: 1px solid var(--uris-border-soft);
+    border-radius: var(--uris-radius-card); padding: 2px;
+}
+.uris-lab-card-img {
+    display: block; width: 72px; height: 72px;
+    object-fit: cover; border-radius: var(--uris-radius-card);
+}
+.uris-lab-card-img.uris-is-missing { opacity: var(--uris-o-40); }
+/* Кнопка удаления остаётся .uris-btn uris-btn-ghost — здесь только позиционирование. */
+.uris-lab-card-del { position: absolute; top: 2px; right: 2px; padding: 0 5px; line-height: 1.2; }
+
+/*! PhotoSwipe main CSS by Dmytro Semenov | photoswipe.com */
+
+.pswp {
+  --pswp-bg: #000;
+  --pswp-placeholder-bg: #222;
+  
+
+  --pswp-root-z-index: 100000;
+  
+  --pswp-preloader-color: rgba(79, 79, 79, 0.4);
+  --pswp-preloader-color-secondary: rgba(255, 255, 255, 0.9);
+  
+  /* defined via js:
+  --pswp-transition-duration: 333ms; */
+  
+  --pswp-icon-color: #fff;
+  --pswp-icon-color-secondary: #4f4f4f;
+  --pswp-icon-stroke-color: #4f4f4f;
+  --pswp-icon-stroke-width: 2px;
+
+  --pswp-error-text-color: var(--pswp-icon-color);
+}
+
+
+/*
+	Styles for basic PhotoSwipe (pswp) functionality (sliding area, open/close transitions)
+*/
+
+.pswp {
+	position: fixed;
+	top: 0;
+	left: 0;
+	width: 100%;
+	height: 100%;
+	z-index: var(--pswp-root-z-index);
+	display: none;
+	touch-action: none;
+	outline: 0;
+	opacity: 0.003;
+	contain: layout style size;
+	-webkit-tap-highlight-color: rgba(0, 0, 0, 0);
+}
+
+/* Prevents focus outline on the root element,
+  (it may be focused initially) */
+.pswp:focus {
+  outline: 0;
+}
+
+.pswp * {
+  box-sizing: border-box;
+}
+
+.pswp img {
+  max-width: none;
+}
+
+.pswp--open {
+	display: block;
+}
+
+.pswp,
+.pswp__bg {
+	transform: translateZ(0);
+	will-change: opacity;
+}
+
+.pswp__bg {
+  opacity: 0.005;
+	background: var(--pswp-bg);
+}
+
+.pswp,
+.pswp__scroll-wrap {
+	overflow: hidden;
+}
+
+.pswp__scroll-wrap,
+.pswp__bg,
+.pswp__container,
+.pswp__item,
+.pswp__content,
+.pswp__img,
+.pswp__zoom-wrap {
+	position: absolute;
+	top: 0;
+	left: 0;
+	width: 100%;
+	height: 100%;
+}
+
+.pswp__img,
+.pswp__zoom-wrap {
+	width: auto;
+	height: auto;
+}
+
+.pswp--click-to-zoom.pswp--zoom-allowed .pswp__img {
+	cursor: -webkit-zoom-in;
+	cursor: -moz-zoom-in;
+	cursor: zoom-in;
+}
+
+.pswp--click-to-zoom.pswp--zoomed-in .pswp__img {
+	cursor: move;
+	cursor: -webkit-grab;
+	cursor: -moz-grab;
+	cursor: grab;
+}
+
+.pswp--click-to-zoom.pswp--zoomed-in .pswp__img:active {
+  cursor: -webkit-grabbing;
+  cursor: -moz-grabbing;
+  cursor: grabbing;
+}
+
+/* :active to override grabbing cursor */
+.pswp--no-mouse-drag.pswp--zoomed-in .pswp__img,
+.pswp--no-mouse-drag.pswp--zoomed-in .pswp__img:active,
+.pswp__img {
+	cursor: -webkit-zoom-out;
+	cursor: -moz-zoom-out;
+	cursor: zoom-out;
+}
+
+
+/* Prevent selection and tap highlights */
+.pswp__container,
+.pswp__img,
+.pswp__button,
+.pswp__counter {
+	-webkit-user-select: none;
+	-moz-user-select: none;
+	-ms-user-select: none;
+	user-select: none;
+}
+
+.pswp__item {
+	/* z-index for fade transition */
+	z-index: 1;
+	overflow: hidden;
+}
+
+.pswp__hidden {
+	display: none !important;
+}
+
+/* Allow to click through pswp__content element, but not its children */
+.pswp__content {
+  pointer-events: none;
+}
+.pswp__content > * {
+  pointer-events: auto;
+}
+
+
+/*
+
+  PhotoSwipe UI
+
+*/
+
+/*
+	Error message appears when image is not loaded
+	(JS option errorMsg controls markup)
+*/
+.pswp__error-msg-container {
+  display: grid;
+}
+.pswp__error-msg {
+	margin: auto;
+	font-size: 1em;
+	line-height: 1;
+	color: var(--pswp-error-text-color);
+}
+
+/*
+class pswp__hide-on-close is applied to elements that
+should hide (for example fade out) when PhotoSwipe is closed
+and show (for example fade in) when PhotoSwipe is opened
+ */
+.pswp .pswp__hide-on-close {
+	opacity: 0.005;
+	will-change: opacity;
+	transition: opacity var(--pswp-transition-duration) cubic-bezier(0.4, 0, 0.22, 1);
+	z-index: 10; /* always overlap slide content */
+	pointer-events: none; /* hidden elements should not be clickable */
+}
+
+/* class pswp--ui-visible is added when opening or closing transition starts */
+.pswp--ui-visible .pswp__hide-on-close {
+	opacity: 1;
+	pointer-events: auto;
+}
+
+/* <button> styles, including css reset */
+.pswp__button {
+	position: relative;
+	display: block;
+	width: 50px;
+	height: 60px;
+	padding: 0;
+	margin: 0;
+	overflow: hidden;
+	cursor: pointer;
+	background: none;
+	border: 0;
+	box-shadow: none;
+	opacity: 0.85;
+	-webkit-appearance: none;
+	-webkit-touch-callout: none;
+}
+
+.pswp__button:hover,
+.pswp__button:active,
+.pswp__button:focus {
+  transition: none;
+  padding: 0;
+  background: none;
+  border: 0;
+  box-shadow: none;
+  opacity: 1;
+}
+
+.pswp__button:disabled {
+  opacity: 0.3;
+  cursor: auto;
+}
+
+.pswp__icn {
+  fill: var(--pswp-icon-color);
+  color: var(--pswp-icon-color-secondary);
+}
+
+.pswp__icn {
+  position: absolute;
+  top: 14px;
+  left: 9px;
+  width: 32px;
+  height: 32px;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.pswp__icn-shadow {
+  stroke: var(--pswp-icon-stroke-color);
+  stroke-width: var(--pswp-icon-stroke-width);
+  fill: none;
+}
+
+.pswp__icn:focus {
+	outline: 0;
+}
+
+/*
+	div element that matches size of large image,
+	large image loads on top of it,
+	used when msrc is not provided
+*/
+div.pswp__img--placeholder,
+.pswp__img--with-bg {
+	background: var(--pswp-placeholder-bg);
+}
+
+.pswp__top-bar {
+	position: absolute;
+	left: 0;
+	top: 0;
+	width: 100%;
+	height: 60px;
+	display: flex;
+  flex-direction: row;
+  justify-content: flex-end;
+	z-index: 10;
+
+	/* allow events to pass through top bar itself */
+	pointer-events: none !important;
+}
+.pswp__top-bar > * {
+  pointer-events: auto;
+  /* this makes transition significantly more smooth,
+     even though inner elements are not animated */
+  will-change: opacity;
+}
+
+/* ── Мёртвый тап: закрывающийся просмотрщик прозрачен для hit-теста ──
+   lightbox.js в событии 'close' (синхронно, до анимации) ставит pointer-events:
+   none на корень + класс uris-pswp-closing. Корневого none НЕдостаточно:
+   вендорный CSS ЯВНО возвращает hit-тест потомкам — .pswp__content > *
+   (картинка; следующий «автоматный» тап после свайпа падает именно туда),
+   .pswp--ui-visible .pswp__hide-on-close (верхний бар в момент закрытия) и
+   .pswp__top-bar > * (все дети топ-бара: кнопки, счётчик, прелоадер).
+   Инертный элемент без слушателей (вендор снимает их первой строкой close())
+   просто съедает тап. Перечислять исключения вендора хрупко (у каждой версии
+   свой набор) — глушим ВСЁ поддерево универсальным правилом. Потерь нет:
+   кнопки в окне закрытия мертвы в любом случае, а тапы уходят странице —
+   «нажал на другое, оно открылось сразу». Правило стоит ПОСЛЕ всех вендорных
+   pointer-events-правил pswp-секции (каскад при равной специфичности). */
+.uris-pswp-closing,
+.uris-pswp-closing * { pointer-events: none !important; }
+
+
+/*
+
+  Close button
+
+*/
+.pswp__button--close {
+  margin-right: 6px;
+}
+
+
+/*
+
+  Arrow buttons
+
+*/
+.pswp__button--arrow {
+  position: absolute;
+  top: 0;
+  width: 75px;
+  height: 100px;
+  top: 50%;
+  margin-top: -50px;
+}
+
+.pswp__button--arrow:disabled {
+  display: none;
+  cursor: default;
+}
+
+.pswp__button--arrow .pswp__icn {
+  top: 50%;
+  margin-top: -30px;
+  width: 60px;
+  height: 60px;
+  background: none;
+  border-radius: 0;
+}
+
+.pswp--one-slide .pswp__button--arrow {
+  display: none;
+}
+
+/* hide arrows on touch screens */
+.pswp--touch .pswp__button--arrow {
+  visibility: hidden;
+}
+
+/* show arrows only after mouse was used */
+.pswp--has_mouse .pswp__button--arrow {
+  visibility: visible;
+}
+
+.pswp__button--arrow--prev {
+  right: auto;
+  left: 0px;
+}
+
+.pswp__button--arrow--next {
+  right: 0px;
+}
+.pswp__button--arrow--next .pswp__icn {
+  left: auto;
+  right: 14px;
+  /* flip horizontally */
+  transform: scale(-1, 1);
+}
+
+/*
+
+  Zoom button
+
+*/
+.pswp__button--zoom {
+  display: none;
+}
+
+.pswp--zoom-allowed .pswp__button--zoom {
+  display: block;
+}
+
+/* "+" => "-" */
+.pswp--zoomed-in .pswp__zoom-icn-bar-v {
+  display: none;
+}
+
+
+/*
+
+  Loading indicator
+
+*/
+.pswp__preloader {
+  position: relative;
+  overflow: hidden;
+  width: 50px;
+  height: 60px;
+  margin-right: auto;
+}
+
+.pswp__preloader .pswp__icn {
+  opacity: 0;
+  transition: opacity 0.2s linear;
+  animation: pswp-clockwise 600ms linear infinite;
+}
+
+.pswp__preloader--active .pswp__icn {
+  opacity: 0.85;
+}
+
+@keyframes pswp-clockwise {
+  0% { transform: rotate(0deg); }
+  100% { transform: rotate(360deg); }
+}
+
+
+/*
+
+  "1 of 10" counter
+
+*/
+.pswp__counter {
+  height: 30px;
+  margin-top: 15px;
+  margin-inline-start: 20px;
+  font-size: 14px;
+  line-height: 30px;
+  color: var(--pswp-icon-color);
+  text-shadow: 1px 1px 3px var(--pswp-icon-color-secondary);
+  opacity: 0.85;
+}
+
+.pswp--one-slide .pswp__counter {
+  display: none;
+}
+
+/* ════ URIS: адаптация PhotoSwipe к SillyTavern ════
+   1) ST mobile (mobile-styles.css, @media ≤1000px) ставит body { position: fixed },
+   из-за этого html вырождается по высоте и вендорная height: 100% у fixed-элемента
+   ненадёжна. Рецепт тот же, что у наших оверлеев: явные 100vh → 100dvh.
+   2) z-index: вендорный дефолт --pswp-root-z-index = 100000 — над всей таверной;
+   фиксируем на --uris-z-lightbox (см. :root), чтобы апгрейд вендора не уронил
+   просмотрщик под окно/оверлеи и чтобы он не висел над диалогами ST. ST-попапы —
+   <dialog> в top layer, они всегда выше. */
+.pswp.uris-pswp {
+    height: 100vh;
+    height: 100dvh;
+    --pswp-root-z-index: var(--uris-z-lightbox);
+    z-index: var(--uris-z-lightbox);
+}
+
+/* Кнопки действий галереи в top bar (иконки Font Awesome вместо SVG).
+   Базовая геометрия — у .pswp__button (44×44, тап-таргет соблюдён). */
+.pswp__button.uris-pswp-act {
+    color: #fff;
+    font-size: var(--uris-icon);
+    opacity: .9;
+}
+.pswp__button.uris-pswp-act:hover { opacity: 1; background: rgba(255, 255, 255, 0.12); }
+.pswp__button.uris-pswp-act-danger:hover { background: var(--uris-err-hover); }
+.pswp__button.uris-pswp-act:focus-visible { outline: 2px solid #fff; outline-offset: -2px; }
+@media (max-width: 768px) {
+    .pswp__button.uris-pswp-act { font-size: calc(18px * var(--uris-font-scale, 1)); }
+}
+
+.croppr-container * {
+  user-select: none;
+  -moz-user-select: none;
+  -webkit-user-select: none;
+  -ms-user-select: none;
+  box-sizing: border-box;
+  -webkit-box-sizing: border-box;
+  -moz-box-sizing: border-box;
+}
+
+.croppr-container img {
+  vertical-align: middle;
+  max-width: 100%;
+}
+
+.croppr {
+  position: relative;
+  display: inline-block;
+}
+
+.croppr-overlay {
+  background: rgba(0,0,0,0.5);
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  z-index: 1;
+  cursor: crosshair;
+}
+
+.croppr-region {
+  border: 1px dashed rgba(0, 0, 0, 0.5);
+  position: absolute;
+  z-index: 3;
+  cursor: move;
+  top: 0;
+}
+
+.croppr-imageClipped {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  z-index: 2;
+  pointer-events: none;
+}
+
+.croppr-handle {
+  border: 1px solid black;
+  background-color: white;
+  width: 10px;
+  height: 10px;
+  position: absolute;
+  z-index: 4;
+  top: 0;
+}
+/* ════ URIS: crop dialog (Croppr) ════
+   Поверх открытого PhotoSwipe (save-as-reference из просмотрщика):
+   pswp = --uris-z-lightbox, кроп = --uris-z-modal-top (см. :root). */
+.uris-crop-overlay { z-index: var(--uris-z-modal-top); }
+.uris-crop-dialog { max-width: min(92vw, 640px); }
+.uris-crop-stage {
+    position: relative;
+    max-height: 60vh;
+    max-height: 60dvh;
+    overflow: visible; /* ручки кропа выступают за края картинки — не срезать их хит-зоны */
+    text-align: center;
+    background: repeating-conic-gradient(rgba(255,255,255,.06) 0% 25%, transparent 0% 50%) 50% / 16px 16px;
+    touch-action: none; /* жестами управляет Croppr, не скролл */
+}
+.uris-crop-stage img { max-width: 100%; max-height: 60vh; max-height: 60dvh; }
+
+/* ── Ручки кропа: тач-таргеты вместо вендорных 10×10 px ──
+   У вендора ручка — 10×10 px, и события висят прямо на ней: палец промахивается,
+   тап рядом с углом попадает в оверлей, который немедленно начинает НОВЫЙ кроп
+   с 1×1 бокса — выбранная рамка «слетает». Расширяем сам ЭЛЕМЕНТ (хит-зона =
+   его бокс; redraw() центрирует ручку по offsetWidth, так что она остаётся
+   отцентрованной на углу), а визуальный квадрат рисуем ::after по центру.
+   Ручки у краёв картинки выступают наружу — поэтому у stage overflow: visible. */
+.uris-crop-stage .croppr-handle {
+    width: 30px; height: 30px;
+    background: transparent; border: 0;
+    touch-action: none;
+}
+.uris-crop-stage .croppr-handle::after {
+    content: ''; position: absolute; left: 50%; top: 50%;
+    width: 14px; height: 14px; transform: translate(-50%, -50%);
+    background: #fff; border: 1px solid rgba(0, 0, 0, 0.55); border-radius: 3px;
+    box-shadow: 0 1px 4px rgba(0, 0, 0, 0.45);
+    box-sizing: border-box;
+}
+/* Палец против курсора: на тач-устройствах хит-зона — 44px (Apple HIG / Material). */
+@media (pointer: coarse) {
+    .uris-crop-stage .croppr-handle { width: 44px; height: 44px; }
+    .uris-crop-stage .croppr-handle::after { width: 18px; height: 18px; }
+}
+.uris-crop-presets { justify-content: center; }
+.uris-batch-crop {
+    background: none; border: none; color: var(--uris-text-mut); cursor: pointer;
+    padding: 6px; font-size: var(--uris-font);
+}
+.uris-batch-crop:hover { color: var(--uris-text-strong); }
+
+/* ── Меню копирования текстовых полей (gallery-actions.copyItemText) ──
+   uris-crop-overlay поднимает слой до --uris-z-modal-top — меню открывается
+   и поверх открытого PhotoSwipe-просмотрщика. */
+.uris-copy-menu { max-width: min(92vw, 480px); }
+.uris-copy-list {
+    display: flex; flex-direction: column; gap: 6px;
+    max-height: 60vh; max-height: 60dvh; overflow-y: auto;
+    touch-action: pan-y;
+}
+.uris-copy-field {
+    display: flex; flex-direction: column; gap: 2px; text-align: left;
+    padding: 10px 12px; border: 1px solid var(--uris-border-soft);
+    border-radius: var(--uris-radius-card); background: var(--uris-surface-btn);
+    cursor: pointer; color: var(--uris-text-strong); font: inherit;
+}
+.uris-copy-field:hover { border-color: var(--uris-accent, var(--uris-border)); }
+.uris-copy-field-label { font-weight: 600; font-size: var(--uris-font); }
+.uris-copy-field-snippet {
+    opacity: var(--uris-o-70); font-size: var(--uris-font-xs);
+    overflow-wrap: anywhere; white-space: normal;
+}
+
+/* ── Карточное меню жестов (card-action-menu.js) ──
+   Мобильный (<768px): шит снизу во всю ширину; десктоп: поповер у курсора
+   (позицию задаёт JS инлайном). Хост-оверлей — общий uris-picker-overlay.
+   position:absolute обязателен: инлайн left/top JS действует только у
+   позиционированного элемента — иначе flex оверлея центрирует меню и клэмп
+   к краю мёртв (регресс 2026-10-04). */
+.uris-action-menu {
+    position: absolute;
+    background: var(--uris-surface-card);
+    border: 1px solid var(--uris-border-soft);
+    border-radius: var(--uris-radius-card);
+    padding: 6px; min-width: 200px; max-width: min(92vw, 320px);
+}
+.uris-action-menu-grip {
+    width: 36px; height: 4px; border-radius: var(--uris-radius-pill);
+    background: var(--uris-border); margin: 0 auto 4px;
+    display: none;
+}
+.uris-action-menu-title {
+    font-size: var(--uris-font-sm); color: var(--uris-text-mut);
+    padding: 4px 8px 6px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.uris-action-menu-list { display: flex; flex-direction: column; gap: 2px; }
+.uris-action-menu-item {
+    display: flex; align-items: center; gap: 10px; width: 100%;
+    padding: 11px 12px; border: 0; border-radius: var(--uris-radius);
+    background: none; color: var(--uris-text-strong); cursor: pointer;
+    font: inherit; font-size: var(--uris-font); text-align: left;
+    min-height: 44px; box-sizing: border-box;
+    transition: background .12s;
+}
+.uris-action-menu-item:hover { background: var(--uris-surface-btn); }
+.uris-action-menu-item i { width: 18px; text-align: center; color: var(--uris-text-mut); }
+.uris-action-menu-item-danger, .uris-action-menu-item-danger i { color: var(--uris-err); }
+.uris-action-menu-item-danger:hover { background: var(--uris-err-soft); }
+.uris-action-menu-item:disabled { opacity: var(--uris-o-50); cursor: default; }
+
+@media (max-width: 767px) {
+    .uris-action-menu-overlay { align-items: flex-end; }
+    .uris-action-menu {
+        /* Шит снизу позиционируется флексом оверлея — инлайн left/top JS на
+           мобиле не ставит, абсолют здесь только сломал бы прижатие к низу. */
+        position: static;
+        width: 100%; max-width: none;
+        border-radius: var(--uris-radius-window) var(--uris-radius-window) 0 0;
+        padding-bottom: calc(6px + env(safe-area-inset-bottom, 0px));
+    }
+    .uris-action-menu-grip { display: block; }
+}
+
+/* ── Инлайн-оболочки в сообщениях чата (src/inline/render.js) ──
+   Контейнер картинки/заглушки в .mes_text; позиционирование бейджа —
+   относительно оболочки. Остальное (рамки, кнопки, pending-frame) — inline. */
+.uris-inl-shell {
+    max-width: min(100%, 420px);
+    margin: 6px 0;
+    position: relative;
+    line-height: 0;
+}
+.uris-inl-shell img {
+    max-width: 100%;
+    max-height: 420px;
+    width: auto;
+    /* Единый радиус картинок расширения (--uris-radius-card), как у плиток
+       галереи/референсов и инлайн-заглушки (было 10px — радиус окна). */
+    border-radius: var(--uris-radius-card);
+    border: 1px solid var(--SmartThemeBorderColor, #444);
+    cursor: zoom-in;
+    display: block;
+}
+.uris-inl-badge {
+    position: absolute;
+    top: 8px;
+    left: 8px;
+    z-index: 1;
+    max-width: calc(100% - 16px);
+    padding: 2px 8px;
+    border-radius: var(--uris-radius-pill);
+    background: rgba(0, 0, 0, 0.55);
+    color: #fff;
+    font-size: var(--uris-font-xs);
+    line-height: 1.5;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    pointer-events: none;
+}
+
+/* Заглушка «генерирую…» и кнопки инлайн-блока: классы вместо inline-стилей
+   (render.js). Рамки/цвет — от темы ST (элемент живёт в сообщении чата),
+   радиусы — токены URIS: заглушка совпадает с картинкой (--uris-radius-card),
+   кнопки — с системным --uris-radius. Аспект заглушки динамический —
+   остаётся единственным inline-стилем (aspect-ratio в render.js). */
+.uris-inl-pending {
+    max-width: 100%;
+    /* Кап = max-height готовой картинки (uris-inl-shell img): 9:16-заглушка
+       не раздувает пост на ~750px и при готовности не даёт layout-скачок. */
+    max-height: 420px;
+    border: 1px dashed var(--SmartThemeBorderColor, #666);
+    border-radius: var(--uris-radius-card);
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    gap: 6px; padding: 12px;
+    color: var(--SmartThemeEmColor, inherit);
+    font-size: small; line-height: 1.4;
+}
+.uris-inl-cancel {
+    margin-top: 2px; padding: 2px 10px;
+    border-radius: var(--uris-radius);
+    border: 1px solid var(--SmartThemeBorderColor, #666);
+    background: transparent; color: inherit; cursor: pointer;
+    font-size: small;
+}
+.uris-inl-btn {
+    display: inline-flex; align-items: center; gap: 6px;
+    margin: 4px 0; padding: 4px 10px;
+    border-radius: var(--uris-radius);
+    border: 1px solid var(--SmartThemeBorderColor, #666);
+    background: transparent; color: inherit; cursor: pointer;
+    font-size: small; line-height: 1.4;
+}
+
+/* Компакт-режим (inlineChips): чип на месте маркера. Готовый — кнопка
+   (клик раскрывает картинку), ожидающий — span со спиннером и ✕. */
+.uris-inl-chip {
+    display: inline-flex; align-items: center; gap: 6px;
+    margin: 4px 0; padding: 3px 10px;
+    border-radius: var(--uris-radius-pill);
+    border: 1px dashed var(--SmartThemeBorderColor, #666);
+    background: transparent; color: inherit;
+    font-size: small; line-height: 1.4;
+}
+button.uris-inl-chip { cursor: pointer; }
+.uris-inl-chip .uris-inl-cancel { margin: 0; padding: 0 6px; }
+/* ⌃ на раскрытой из чипа картинке (верхний правый угол, бейдж — слева). */
+.uris-inl-collapse {
+    position: absolute; top: 6px; right: 6px; z-index: 2;
+    width: 22px; height: 22px; padding: 0; line-height: 1;
+    border-radius: var(--uris-radius-pill);
+    border: 1px solid var(--SmartThemeBorderColor, #666);
+    background: rgba(0, 0, 0, 0.55); color: #fff;
+    cursor: pointer; font-size: 12px;
+}
+
+/* ── prefers-reduced-motion: спиннеры (консолидированный блок) ──
+   Единая политика «минимум движения»: при reduce гасятся ВСЕ спиннеры
+   расширения — fetch-models, server-probe, pending-server (три вида) и
+   прелоадер лайтбокса. Блок стоит в КОНЦЕ файла: правила-источники
+   (uris-spin на ::before/i) разбросаны выше, и при равной специфичности
+   каскад без этой позиции отдал бы им animation обратно. Пульс лаунчеров
+   гасится отдельным блоком у своего правила (строка ~157).
+   Спиннер при этом остаётся видимым статичным глифом — статус «занят»
+   читается и без вращения. */
+@media (prefers-reduced-motion: reduce) {.uris-fetch-models.loading i,
+    .uris-server-probe.uris-server-loading::before,
+    .uris-server-probe.loading::before,
+    .uris-pswp .pswp__preloader .pswp__icn{ animation: none; }
+}

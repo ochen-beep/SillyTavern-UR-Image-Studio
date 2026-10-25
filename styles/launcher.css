@@ -1,0 +1,65 @@
+/* Launcher button (QR bar) + floating FAB. Split from style.css (hygiene 2026-10-25); imported by the root sheet. */
+
+/* ── Launcher в quick-reply bar ──
+   Квадрат задан явно, как у соседних лаунчеров в баре и у собственного FAB.
+   Без фиксации ширины она складывалась из advance-ширины глифа 🎨 (у разных
+   эмодзи-шрифтов она разная), паддингов и рамки ST, а высота — из строки:
+   кнопка лишь случайно выходила квадратной и «плыла» при смене эмодзи-шрифта,
+   зума или темы. Селектор с двумя id нужен, чтобы перебить паддинг ST
+   (`#qr--bar > .qr--buttons .qr--button { padding: 3px 5px }`): при фиксированной
+   рамке он не влияет на габарит, но сжимает контентную область под глиф. */
+#uris_launcher,
+#qr--bar #uris_launcher,
+#qr--popout #uris_launcher {
+    cursor: pointer; user-select: none;
+    width: 36px; height: 36px; min-width: 36px; min-height: 36px;
+    padding: 0; flex: 0 0 auto;
+    display: inline-flex; align-items: center; justify-content: center;
+}
+#uris_launcher.uris_launcher_active { background: var(--uris-accent); }
+
+/* ── Плавающая кнопка (FAB) ──
+   Перенос из DS Comments. Слой --uris-z-fab намеренно ВЫШЕ чужих панелей и
+   фабов (2998–2999 у Glosses / DS Comments) и НИЖЕ хрома ST (дроверы 3000,
+   top-bar 3005): кнопка остаётся видимой и кликабельной, когда панель другого
+   расширения накрывает её точку, но физически не может перекрыть настройки
+   таверны. Модалки (3500) и лайтбокс (5000) перекрывают её димом. Позиция
+   клэмпится ниже топ-бара (floating-launcher.js). */
+.uris_fab {
+    position: fixed; z-index: var(--uris-z-fab);
+    width: 36px; height: 36px; border-radius: 50%;
+    display: flex; align-items: center; justify-content: center;
+    background: var(--uris-surface-btn);
+    border: 1px solid var(--uris-border);
+    color: var(--uris-text-strong);
+    font-size: 16px;
+    box-shadow: 0 4px 16px rgba(0,0,0,.5);
+    cursor: pointer; user-select: none;
+    touch-action: none; -webkit-tap-highlight-color: transparent;
+    transition: background 0.15s, border-color 0.15s;
+}
+@media (hover: hover) {
+    .uris_fab:hover { background: var(--uris-accent-soft); border-color: var(--uris-accent-line); }
+}
+.uris_fab:focus-visible { outline: 2px solid var(--uris-accent); outline-offset: 2px; }
+.uris_fab.uris_fab_active {
+    background: var(--uris-accent-hover);
+    border-color: var(--uris-accent-line);
+    color: var(--uris-accent);
+}
+.uris_fab.uris_fab_dragging { transition: none !important; cursor: grabbing !important; }
+/* will-change для драга не нужен: left/top — layout-свойства, композитором
+   не двигаются (пустой хинт), а transform занят пульсом uris-pulse. */
+
+/* Пульс генерации — на обоих лаунчерах (класс вешает floating-launcher.js по
+   событиям uris:stage2-start/end). */
+.uris_fab.uris_generating, #uris_launcher.uris_generating {
+    animation: uris-pulse 1.4s ease-in-out infinite; will-change: transform;
+}
+@keyframes uris-pulse { 0%, 100% { transform: scale(1); } 50% { transform: scale(1.12); } }
+@media (prefers-reduced-motion: reduce) {
+    .uris_fab.uris_generating, #uris_launcher.uris_generating { animation: none; opacity: 0.8; will-change: auto; }
+}
+/* Спиннеры гасятся одним консолидированным блоком в КОНЦЕ файла (см. конец
+   style.css): правила-источники стоят позже этого места, и при равной
+   специфичности каскад отдал бы им animation обратно. */

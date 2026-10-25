@@ -1,0 +1,510 @@
+/* References tab: pool grid, folder sidebar, overlay editor, folder manager. Split from style.css (hygiene 2026-10-25); imported by the root sheet. */
+
+/* ── v3: Reference editor aliases ── */
+.uris-ref-editor .uris-hint { margin-bottom: 8px; }
+.uris-ed-aliases { flex: 1; }
+
+/* ── v3-redesign: референсы по чату + пул ── */
+
+/* Extras chips */
+/* Host'ы whitelist/Stage1-описаний во вкладке генерации: чипы идут в горизонтальный
+   ряд с переносом, как в библиотеке референсов (раньше падали по одному вертикально —
+   host не имел раскладки). Содержимое: кнопка «+», затем .uris-extra-chip. */.uris-refs-panel-extras{
+    display: flex; flex-wrap: wrap; gap: 6px; align-items: flex-start; margin-top: 4px;
+}
+.uris-extra-chip {
+    position: relative; border-radius: var(--uris-radius-card); overflow: hidden;
+    border: 1px solid var(--SmartThemeBorderColor);
+    display: inline-block; flex: 0 0 auto;
+    width: 56px;
+    aspect-ratio: 3 / 4;
+}
+.uris-extra-chip img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.uris-extra-name {
+    font-size: var(--uris-font-xs); padding: 2px; text-align: center;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.uris-extra-del {
+    position: absolute; top: 2px; right: 2px;
+    background: rgba(0,0,0,.6); border: none; color: #fff;
+    width: 18px; height: 18px; border-radius: 50%; cursor: pointer;
+    display: flex; align-items: center; justify-content: center;
+    font-size: var(--uris-font-xs);
+}
+/* Drag-and-drop: whitelist chip -> preview (force-include). Pointer Events drive
+   mouse + touch alike; the ghost is a transform-moved clone (compositor, no
+   layout), the source only dims, and the drop commits a single correction. */
+.uris-extra-chip.uris-draggable { touch-action: none; cursor: grab; }
+.uris-extra-chip.uris-dragging { opacity: var(--uris-o-40); }
+.uris-drag-ghost {
+    position: fixed; top: 0; left: 0; margin: 0; pointer-events: none; z-index: var(--uris-z-ghost);
+    opacity: .92; box-shadow: 0 6px 18px rgba(0,0,0,.5); border-radius: var(--uris-radius-card); overflow: hidden;
+    will-change: transform;
+}
+/* Dragging suppresses native text selection over every card (pointerdown is
+   cancelled for the mouse; this covers pen/touch and any mid-move starts). */
+.uris-dragging-active, .uris-dragging-active * {
+    cursor: grabbing !important;
+    user-select: none !important;
+    -webkit-user-select: none !important;
+}
+[data-drop-zone].uris-drop-zone--over {
+    outline: 2px dashed var(--uris-accent); outline-offset: -3px;
+    border-radius: var(--uris-radius-card);
+}
+
+/* ── Вкладка «Референсы» — layout v4 (Figma) ──
+   Десктоп: горизонтальный ряд — sidebar (170px) слева + main (toolbar+grid)
+   в центре + overlay-host (260px) справа, открывается по клику на карточку.
+   Мобайл: вертикальный 3-экранный стек (см. .uris-refs-mobile-stack). */
+.uris-references { display: flex; flex-direction: row; flex: 1; min-height: 0; height: 100%; overflow: hidden; }
+.uris-references.uris-refs-mobile-stack { flex-direction: column; }
+
+/* ── Sidebar (десктоп) ── */
+.uris-refs-sidebar {
+    flex: 0 0 170px; width: 170px;
+    display: flex; flex-direction: column;
+    background: var(--uris-surface-tabs);
+    border-right: 1px solid var(--uris-border-soft);
+    overflow: hidden;
+}
+.uris-folder-list { flex: 1; overflow-y: auto; padding: 4px 0; }
+/* Тащим за бочок: полоска правее сайдбара, ширина — device-local pref. */
+.uris-refs-sidebar-resizer {
+    flex: 0 0 6px; cursor: col-resize; background: transparent;
+    transition: background .15s;
+}
+.uris-refs-sidebar-resizer:hover {
+    background: linear-gradient(to right, transparent 40%, var(--uris-accent) 50%, transparent 60%);
+    opacity: .5;
+}
+.uris-folder-item {
+    display: flex; align-items: center; gap: 8px;
+    width: 100%; padding: 6px 10px; background: none; border: none;
+    color: var(--uris-text-mut); cursor: pointer; text-align: left;
+    font-size: var(--uris-font-sm); transition: background .12s, color .12s;
+}
+.uris-folder-item:hover { color: var(--uris-text-strong); background: var(--uris-tint-hover); }
+.uris-folder-item.uris-folder-item-on {
+    background: var(--uris-accent-soft); color: var(--uris-accent);
+}
+.uris-folder-dot {
+    flex: 0 0 8px; width: 8px; height: 8px; border-radius: 50%;
+    background: var(--uris-text-dim);
+}
+.uris-folder-dot-mute { background: var(--uris-text-dim); opacity: var(--uris-o-50); }
+.uris-folder-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* Дерево (v4.1): группа — жирное имя + рекурсивный счётчик; дети — с отступом
+   и направляющей линией. Свёртка — отдельная кнопка-шеврон справа от строки. */
+.uris-folder-name-group { font-weight: 600; }
+.uris-folder-count-total { color: var(--uris-text-mut); font-weight: 600; }
+.uris-folder-star { flex: 0 0 auto; font-size: var(--uris-font-label); color: var(--uris-accent); opacity: var(--uris-o-85); }
+.uris-folder-sub {
+    display: block; font-size: var(--uris-font-label);
+    color: var(--uris-text-dim); font-weight: 400;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.uris-folder-chev {
+    flex: 0 0 20px; width: 20px; height: 24px; padding: 0; border: 0;
+    display: inline-flex; align-items: center; justify-content: center;
+    background: transparent; color: var(--uris-text-dim); cursor: pointer;
+    font-size: var(--uris-font-label);
+    transition: color .12s, transform .12s;
+}
+.uris-folder-chev:hover { color: var(--uris-text-strong); }
+.uris-folder-chev i { transition: transform .12s; }
+.uris-folder-chev.uris-folder-chev-closed i { transform: rotate(-90deg); }
+.uris-folder-kids { position: relative; }
+.uris-folder-kids::before {
+    content: ''; position: absolute; left: 15px; top: 0; bottom: 2px;
+    width: 1px; background: var(--uris-border-soft);
+}
+.uris-folder-row-child .uris-folder-item { padding-left: 24px; }
+/* Подсказка жеста внизу сайдбара (статичная, не на каждой строке). */
+.uris-folder-count { font-size: var(--uris-font-xs); color: var(--uris-text-dim); }
+.uris-folder-header {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 8px 8px 4px 10px;
+}
+.uris-folder-header-label {
+    font-size: var(--uris-font-label); text-transform: uppercase; letter-spacing: .15em; color: var(--uris-text-dim);
+}
+.uris-folder-header-add {
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 22px; height: 22px; padding: 0; border: 0; border-radius: var(--uris-radius);
+    background: transparent; color: var(--uris-text-dim); cursor: pointer;
+    transition: background .12s, color .12s;
+}
+.uris-folder-header-add:hover { color: var(--uris-text-strong); background: var(--uris-surface-btn); }
+.uris-folder-row { display: flex; align-items: center; }
+.uris-folder-row .uris-folder-item { flex: 1; min-width: 0; }
+.uris-folder-editor-actions button {
+    display: inline-flex; align-items: center; justify-content: center;
+    border: 0; background: transparent; color: var(--uris-text-dim); cursor: pointer;
+}
+.uris-folder-editor-actions button:hover { color: var(--uris-text-strong); background: var(--uris-surface-btn); }
+.uris-folder-editor { padding: 4px 10px 8px 26px; border-bottom: 1px solid var(--uris-border-soft); }
+.uris-folder-editor-name { box-sizing: border-box; width: 100%; margin-bottom: 6px; }
+.uris-folder-editor-palette { display: flex; gap: 5px; flex-wrap: wrap; }
+.uris-folder-editor-swatch {
+    flex: 0 0 16px; width: 16px; height: 16px; padding: 0;
+    border: 2px solid transparent; border-radius: 50%; cursor: pointer;
+}
+.uris-folder-editor-swatch.uris-folder-editor-swatch-on { border-color: var(--uris-text-strong); }
+.uris-folder-editor-actions { display: flex; justify-content: flex-end; gap: 4px; margin-top: 6px; }
+.uris-folder-editor-actions button { width: 24px; height: 24px; }
+.uris-folder-editor-delete:hover { color: var(--uris-err); }
+
+/* ── Main (toolbar + grid) ── */
+.uris-refs-main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.uris-refs-toolbar {
+    display: flex; flex-wrap: wrap; align-items: center; gap: 6px;
+    padding: 6px var(--uris-pad); flex-shrink: 0;
+    border-bottom: 1px solid var(--uris-border-soft);
+}
+/* Крошки пути + «⋯» действий активной папки. На узком контейнере первыми
+   сжимаются крошки (flex + ellipsis на кнопке), поиск — после них. */
+.uris-refs-crumbs {
+    flex: 1 1 130px; min-width: 80px;
+    display: flex; align-items: center; gap: 4px;
+    overflow: hidden; min-height: 26px;
+}
+.uris-crumb {
+    padding: 3px 10px; border-radius: var(--uris-radius-pill);
+    background: var(--uris-surface-btn); border: 1px solid var(--uris-border-soft);
+    color: var(--uris-text-mut); font-size: var(--uris-font-sm);
+    cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    max-width: 150px; transition: background .12s, color .12s;
+}
+.uris-crumb:hover { color: var(--uris-text-strong); }
+.uris-crumb.uris-crumb-cur {
+    background: var(--uris-accent-soft); border-color: var(--uris-accent-line); color: var(--uris-accent);
+}
+.uris-crumb-sep { flex: 0 0 auto; color: var(--uris-text-dim); font-size: var(--uris-font-xs); }
+.uris-refs-folder-menu {
+    flex: 0 0 26px; width: 26px; height: 26px; padding: 0;
+    display: inline-flex; align-items: center; justify-content: center;
+    background: var(--uris-surface-btn); border: 1px solid var(--uris-border);
+    border-radius: var(--uris-radius); color: var(--uris-text-mut);
+    cursor: pointer; font-size: var(--uris-font);
+    transition: background .12s, border-color .12s, color .12s;
+}
+/* Единый hover квадратных кнопок-инструментов (как у .uris-btn-ghost):
+   фон темнее, рамка ярче, текст ярче. Акцентный hover оставлен только
+   «добавить»-кнопкам, красный — деструктивным. */
+.uris-refs-folder-menu:hover { background: var(--uris-surface-btn-hover); border-color: var(--uris-border); color: var(--uris-text-strong); }
+/* Нет контекста (Все/Без папки) — кнопка полностью приглушена: без hover-оживления
+   (общий hover-рул ниже по каскаду не должен «оживлять» выключенную кнопку). */
+.uris-refs-folder-menu-off {
+    opacity: .35; cursor: default;
+    background: transparent; border-color: transparent; color: var(--uris-text-dim);
+}
+.uris-refs-folder-menu-off:hover { background: transparent; border-color: transparent; color: var(--uris-text-dim); }
+.uris-refs-search { flex: 1 1 160px; min-width: 120px; }
+.uris-refs-search input {
+    width: 100%; padding: 4px 8px; font-size: var(--uris-font-sm);
+    background: var(--uris-surface-btn); border: 1px solid var(--uris-border);
+    border-radius: var(--uris-radius); color: var(--uris-text-strong);
+    outline: none;
+}
+.uris-refs-search input:focus { border-color: var(--uris-accent); }
+.uris-refs-add {
+    display: inline-flex; align-items: center; gap: 6px;
+    flex: 0 0 auto; padding: 6px 12px;
+    background: var(--uris-accent-soft);
+    border: 1px dashed var(--uris-accent-line); border-radius: var(--uris-radius);
+    color: var(--uris-accent); cursor: pointer;
+    font-size: var(--uris-font-sm); white-space: nowrap;
+    transition: background .12s, color .12s;
+}
+.uris-refs-add:hover { color: var(--uris-accent); background: var(--uris-accent-hover); border-color: var(--uris-accent); }
+.uris-refs-add-dest { display: inline-block; max-width: 100px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; vertical-align: bottom; }
+/* wrap обязан быть flex-контейнером: сетка ограничивается высотой только как
+   flex-item (flex:1 + min-height:0). В block-родителе (прежний вариант) grid
+   растёт до высоты контента, а wrap с overflow:hidden его обрезает — низ
+   срезается, скролла нет вообще (заметно и на десктопе в низком окне; на
+   телефоне это «галерея не листается», воспроизводится на refs-real-render.html?cw=600). */
+.uris-refs-grid-wrap { flex: 1; min-height: 0; overflow: hidden; display: flex; flex-direction: column; }
+
+/* ── Карточки 3:4 ── */
+.uris-pool-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(72px, 1fr));
+    grid-auto-rows: min-content; align-items: start;
+    gap: var(--uris-gap); padding: var(--uris-pad);
+    overflow-y: auto; flex: 1; min-height: 0;
+    -webkit-overflow-scrolling: touch;
+    touch-action: pan-y;   /* см. фикс .uris-window button выше */
+}
+.uris-pool-grid .uris-refs-empty {
+    grid-column: 1 / -1; text-align: center;
+    color: var(--uris-text-dim); padding: 32px 8px; font-size: var(--uris-font-sm);
+}
+.uris-pool-tile {
+    position: relative; border-radius: var(--uris-radius-card);
+    overflow: hidden; cursor: pointer;
+    background: var(--uris-surface-card); border: 1px solid transparent;
+    transition: border-color .12s; display: block; isolation: isolate;
+    aspect-ratio: 3 / 4; align-self: start;
+    /* Same as .uris-card: off-screen pool tiles skip layout/paint; 130px is
+       the height estimate until first paint (auto remembers the real one). */
+    content-visibility: auto; contain-intrinsic-size: auto 130px;
+    /* The tile is a real <button> so it is keyboard-focusable; reset the UA
+       button chrome so it keeps the card appearance. */
+    font: inherit; color: inherit; padding: 0; text-align: inherit; width: 100%;
+}
+.uris-pool-tile:hover { border-color: var(--uris-accent); }
+.uris-pool-tile-selected { border-color: var(--uris-accent); }
+.uris-pool-tile:focus { outline: none; }
+.uris-pool-tile:focus-visible { outline: 2px solid var(--uris-accent); outline-offset: 2px; }
+.uris-pool-tile img {
+    position: absolute; inset: 0; width: 100%; height: 100%;
+    object-fit: cover; display: block; background: var(--uris-surface-card);
+}
+.uris-pool-tile-name {
+    position: absolute !important; left: 0; right: 0; bottom: 0; z-index: 2;
+    font-size: var(--uris-font-label); line-height: 1.2; padding: 16px 4px 4px;
+    text-align: center; color: #fff; font-weight: 500;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    background: linear-gradient(to top, rgba(0,0,0,.82) 30%, rgba(0,0,0,0));
+    pointer-events: none;
+}
+.uris-pool-tile-dots {
+    position: absolute; left: 4px; bottom: 18px; z-index: 2;
+    display: flex; gap: 3px; pointer-events: none;
+}
+.uris-pool-tile-dot {
+    width: 8px; height: 8px; border-radius: 50%;
+    box-shadow: 0 0 0 1.5px rgba(0,0,0,.45), 0 1px 2px rgba(0,0,0,.4);
+}
+.uris-pick-selected { outline: 2px solid var(--uris-accent); outline-offset: -2px; }
+
+/* ── Overlay panel (редактор) ── */
+.uris-refs-overlay-host { flex: 0 0 0; }
+.uris-refs-overlay-host.uris-refs-overlay-open {
+    flex: 0 0 260px; width: 260px;
+    border-left: 1px solid var(--uris-border-soft);
+    background: var(--uris-surface-card); overflow: hidden;
+    display: flex; flex-direction: column;
+}
+.uris-refs-overlay-panel { display: flex; flex-direction: column; height: 100%; }
+.uris-refs-overlay-head {
+    display: flex; align-items: center; gap: 8px;
+    padding: 6px 10px; border-bottom: 1px solid var(--uris-border-soft);
+    flex-shrink: 0;
+}
+.uris-refs-overlay-title {
+    flex: 1; font-size: var(--uris-font-sm); color: var(--uris-text-strong);
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.uris-refs-overlay-close {
+    background: none; border: none; color: var(--uris-text-dim);
+    cursor: pointer; font-size: var(--uris-icon); padding: 2px 6px;
+}
+.uris-refs-overlay-close:hover { color: var(--uris-text-strong); }
+.uris-refs-overlay-body {
+    flex: 1; overflow-y: auto; padding: 10px;
+    display: flex; flex-direction: column; gap: 4px;
+}
+/* Description textarea: ровное поле — ручка resize выглядела как «можно тянуть»,
+   но рост поля покрыт кнопкой «развернуть» (maximized-редактор). */
+.uris-ed-desc { resize: none; min-height: 72px; }
+.uris-editor-preview-wrap { position: relative; margin-bottom: 8px; }
+.uris-editor-preview-wrap .uris-editor-preview { margin-bottom: 0; }
+/* Обрезка / замена поверх нижнего угла превью. */
+.uris-editor-preview-actions {
+    position: absolute; right: 8px; bottom: 8px;
+    display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end;
+}
+/* Кнопки — стандартные .uris-btn (32px): отдельный размер 30px выпилен. */
+/* Кнопка-обёртка превью: тап открывает просмотрщик на весь экран. */
+.uris-editor-preview-btn {
+    display: block; width: 100%; padding: 0; margin: 0 0 8px; border: 0; background: none;
+    cursor: zoom-in; font: inherit;
+}
+.uris-editor-preview-btn .uris-editor-preview { margin-bottom: 0; }
+.uris-editor-preview {
+    width: 100%; aspect-ratio: 3 / 4; object-fit: cover;
+    border-radius: var(--uris-radius-card); margin-bottom: 8px;
+}
+.uris-ed-label {
+    font-size: var(--uris-font-label); text-transform: uppercase; letter-spacing: .15em;
+    color: var(--uris-text-dim); margin-top: 4px;
+}
+/* В строке-заголовке поля (Описание + кнопка «развернуть») верхний отступ
+   метки ломает выравнивание по центру строки. */
+.uris-field-head .uris-ed-label { margin-top: 0; }
+.uris-hint { font-size: var(--uris-font-xs); color: var(--uris-text-dim); }
+
+/* Пометка экспериментальной функции (инлайн-генерация). */
+.uris-badge-unstable {
+    display: inline-block; vertical-align: 1px;
+    padding: 0 5px; margin-left: 4px;
+    border-radius: 8px;
+    background: rgba(230, 145, 30, .18);
+    border: 1px solid rgba(230, 145, 30, .55);
+    color: #e6911e;
+    font-size: var(--uris-font-xs); font-weight: 600; line-height: 1.5;
+    text-transform: lowercase;
+}
+/* Record footer: клонирование — тихая соседка слева, удаление остаётся
+   прижатым вправо (margin-left:auto из .uris-ed-del работает и в этом ряду). */
+/* Чекбокс-строка редактора: подпись в линию с чекбоксом, не под ним. */
+.uris-ed-check {
+    display: flex; align-items: flex-start; gap: 6px;
+    margin: 2px 0; cursor: pointer; font-size: var(--uris-font-sm);
+}
+.uris-ed-check input { flex: 0 0 auto; margin-top: 3px; }
+.uris-ed-footer { display: flex; align-items: center; gap: 8px; margin-top: 4px; }
+/* Clone: quiet like delete, but neutral - accent on hover instead of red. */
+.uris-ed-clone {
+    background: transparent; border-color: transparent; color: var(--uris-text-mut);
+}
+.uris-ed-clone:not(:disabled):hover {
+    color: var(--uris-accent); background: var(--uris-surface-btn-hover); border-color: var(--uris-border);
+}
+
+/* Delete: quiet, right-aligned, red on hover - mirrors .uris-template-instruction .uris-del
+   and .uris-server-connection .uris-server-delete so the destructive action stays subdued. */
+.uris-ed-del {
+    flex: 0 0 auto; margin-left: auto;
+    background: transparent; border-color: transparent; color: var(--uris-text-mut);
+}
+.uris-ed-del:not(:disabled):hover {
+    color: var(--uris-err); background: var(--uris-err-soft); border-color: var(--uris-err-line);
+}
+
+/* ── Folder field (чипы выбранных папок + шит с поиском) ──
+   Заменяет старую сетку .uris-multifolder-toggle, которая при 50+ папок
+   превращалась в стену тогглов: выбранное теперь — чипы, полный список —
+   в шите .uris-folder-sheet с поиском. */
+.uris-fp-chips { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; }
+.uris-fp-chip {
+    display: inline-flex; align-items: center; gap: 6px;
+    padding: 3px 4px 3px 9px; border-radius: var(--uris-radius-pill);
+    background: var(--uris-surface-btn); border: 1px solid var(--uris-border-soft);
+    color: var(--uris-text-strong); font-size: var(--uris-font-sm);
+}
+.uris-fp-chip-name { max-width: 120px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.uris-fp-chip-x {
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 20px; height: 20px; padding: 0; border: 0; border-radius: 50%;
+    background: transparent; color: var(--uris-text-mut); cursor: pointer;
+}
+.uris-fp-chip-x:hover { color: var(--uris-err); background: var(--uris-surface-btn); }
+.uris-fp-add {
+    display: inline-flex; align-items: center; gap: 6px;
+    padding: 3px 12px; border-radius: var(--uris-radius-pill);
+    background: transparent; border: 1px dashed var(--uris-border);
+    color: var(--uris-text-mut); cursor: pointer; font-size: var(--uris-font-sm);
+    transition: color .12s, border-color .12s;
+}
+.uris-fp-add:hover { color: var(--uris-accent); border-color: var(--uris-accent); }
+
+/* Шит выбора папок (наследует .uris-picker-dialog; на мобиле — bottom-sheet) */
+.uris-folder-sheet-search { padding-bottom: 8px; border-bottom: 1px solid var(--uris-border-soft); }
+.uris-folder-sheet-search .text_pole { width: 100%; box-sizing: border-box; }
+.uris-folder-sheet-list {
+    display: flex; flex-direction: column; gap: 2px;
+    max-height: 46vh; overflow-y: auto; margin: 8px 0 4px;
+    -webkit-overflow-scrolling: touch;
+}
+.uris-fs-row {
+    display: flex; align-items: center; gap: 8px; width: 100%;
+    padding: 7px 10px; border: 0; border-radius: var(--uris-radius);
+    background: none; color: var(--uris-text-mut); cursor: pointer;
+    text-align: left; font-size: var(--uris-font-sm);
+    transition: background .12s, color .12s;
+}
+.uris-fs-row:hover { color: var(--uris-text-strong); background: var(--uris-surface-btn); }
+.uris-fs-row-on { color: var(--uris-text-strong); }
+/* Недопустимая цель «Переместить в…» (кап глубины): видна приглушённо,
+   выбрать нельзя — структура читается, ошибка не ловится кликом. */
+.uris-fs-row[disabled], .uris-fs-row-disabled { opacity: var(--uris-o-40); cursor: default; }
+.uris-fs-row[disabled]:hover { color: var(--uris-text-mut); background: none; }
+.uris-fs-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.uris-fs-check { color: var(--uris-accent); font-size: var(--uris-font-xs); }
+.uris-fs-create { color: var(--uris-accent); }
+.uris-fs-create:hover { color: var(--uris-accent); background: var(--uris-accent-soft); }
+.uris-fs-empty { padding: 12px 4px; color: var(--uris-text-dim); font-size: var(--uris-font-sm); }
+
+/* ── Sidebar: поиск, инструменты, избранное ── */
+.uris-folder-search { padding: 8px 8px 6px; }
+/* Цвета — как у .uris-refs-search input: без явных background/color инпут
+   остаётся браузерно-белым и на тёмной теме светится белым пятном. */
+.uris-folder-search-input {
+    box-sizing: border-box; width: 100%; padding: 4px 8px;
+    font-size: var(--uris-font);
+    background: var(--uris-surface-btn); border: 1px solid var(--uris-border);
+    border-radius: var(--uris-radius); color: var(--uris-text-strong);
+    outline: none;
+}
+.uris-folder-search-input:focus { border-color: var(--uris-accent); }
+.uris-folder-tools { display: inline-flex; align-items: center; gap: 2px; }
+.uris-folder-tool {
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 22px; height: 22px; padding: 0; border: 0; border-radius: var(--uris-radius);
+    background: transparent; color: var(--uris-text-dim); cursor: pointer;
+    font-size: var(--uris-font-sm);
+    transition: background .12s, color .12s;
+}
+.uris-folder-tool:hover { color: var(--uris-text-strong); background: var(--uris-surface-btn); }
+.uris-folder-section-label {
+    padding: 8px 10px 2px;
+    font-size: var(--uris-font-label);
+    text-transform: uppercase; letter-spacing: .15em; color: var(--uris-text-dim);
+}
+.uris-folder-empty { padding: 10px; color: var(--uris-text-dim); font-size: var(--uris-font-sm); }
+
+/* ── Менеджер папок ── */
+.uris-fm-search { padding-bottom: 8px; border-bottom: 1px solid var(--uris-border-soft); }
+.uris-fm-search .text_pole { width: 100%; box-sizing: border-box; }
+.uris-fm-bulkbar {
+    display: flex; align-items: center; gap: 6px;
+    padding: 8px 0 0; margin-bottom: 4px;
+}
+.uris-fm-bulkbar[hidden] { display: none; }
+.uris-fm-bulk-count { flex: 0 0 auto; font-size: var(--uris-font-xs); color: var(--uris-text-dim); }
+.uris-fm-bulk-target { flex: 1; min-width: 0; }
+.uris-fm-list {
+    display: flex; flex-direction: column; gap: 4px;
+    max-height: 46vh; overflow-y: auto; margin: 8px 0 4px;
+    -webkit-overflow-scrolling: touch;
+}
+.uris-fm-row { display: flex; align-items: center; gap: 6px; }
+.uris-fm-check { flex: 0 0 auto; margin: 0; }
+.uris-fm-swatch {
+    flex: 0 0 16px; width: 16px; height: 16px; padding: 0;
+    border: 1px solid var(--uris-border); border-radius: 50%; cursor: pointer;
+}
+.uris-fm-name { flex: 1; min-width: 0; }
+.uris-fm-parent {
+    flex: 0 1 auto; max-width: 90px; overflow: hidden;
+    text-overflow: ellipsis; white-space: nowrap;
+    font-size: var(--uris-font-xs); color: var(--uris-text-dim);
+}
+.uris-fm-count {
+    flex: 0 0 auto; min-width: 18px; text-align: center;
+    font-size: var(--uris-font-xs); color: var(--uris-text-dim);
+}
+.uris-fm-merge { flex: 0 0 74px; font-size: var(--uris-font-xs); padding: 2px 4px; }
+.uris-fm-del {
+    flex: 0 0 auto; width: 24px; height: 24px; padding: 0; border: 0;
+    background: none; color: var(--uris-text-mut); cursor: pointer; border-radius: var(--uris-radius);
+    font-size: var(--uris-icon);
+}
+/* Деструктивный hover — общий язык тихих удалений: красный текст на красной
+   подливке (как .uris-ed-del / .uris-batch-del). */
+.uris-fm-del:hover { color: var(--uris-err); background: var(--uris-err-soft); }
+
+/* ── Чипы фильтра (используются только в picker-overlay) ── */
+.uris-refs-chips { display: flex; gap: 6px; flex: 1; min-width: 0; flex-wrap: wrap; }
+.uris-folder-chip {
+    flex: 0 0 auto; padding: 4px 12px; border-radius: var(--uris-radius-pill);
+    background: var(--uris-surface-btn); color: var(--uris-text-mut);
+    cursor: pointer; font-size: var(--uris-font-sm); user-select: none;
+    border: 1px solid transparent; white-space: nowrap;
+    transition: background .12s, color .12s;
+}
+.uris-folder-chip:hover { color: var(--uris-text-strong); }
+.uris-folder-chip.uris-folder-chip-on { background: var(--uris-accent); color: #fff; }

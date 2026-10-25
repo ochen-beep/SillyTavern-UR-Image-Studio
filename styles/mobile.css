@@ -1,0 +1,305 @@
+/* Mobile stack: folder/group/grid/card screens, batch upload, mobile-block. Split from style.css (hygiene 2026-10-25); imported by the root sheet. */
+
+/* ── Mobile ── */
+/* Mobile: окно заполняет viewport EXCEPT ST-бары (#top-bar, #send_form),
+   которые имеют z-index выше и перекрывают наш header без insets.
+   Высоты баров пишутся window.js → --uris-st-top / --uris-st-bottom на <html>;
+   вне SillyTavern fallback 0px → полный full-screen.
+   !important нужен: base .uris-window задаёт width/height в CSS, а drag/resize
+   пишут inline (inline старше CSS без !important). dvh вместо vh корректно
+   учитывает show/hide URL-бара; 100% ширине, не 100vw — не заезжает за скроллбар. */
+@media (max-width: 768px) {
+    #urisWindow.uris-mobile {
+        position: fixed !important;
+        top: var(--uris-st-top, 0px) !important;
+        left: 0 !important; right: 0 !important; bottom: 0 !important;
+        width: 100% !important; max-width: 100% !important;
+        min-width: 0 !important; min-height: 0 !important;
+        height: calc(100dvh - var(--uris-st-top, 0px) - var(--uris-st-bottom, 0px)) !important;
+        border-radius: 0 !important; border: none !important;
+        box-shadow: none !important; transform: none !important;
+        padding-top: env(safe-area-inset-top, 0);
+        padding-bottom: env(safe-area-inset-bottom, 0);
+    }
+    /* Тело должно впитывать оставшуюся высоту и скроллиться внутри — иначе
+       grid карточек на длинных списках переполнит высоту окна. */
+    #urisWindow.uris-mobile .uris-body { flex: 1 !important; min-height: 0 !important; -webkit-overflow-scrolling: touch; }
+    #urisWindow.uris-mobile .uris-resizer { display: none !important; }
+    #urisWindow.uris-mobile .uris-header { cursor: default !important; touch-action: pan-y !important; }
+    .uris-gallery-grid { grid-template-columns: repeat(2, 1fr); }
+    /* Кнопочные строки под плитками убраны: действия — долгим тапом по плитке
+       (карточное меню, card-action-menu.js). Тап по плитке = просмотр. */
+    .uris-card-actions { display: none; }
+    /* Тулбар — липкая компактная строка со счётчиком (кнопки ушли в настройки). */
+    .uris-gallery-toolbar {
+        position: sticky; top: 0; z-index: 5;
+        background: var(--uris-surface-card);
+        margin-bottom: 0; padding: 4px 0;
+    }
+    /* Скроллтаб для 6+ вкладок на узком экране. Скроллбар скрыт, жест-подсказка
+       не нужна: активная вкладка всегда автоматически доскролливается (tabs.js).
+       scrollbar-width: none + ::-webkit-scrollbar — как у .uris-scroll-x. */
+    .uris-tabs { overflow-x: auto; overflow-y: hidden; -webkit-overflow-scrolling: touch; scrollbar-width: none; }
+    .uris-tabs::-webkit-scrollbar { display: none; }
+    /* Глобальный guard `.uris-window button { touch-action: pan-y }` разрешает
+       ТОЛЬКО вертикальный пан и на тач-устройстве глушит горизонтальный свайп,
+       начатый на кнопке вкладки (пересечение жестов идёт от элемента под
+       пальцем) — бар почти целиком покрыт кнопками, и скролл tab-бара умирал.
+       pan-x инвертирует запрет: тапы остаются кликами, вертикальный свайп
+       отдаётся .uris-body, горизонтальный листает сам бар. Скоуп
+       `.uris-tabs .uris-tab` обязателен: у guard специфичность (0,1,1) — ВЫШЕ,
+       чем у голого .uris-tab (0,1,0), порядок в файле бы не спас. */
+    .uris-tabs .uris-tab { flex: 0 0 auto; padding: 8px 12px; white-space: nowrap; min-width: 60px; touch-action: pan-x; }
+}
+@supports not (height: 100dvh) {
+    @media (max-width: 768px) {
+        #urisWindow.uris-mobile {
+            height: calc(100vh - var(--uris-st-top, 0px) - var(--uris-st-bottom, 0px)) !important;
+        }
+    }
+}
+@media (max-width: 479px) {
+    .uris-gallery-grid { grid-template-columns: 1fr; }
+}
+
+/* ── Mobile stack ── */
+.uris-refs-mobile-stack { display: flex; flex-direction: column; height: 100%; }
+/* flex:1+min-height вместо опоры только на height:100% — WebKit надёжнее
+   резолвит высоту флекс-звена, чем процентную цепочку (иначе на части iOS
+   экран выростает по контенту и сетка теряет скролл). */
+.uris-mobile-screen { display: flex; flex-direction: column; flex: 1; min-height: 0; height: 100%; }
+.uris-mobile-toolbar {
+    display: flex; align-items: center; gap: 8px;
+    padding: 8px 10px; border-bottom: 1px solid var(--uris-border-soft);
+    flex-shrink: 0;
+}
+.uris-mobile-toolbar-title {
+    flex: 1; font-size: var(--uris-font); color: var(--uris-text-strong);
+    font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.uris-mobile-add-folder {
+    display: inline-flex; align-items: center; gap: 6px;
+    padding: 6px 10px; background: none;
+    border: 1px dashed var(--uris-border); border-radius: var(--uris-radius);
+    color: var(--uris-text-dim); cursor: pointer;
+    font-size: var(--uris-font-sm); white-space: nowrap;
+    transition: background .12s, color .12s;
+}
+.uris-mobile-add-folder:hover { color: var(--uris-accent); background: var(--uris-accent-hover); border-color: var(--uris-accent); }
+.uris-mobile-add-ref {
+    display: inline-flex; align-items: center; gap: 6px;
+    padding: 6px 12px;
+    background: var(--uris-accent-soft);
+    border: 1px dashed var(--uris-accent-line); border-radius: var(--uris-radius);
+    color: var(--uris-accent); cursor: pointer;
+    font-size: var(--uris-font-sm); white-space: nowrap;
+    transition: background .12s, color .12s;
+}
+.uris-mobile-add-ref:hover { color: var(--uris-accent); background: var(--uris-accent-hover); border-color: var(--uris-accent); }
+.uris-mobile-back {
+    display: inline-flex; align-items: center; justify-content: center;
+    min-width: 44px; min-height: 44px; flex-shrink: 0;
+    background: none; border: none; color: var(--uris-text-mut);
+    cursor: pointer; font-size: calc(24px * var(--uris-font-scale, 1)); line-height: 1; padding: 0 8px;
+    border-radius: var(--uris-radius);
+    transition: background .12s, color .12s;
+}
+.uris-mobile-back:hover { color: var(--uris-text-strong); background: var(--uris-tint-hover); }
+/* Чип имени папки в тулбаре сетки = кнопка смены папки (нижний лист). */
+.uris-mobile-folder-switch {
+    display: inline-flex; align-items: center; gap: 6px; min-width: 0;
+    max-width: 100%; padding: 6px 10px; border: 0; border-radius: var(--uris-radius-pill);
+    background: var(--uris-surface-btn); color: var(--uris-text-strong);
+    cursor: pointer; font: inherit; font-size: var(--uris-font-sm);
+}
+.uris-mobile-folder-switch i { font-size: var(--uris-font-xs); color: var(--uris-text-dim); }
+.uris-mobile-folder-switch .uris-mobile-toolbar-title {
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.uris-mobile-list {
+    flex: 1; overflow-y: auto; padding: 8px; display: flex; flex-direction: column; gap: 6px;
+    touch-action: pan-y;   /* см. фикс .uris-window button выше */
+}
+.uris-mobile-folder-item {
+    display: flex; align-items: center; gap: 10px; width: 100%;
+    padding: 10px; border-radius: var(--uris-radius-card);
+    background: var(--uris-surface-card); border: 1px solid var(--uris-border-soft);
+    color: var(--uris-text-strong); cursor: pointer; text-align: left;
+}
+.uris-mobile-folder-item:active { background: var(--uris-surface-btn); }
+.uris-mobile-folder-icon { color: var(--uris-text-dim); }
+.uris-mobile-folder-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.uris-mobile-folder-count { font-size: var(--uris-font-xs); color: var(--uris-text-dim); }
+/* Коллаж 2×2 из первых четырёх референсов — превью папки в списке. */
+.uris-mobile-folder-previews { display: flex; gap: 2px; }
+.uris-mobile-folder-collage {
+    display: grid; grid-template-columns: 1fr 1fr; gap: 1px;
+    width: 38px; height: 34px; border-radius: var(--uris-radius); overflow: hidden;
+    flex: 0 0 auto; background: var(--uris-surface-btn);
+}
+.uris-mobile-folder-thumb {
+    width: 100%; height: 100%;
+    background-size: cover; background-position: center;
+    background-color: var(--uris-surface-btn);
+}
+.uris-mobile-folder-thumb-empty { opacity: var(--uris-o-40); }
+.uris-mobile-folder-arrow { color: var(--uris-text-dim); }
+.uris-mobile-grid { flex: 1; }
+.uris-mobile-search-wrap { padding: 8px 10px 0; }
+/* .uris-mobile-folder-search — тот же инпут поиска на экране папок; без этого
+   правила он оставался браузерно-белым на тёмной теме. */
+.uris-mobile-search,
+.uris-mobile-folder-search {
+    width: 100%; padding: 6px 8px; font-size: var(--uris-font-sm);
+    background: var(--uris-surface-btn); border: 1px solid var(--uris-border);
+    border-radius: var(--uris-radius); color: var(--uris-text-strong); outline: none;
+}
+.uris-mobile-search:focus,
+.uris-mobile-folder-search:focus { border-color: var(--uris-accent); }
+.uris-mobile-card-scroll { flex: 1; overflow-y: auto; padding: 10px; display: flex; flex-direction: column; gap: 4px; touch-action: pan-y; }
+/* Клонировать/Удалить — липкий низ под большим пальцем, 44px. */
+.uris-mobile-card-scroll .uris-ed-footer {
+    position: sticky; bottom: 0; z-index: 2;
+    margin-top: 4px; padding: 8px 0 calc(8px + env(safe-area-inset-bottom, 0px));
+    background: linear-gradient(to top, var(--uris-surface-card) 65%, transparent);
+}
+.uris-mobile-card-scroll .uris-ed-footer .uris-btn { min-height: 44px; flex: 1; }
+
+/* Picker overlay */
+/* Как и lightbox: НЕ inset:0, а явные top/left + width/height — иначе в
+   ST-мобиле (body { position: fixed }) оверлей схлопывается в высоту 0 и
+   bottom-sheet улетает за верх экрана (см. тест popup-mobile-repro.html). */
+.uris-picker-overlay {
+    position: fixed; top: 0; left: 0;
+    width: 100%; height: 100vh; height: 100dvh;
+    background: rgba(0,0,0,.6);
+    display: flex; align-items: center; justify-content: center;
+    z-index: var(--uris-z-modal);
+}
+.uris-picker-dialog {
+    /* непрозрачный фон - иначе в прозрачных ST-темах диалог просвечивает (см. .uris-window) */
+    background: var(--uris-surface-card);
+    border: 1px solid var(--uris-border);
+    border-radius: var(--uris-radius-window); padding: 16px;
+    max-width: 720px; width: 90%;
+    /* dvh сначала для браузеров с поддержкой; vh — fallback. Десктоп не
+       замечает (там vh == dvh), мобильный Safari/Chrome корректно считает
+       видимую высоту с учётом URL-бара. */
+    max-height: 80vh; max-height: 80dvh;
+    overflow: auto;
+    color: var(--SmartThemeBodyColor, var(--uris-text-strong));
+}
+.uris-picker-dialog h4 { margin-top: 0; font-size: var(--uris-icon); }
+/* Picker использует тот же компактный row чипов, что и вкладка. */
+.uris-picker-dialog .uris-refs-filterbar { padding: 0 0 10px; border-bottom: 1px solid var(--uris-border-soft); }
+.uris-pool-grid.uris-picker-grid {
+    padding: var(--uris-pad) 0 0;
+    max-height: 55vh; overflow-y: auto; margin-bottom: 12px;
+}
+.uris-picker-actions {
+    display: flex; gap: 8px; justify-content: flex-end;
+}
+
+/* ── Batch upload dialog (массовая загрузка референсов) ──
+   Живёт в том же .uris-picker-dialog (bottom-sheet на мобиле). Список —
+   строки «превью + редактируемое имя + статус + удалить», скролл внутри. */
+.uris-batch-renamer { display: flex; gap: 8px; flex: 0 0 auto; }
+.uris-batch-renamer .text_pole { flex: 1; min-width: 0; }
+.uris-batch-list {
+    display: flex; flex-direction: column; gap: 6px;
+    max-height: 46vh; overflow-y: auto; padding: 4px 0;
+    -webkit-overflow-scrolling: touch;
+}
+.uris-batch-item { display: flex; align-items: center; gap: 8px; }
+.uris-batch-thumb {
+    flex: 0 0 44px; width: 44px; height: 44px; object-fit: cover;
+    border-radius: var(--uris-radius-card); background: var(--uris-surface-btn); display: block;
+}
+.uris-batch-name { flex: 1; min-width: 0; }
+.uris-batch-status { flex: 0 0 20px; text-align: center; font-size: var(--uris-icon); color: var(--uris-text-dim); }
+.uris-batch-ok .uris-batch-status { color: var(--uris-accent); }
+.uris-batch-error .uris-batch-status { color: var(--uris-err); }
+.uris-batch-del {
+    flex: 0 0 auto; background: none; border: none; color: var(--uris-text-mut);
+    cursor: pointer; font-size: var(--uris-icon); padding: 4px 8px;
+}
+.uris-batch-del:hover { color: var(--uris-err); background: var(--uris-err-soft); border-radius: var(--uris-radius); }
+
+/* ── Консолидированный mobile-block ──
+   Раньше мобильные правила были разбросаны по файлу (три отдельных @media
+   в середине + несколько точечных правил). Здесь собраны все дополнения,
+   которых не хватало: флоу-генерация, advanced-rows, picker как bottom-sheet,
+   host-table скролл, увеличенные tap-target'ы. Десктоп не замечает — всё
+   внутри @media (max-width: 768px). Переменная --uris-label-w
+   заданы на :root в начале файла. */
+@media (max-width: 768px) {
+    /* Базовый сброс ширины подписи для ВСЕХ .uris-row (ранее только
+       .uris-gen-params). 90px label ломал строки в табах API / Content /
+       Templates / Advanced на 360px-экране: select уходил за правый край. */
+    :root { --uris-label-w: 0px; }
+    .uris-row, .uris-advanced .uris-row, .uris-gen-params .uris-row { gap: 6px 10px; }
+    .uris-row label, .uris-advanced .uris-row label {
+        min-width: 0; flex: 0 0 auto;
+    }
+
+    /* Picker overlay → bottom-sheet. Раньше центрировался с max-height:80vh —
+       на мобиле кнопки внизу уходили за видимый край при показанном URL-баре.
+       Теперь прижимается к низу, действия sticky, единственный скролл — grid. */
+    .uris-picker-overlay { align-items: flex-end; }
+    .uris-picker-dialog {
+        width: 100% !important; max-width: 100% !important;
+        max-height: 90dvh; margin: 0;
+        border-radius: var(--uris-radius-window) var(--uris-radius-window) 0 0; padding: 12px;
+        padding-bottom: calc(12px + env(safe-area-inset-bottom, 0));
+        display: flex; flex-direction: column; gap: 8px;
+        overflow: hidden; /* скроллит только grid */
+    }
+    /* dvh-fallback для WebView без support: см. блок @supports not ниже. */
+    .uris-pool-grid.uris-picker-grid {
+        max-height: none; flex: 1 1 auto; min-height: 120px;
+        overflow-y: auto;
+        -webkit-overflow-scrolling: touch;
+    }
+    /* Batch upload: список строк скроллится внутри bottom-sheet,
+       как и пикерная сетка выше. */
+    .uris-batch-list { max-height: none; flex: 1 1 auto; min-height: 120px; }
+    /* Folder sheet и менеджер папок — та же схема: единственный скролл — список. */
+    .uris-folder-sheet-list, .uris-fm-list { max-height: none; flex: 1 1 auto; min-height: 120px; }
+    .uris-fm-merge { flex: 0 0 64px; }
+    .uris-picker-actions {
+        position: sticky; bottom: 0; flex-wrap: wrap;
+        padding-top: 8px; margin: 0;
+        background: var(--uris-surface-card);
+    }
+    .uris-picker-actions .uris-btn {
+        flex: 1; min-height: 44px; min-width: 0;
+    }
+    /* Ref editor (использует тот же .uris-picker-dialog) — preview не должен
+       заграбастать пол-экрана. */
+    .uris-editor-preview { max-width: 100%; }
+    .uris-editor-actions .uris-btn { flex: 1 1 auto; min-height: 44px; }
+
+    /* host-table: горизонтальный скролл вместо раздутия контейнера tab-API.
+       Таблица autoFetch-стратегий с длинными именами хостов. */
+
+    /* Мелкие tap-target'ы до мягкого минимума (~22px). 44px здесь перебор —
+       кнопка ✕ поверх 64px tile'a стала бы огромной; 22px сохраняет ритм. */
+    .uris-effective-ref-remove {
+        width: 22px; height: 22px; font-size: var(--uris-font);
+    }
+    .uris-extra-del { width: 22px; height: 22px; font-size: var(--uris-font); }
+    .uris-folder-chip { padding: 8px 12px; }
+    .uris-ref-include, .uris-ref-exclude {
+        padding: 6px 10px; font-size: var(--uris-font); line-height: 1;
+    }
+}
+
+/* dvh-fallback для старых WebView (Termux / Android < Chromium 108): picker
+   использует vh вместо dvh. Окно #urisWindow уже имеет свой fallback выше —
+   здесь обеспечиваем тот же запас для picker dialog. */
+@supports not (height: 100dvh) {
+    @media (max-width: 768px) {
+        .uris-picker-dialog { max-height: 88vh; }
+        .uris-editor-preview { max-width: 100%; }
+    }
+}

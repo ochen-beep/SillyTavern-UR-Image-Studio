@@ -1,0 +1,126 @@
+/* API/Connections tab: presets, connection cards, model toggle. Split from style.css (hygiene 2026-10-25); imported by the root sheet. */
+
+/* ── Пресеты ── */
+.uris-accordion { margin-bottom: 8px; }
+.uris-acc-header { cursor: pointer; padding: 6px 0; border-bottom: 1px solid var(--uris-border-soft); }
+.uris-acc-body { padding: 8px 0; }
+.uris-preset-card {
+    background: var(--uris-surface-card); padding: var(--uris-pad); border-radius: var(--uris-radius-card);
+    border: 1px solid var(--uris-border-soft); margin-bottom: 8px;
+    display: flex; flex-direction: column; gap: 6px;
+}
+/* Шапка карты (accordion): вся полоса - тумблер сворачивания. Имя — подпись
+   (span в шаблонах; переименование — через модалку карандаша, инлайн-ввод
+   удалён: он растягивался на всю строку и коммитился случайным кликом).
+   В коннектах .uris-server-name остался инпутом: pointer-events:none по
+   умолчанию, карандаш переводит в режим ввода через :focus. Кнопки в шапке
+   (радио, карандаш) не сворачивают. */
+.uris-preset-card-header {
+    display: flex; align-items: center; gap: 8px; cursor: pointer;
+}
+.uris-preset-card-header:hover { background: var(--uris-tint-hover); }
+.uris-preset-card-header .uris-name {
+    flex: 1; min-width: 0;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.uris-preset-card-header .uris-server-name {
+    flex: 1; min-width: 0;
+    pointer-events: none; background: transparent; border-color: transparent; cursor: default;
+}
+.uris-preset-card-header .uris-server-name:focus {
+    pointer-events: auto; background: var(--uris-surface-btn); border-color: var(--uris-border);
+}
+.uris-preset-card-header .uris-server-name::placeholder { color: var(--uris-text-dim); }
+.uris-name-edit {
+    flex: 0 0 auto; display: inline-flex; align-items: center; justify-content: center;
+    width: 24px; height: 24px; padding: 0; border: 0; border-radius: var(--uris-radius);
+    background: transparent; color: var(--uris-text-dim); cursor: pointer;
+    transition: color .12s, background .12s;
+}
+.uris-name-edit:hover { color: var(--uris-text-strong); background: var(--uris-surface-btn); }
+
+/* Drag & drop порядка карточек (шаблоны, коннекты): ghost и grabbing-курсор
+   переиспользуют блок .uris-drag-ghost у чипов референсов (z-слой --uris-z-ghost);
+   тут только приглушение исходной карточки. */
+.uris-drag-source { opacity: .4; }
+.uris-preset-card.uris-collapsed .uris-preset-card-body { display: none; }
+.uris-preset-card-body { display: flex; flex-direction: column; gap: 6px; }
+.uris-add-btn { width: 100%; }
+
+/* ── Коннекты / Контент ── */
+/* Индикатор наличия API-ключа (сам ключ НЕ выводится — только статус) */
+/* Кнопки в строке модели */
+.uris-fetch-models.loading i { animation: uris-spin .8s linear infinite; }
+@keyframes uris-spin { to { transform: rotate(360deg); } }
+
+/* Server-owned image connections. Keep these states isolated from legacy cards. */
+.uris-server-connections {
+    display: flex; flex-direction: column; gap: 8px; margin-bottom: 8px;
+}
+/* Box-оформление (padding/border/фон) наследуется от .uris-preset-card. */
+.uris-server-connection .uris-row { margin-bottom: 0; }
+.uris-server-connection .uris-server-name { flex: 1; min-width: 0; }
+.uris-server-connection .uris-server-route-summary {
+    flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    font-size: .85em; color: var(--uris-text-mut);
+}
+/* Header radio: ring color = connection readiness (red/amber/green, classes
+   uris-status-* preserved for tests), filled accent = active. Doubles as the
+   "make active" click target. See headerStatus() in server-connection-form.js.
+   20px — стандарт кликабельной зоны активации для карточек (как у шаблонов). */
+.uris-server-status {
+    flex: 0 0 auto; width: 20px; height: 20px; padding: 0; border: none; border-radius: 50%;
+    cursor: pointer; background: transparent; box-shadow: inset 0 0 0 2px var(--uris-text-mut);
+    transition: filter .12s, box-shadow .12s;
+}
+.uris-server-status:hover { filter: brightness(1.15); }
+.uris-server-status.uris-status-red { box-shadow: inset 0 0 0 2px var(--uris-err); }
+.uris-server-status.uris-status-amber { box-shadow: inset 0 0 0 2px var(--uris-warn); }
+.uris-server-status.uris-status-green { box-shadow: inset 0 0 0 2px var(--uris-accent); }
+/* Active connection fills the radio with accent (readiness color is then conveyed
+   by the accent bar + body button state). */
+.uris-server-connection.uris-server-active .uris-server-status {
+    background: var(--uris-accent); box-shadow: none;
+}
+/* Active connection: left accent bar + tinted background. Inset box-shadow
+   draws the bar inside the card box so layout (border/padding) does not shift
+   when the active card changes. */
+.uris-server-connection.uris-server-active {
+    background: var(--uris-accent-soft);
+    border-color: var(--uris-accent-line);
+    box-shadow: inset 3px 0 0 var(--uris-accent);
+}
+.uris-server-warning{
+    padding: 6px 8px; border-radius: var(--uris-radius);
+    font-size: var(--uris-font-sm); line-height: 1.4;
+}.uris-server-warning{
+    color: var(--uris-warn); background: var(--uris-warn-soft);
+    border: 1px solid var(--uris-warn-line);
+}
+.uris-server-manual-mode .uris-row { margin-bottom: 0; }
+.uris-server-actions { display: flex; gap: 6px; flex-wrap: wrap; }
+/* Delete: quiet, right-aligned, no fill - mirrors .uris-template-instruction .uris-del
+   so the destructive action never outshouts "Обновить модели". Turns red on hover. */
+.uris-server-connection .uris-server-delete {
+    flex: 0 0 auto; margin-left: auto;
+    background: transparent; border-color: transparent; color: var(--uris-text-mut);
+}
+.uris-server-connection .uris-server-delete:not(:disabled):hover {
+    color: var(--uris-err); background: var(--uris-err-soft); border-color: var(--uris-err-line);
+}
+/* Server-name label affordance lives on the shared .uris-preset-card-header rule
+   above (pointer-events:none + :focus), so no collapsed-only override is needed.
+   (Мёртвые .uris-server-save/.uris-server-cancel удалены: кнопки строятся на
+   .uris-btn-confirm/.uris-btn-subtle — стили были их точной копией.) */
+.uris-server-probe.uris-server-loading,
+.uris-server-probe.loading { cursor: wait; }
+.uris-server-probe.uris-server-loading::before,
+.uris-server-probe.loading::before {
+    content: ''; width: 12px; height: 12px; box-sizing: border-box;
+    border: 2px solid currentColor; border-right-color: transparent;
+    border-radius: 50%; animation: uris-spin .8s linear infinite;
+}
+
+/* ── Connection reference options ── */
+
+/* ── Connection card model toggle (compact checkbox, not a big button) ── */

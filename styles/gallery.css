@@ -1,0 +1,90 @@
+/* Gallery tab: grid, cards, folders mode, viewer entry points. Split from style.css (hygiene 2026-10-25); imported by the root sheet. */
+
+/* ── Галерея ── */
+.uris-gallery-toolbar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 8px; }
+.uris-gallery-toolbar #urisGalleryCount { margin-right: auto; font-size: var(--uris-font); color: var(--uris-text-mut); }
+.uris-gallery-toolbar .uris-autosave-st { font-size: var(--uris-font); white-space: nowrap; }
+/* Кнопки «Обновить/Очистить галерею» переехали в «Настройки → Данные и диагностика»
+   (.uris-settings-actions) — отдельных правил тулбара больше не нужно. */
+.uris-gallery-grid { display: grid; gap: 8px; grid-template-columns: repeat(3, 1fr); }
+.uris-card {
+    border-radius: var(--uris-radius-card); overflow: hidden; position: relative;
+    border: 1px solid var(--uris-border-soft);
+    /* Off-screen cards skip layout and paint (long galleries). The auto
+       keyword in contain-intrinsic-size remembers the first real size; the
+       numeric estimate applies only before a card's first paint. */
+    content-visibility: auto; contain-intrinsic-size: auto 240px;
+}
+/* Картинка-кнопка: клик/тап открывает просмотрщик (expand-кнопка выпилена).
+   Настоящий <button> — клавиатура (Tab/Enter) и роль accessibility; сбрасываем
+   кнопочные дефолты, чтобы выглядела как прежний div. */
+.uris-card-img {
+    display: block; width: 100%; aspect-ratio: 1; position: relative;
+    border: 0; margin: 0; padding: 0; background: none; cursor: pointer;
+    font: inherit; color: inherit;
+}
+.uris-card-img img { display: block; width: 100%; height: 100%; object-fit: cover; }
+.uris-saved-badge { position: absolute; top: 4px; right: 4px; font-size: var(--uris-font-sm); }
+/* Название модели генерации поверх нижней кромки миниатюры: градиентная тень
+   вместо плашки — не спорит с 💾-бейджем и не съедает «лицо» картинки.
+   Лежит внутри кнопки просмотра, поэтому клик по подписи всплывает в неё и
+   открывает лайтбокс как раньше; pointer-events НЕ глушим — иначе браузер
+   не покажет title с полным именем модели, обрезанным эллипсисом. */
+.uris-model-badge {
+    position: absolute; left: 0; right: 0; bottom: 0;
+    padding: 12px 6px 3px;
+    /* Тот же градиент, что у .uris-pool-tile-name: подписи на плитках галереи
+       и референсов затемняются одинаково (раньше — .72 без стопа против .82/30%). */
+    background: linear-gradient(to top, rgba(0,0,0,.82) 30%, rgba(0,0,0,0));
+    color: #fff; font-size: var(--uris-font-sm); line-height: 1.2; text-align: left;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.uris-card-actions { display: flex; justify-content: space-around; padding: 4px; background: rgba(0,0,0,.3); }
+.uris-card-btn { background: none; border: none; color: var(--uris-text-mut); cursor: pointer; padding: 6px; font-size: var(--uris-font); }
+.uris-card-btn:hover { color: var(--uris-text-strong); }
+.uris-gallery-empty { grid-column: 1 / -1; text-align: center; color: var(--uris-text-dim); padding: 40px 0; }
+/* Сентинел чанковой догрузки: нулевую высоту IntersectionObserver ловит плохо. */
+.uris-gallery-sentinel { height: 1px; }
+
+/* ── Галерея: режим «Все / Папки» + избранное ── */
+/* Переключатель режимов справа от счётчика (счётчик держит margin-right:auto). */
+.uris-gallery-viewswitch {
+    display: inline-flex; flex: 0 0 auto;
+    border: 1px solid var(--uris-border-soft); border-radius: 8px; overflow: hidden;
+}
+.uris-viewswitch-btn {
+    background: none; border: 0; cursor: pointer; padding: 4px 12px;
+    color: var(--uris-text-mut); font-size: var(--uris-font-sm);
+}
+.uris-viewswitch-btn + .uris-viewswitch-btn { border-left: 1px solid var(--uris-border-soft); }
+.uris-viewswitch-btn:hover { color: var(--uris-text-strong); }
+.uris-viewswitch-btn-on { color: var(--uris-text-strong); background: var(--uris-accent-soft); }
+/* Лента папок режима «Папки»: горизонтальный скролл чипов (скроллбар скрыт). */
+.uris-gf-bar {
+    display: flex; gap: 6px; align-items: center;
+    overflow-x: auto; padding: 2px 0 8px; scrollbar-width: none;
+}
+.uris-gf-bar::-webkit-scrollbar { display: none; }
+.uris-gf-chip {
+    flex: 0 0 auto; display: inline-flex; align-items: center; gap: 6px;
+    border: 1px solid var(--uris-border-soft); border-radius: 999px;
+    background: var(--uris-surface-card); color: var(--uris-text-mut);
+    padding: 3px 10px; cursor: pointer; font-size: var(--uris-font-sm);
+}
+.uris-gf-chip:hover { color: var(--uris-text-strong); }
+.uris-gf-chip-on { color: var(--uris-text-strong); border-color: var(--uris-accent-line); background: var(--uris-accent-soft); }
+.uris-gf-name { white-space: nowrap; max-width: 140px; overflow: hidden; text-overflow: ellipsis; }
+.uris-gf-count { opacity: .6; }
+/* Избранное: звезда на миниатюре слева (💾-бейдж занял правый угол), лёгкая
+   подсветка карточки и золотая кнопка/звезда в активном состоянии. */
+.uris-fav-badge {
+    position: absolute; top: 4px; left: 4px; color: #f5b83d;
+    font-size: var(--uris-font-sm);
+    filter: drop-shadow(0 1px 2px rgba(0, 0, 0, .7));
+}
+.uris-card-fav { border-color: color-mix(in srgb, #f5b83d 45%, transparent); }
+.uris-card-btn-fav-on { color: #f5b83d; }
+.uris-pswp-fav-on { color: #f5b83d !important; }
+
+/* ── Lightbox убран ── просмотрщик галереи переехал на PhotoSwipe:
+   вендорный CSS .pswp-* и адаптация .pswp.uris-pswp — в конце файла. */

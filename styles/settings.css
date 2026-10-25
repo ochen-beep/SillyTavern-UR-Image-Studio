@@ -1,0 +1,88 @@
+/* Settings tab: source picker, CORS status, notifications, expandable editor. Split from style.css (hygiene 2026-10-25); imported by the root sheet. */
+
+/* ── Settings panel: source picker ── */
+.uris_field_group { margin: 8px 6px; }
+.uris_field_label { display: block; font-size: 0.78em; font-weight: 600; opacity: var(--uris-o-70); margin-bottom: 5px; }
+.uris_hint { display: block; font-size: 0.75em; opacity: var(--uris-o-50); margin-top: 4px; line-height: 1.4; }
+
+/* Segmented source picker (Профиль / Свой) */
+.uris_seg { display: flex; gap: 4px; background: var(--uris-surface-btn); border-radius: var(--uris-radius-card); padding: 3px; }
+.uris_seg_btn {
+    flex: 1; padding: 8px 6px; border: none; border-radius: var(--uris-radius); cursor: pointer;
+    background: transparent; color: var(--uris-text-mut);
+    font-size: var(--uris-font-sm); font-weight: 600; text-align: center;
+    touch-action: manipulation; -webkit-tap-highlight-color: transparent;
+    transition: background 0.12s, color 0.12s;
+    appearance: none; -webkit-appearance: none;
+}
+.uris_seg_btn:hover { color: var(--uris-text-strong); }
+.uris_seg_btn.uris_seg_active {
+    background: var(--uris-accent); color: #fff;
+}
+
+
+/* ── CORS-proxy status indicator ── */
+
+/* ── autoFetch: таблица стратегий хостов ── */
+
+/* ── Вкладка «Настройки» ── */
+.uris-settings { display: flex; flex-direction: column; gap: 10px; }
+.uris-settings-section {
+    background: var(--uris-surface-card);
+    border: 1px solid var(--uris-border-soft);
+    border-radius: var(--uris-radius-card);
+    padding: 10px 12px;
+}
+.uris-settings-section h3 {
+    margin: 0 0 8px; font-size: var(--uris-font-label); font-weight: 600;
+    color: var(--uris-text-mut); text-transform: uppercase; letter-spacing: .15em;
+}
+.uris-settings .checkbox_label {
+    display: flex; align-items: center; gap: 8px;
+    font-size: var(--uris-font); margin: 6px 0 2px;
+}
+.uris-scale-row { display: flex; align-items: center; gap: 8px; }
+.uris-scale-row input[type="range"] { flex: 1; min-width: 0; accent-color: var(--uris-accent); }
+.uris-scale-value {
+    min-width: 42px; text-align: right; font-size: var(--uris-font-sm);
+    color: var(--uris-text-strong); font-variant-numeric: tabular-nums;
+}
+.uris-settings-actions { display: flex; flex-wrap: wrap; gap: 6px; }
+.uris-settings-actions .uris-btn { flex: 1 1 auto; }
+
+/* ── Разворачиваемый редактор текста (кнопка у компактных полей) ──
+   Паттерн ST: компактное поле + иконка fa-maximize -> большой popup-редактор
+   (native <dialog> через callGenericPopup, класс maximized_textarea — его
+   подхватывают редактор-экстеншны вроде CodeMirror). */
+.uris-expand-btn {
+    width: 26px; height: 26px;
+    display: inline-flex; align-items: center; justify-content: center;
+    background: var(--uris-surface-btn); border: 1px solid var(--uris-border-soft);
+    border-radius: var(--uris-radius); color: var(--uris-text-mut);
+    cursor: pointer; font-size: var(--uris-font); padding: 0; flex: 0 0 auto;
+    transition: color .12s, background .12s, border-color .12s;
+}
+.uris-expand-btn:hover { color: var(--uris-text-strong); background: var(--uris-surface-btn-hover); border-color: var(--uris-border); }
+.uris-expand-btn:disabled { opacity: var(--uris-o-50); cursor: default; }
+
+/* Угловой вариант (поле промпта в Генерации): поверх правого верхнего угла
+   textarea, поэтому полю добавлен отступ справа, чтобы текст не уходил под
+   кнопку. */
+.uris-prompt-card .uris-expand-btn { position: absolute; top: 16px; right: 16px; }
+.uris-prompt-card .uris-prompt-area { padding-right: 34px; }
+
+/* Вариант в строке заголовка поля (инструкция шаблона). */
+.uris-field-head { display: flex; align-items: center; justify-content: space-between; gap: 6px; margin-bottom: 2px; }
+.uris-field-head .uris-expand-btn { width: 22px; height: 22px; font-size: var(--uris-font-sm); }
+
+/* Контент popup-редактора (рендерится в ST-диалоге, не в нашем окне).
+   Обёртка растягивается на .popup-content (аналог height100p у ядра в
+   chats.js), textarea добирает остаток высоты через flex: 1. */
+.uris-text-editor { display: flex; flex-direction: column; height: 100%; }
+.uris-text-editor-title { font-weight: 600; margin-bottom: 6px; }
+.uris-text-editor .maximized_textarea { width: 100%; flex: 1 1 auto; min-height: 45vh; resize: vertical; }
+
+/* ── Уведомления (вкладка «Настройки»): этап = тумблер + звук + ▶ ── */
+.uris-notify-row { display: flex; align-items: center; gap: 8px; margin: 4px 0; }
+.uris-notify-row .checkbox_label { flex: 1 1 auto; min-width: 0; margin: 0; }
+.uris-notify-row .uris-notify-select { flex: 0 0 130px; min-width: 0; padding: 2px 4px; font-size: var(--uris-font-sm); }

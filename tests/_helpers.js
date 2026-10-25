@@ -5,18 +5,20 @@ import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 /**
- * Effective stylesheet text for CSS-contract tests: root style.css plus every
- * `@import`ed styles/*.css in import (cascade) order, root rules last. Works
- * unchanged before and after the root split — tests always see one sheet.
+ * Effective stylesheet text for CSS-contract tests: root style.css (without
+ * its @import lines) first, then every imported styles/*.css in import
+ * order. Root-first keeps "first match" lookups landing on the same rules as
+ * before the split (base rules originally preceded the component sheets).
  */
 export function readAllStyles() {
     const rootPath = join(dirname(fileURLToPath(import.meta.url)), '..', 'style.css');
     const root = readFileSync(rootPath, 'utf8');
-    const parts = [];
-    for (const match of root.matchAll(/@import\s+(?:url\()?["']([^"')]+)["']\)?[^;]*;/g)) {
-        parts.push(readFileSync(join(dirname(rootPath), match[1]), 'utf8'));
-    }
-    return [...parts, root].join('\n');
+    const imports = [];
+    const rootText = root.replace(/@import\s+(?:url\()?["']([^"')]+)["']\)?[^;]*;/g, (m, p) => {
+        imports.push(readFileSync(join(dirname(rootPath), p), 'utf8'));
+        return '';
+    });
+    return [rootText, ...imports].join('\n');
 }
 
 /**

@@ -20,12 +20,12 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
+import { readAllStyles } from './_helpers.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
-const cssPath = join(here, '..', 'style.css');
 
 /** @returns {string} rawCSS */
-function readCssRaw() { return readFileSync(cssPath, 'utf8'); }
+function readCssRaw() { return readAllStyles(); }
 
 /**
  * Вырезает `/* … *​/` комментарии прежде, чем тесты матчят декларации.

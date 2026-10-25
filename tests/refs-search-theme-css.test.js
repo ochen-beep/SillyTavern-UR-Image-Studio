@@ -15,13 +15,13 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
+import { readAllStyles } from './_helpers.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
-const cssPath = join(here, '..', 'style.css');
 
 /** @returns {string} CSS без /* … *​/ комментариев, чтобы пояснения не матчились. */
 function readCss() {
-    return readFileSync(cssPath, 'utf8').replace(/\/\*[\s\S]*?\*\//g, '');
+    return readAllStyles().replace(/\/\*[\s\S]*?\*\//g, '');
 }
 
 test('десктопный поиск папок (.uris-folder-search-input) оформлен в тему', () => {
