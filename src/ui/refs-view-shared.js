@@ -10,11 +10,13 @@
  */
 import { escapeHtml } from '../core.js';
 import { filterRefsByFolder, filterRefsByFolderTree } from '../refs-library.js';
+import { openCardActionMenu, bindCardContextMenu } from './card-action-menu.js';
 
 /** View state shared by main grid / sidebar / mobile / editor. */
 export const refsView = {
     activeFolderFilter: 'all',
     folderSearchQuery: '',
+    mobileSearchQuery: '',
     editingRefId: null,
     editingFolderId: null,
     // Snapshot of the last rendered grid list/folders — the delegated tile
@@ -63,4 +65,37 @@ export function poolTileHtml(ref, foldersById, { maxDots = 4, selected = false }
         ${dots ? `<div class="uris-pool-tile-dots">${dots}</div>` : ''}
         <div class="uris-pool-tile-name">${escapeHtml(ref.name)}</div>
     </button>`;
+}
+
+// ── Pool tile delegation ──
+// One click/contextmenu listener pair on the grid host instead of two per
+// tile (the bindCards pattern from tab-gallery.js): search and grid re-renders
+// no longer rebind O(n) listeners. The listener outlives the host's innerHTML
+// wipes, so handlers read module state (refsView.gridRefs/refsView.gridFolders) instead of
+// closing over a specific render's locals.
+
+export function bindPoolGridDelegation(host, { onOpen, menuItems }) {
+    if (host.dataset.delegated === '1') return;   // idempotent per render
+    host.dataset.delegated = '1';
+    const tileOf = (target) => {
+        const tile = target?.closest?.('.uris-pool-tile');
+        return tile && host.contains(tile) ? tile : null;
+    };
+    host.addEventListener('click', (e) => {
+        const tile = tileOf(e.target);
+        if (tile) onOpen(tile.dataset.refId);
+    });
+    bindCardContextMenu(host, ({ x, y, target }) => {
+        const tile = tileOf(target);
+        if (!tile) return;
+        const ref = refsView.gridRefs.find(r => r.id === tile.dataset.refId);
+        if (ref) openCardActionMenu({ title: ref.name || 'Референс', x, y, items: menuItems(ref) });
+    });
+}
+
+/** Highlight the selected tile without a full grid re-render. */
+export function selectPoolTile(host, refId) {
+    for (const tile of host.querySelectorAll('.uris-pool-tile')) {
+        tile.classList.toggle('uris-pool-tile-selected', tile.dataset.refId === refId);
+    }
 }
