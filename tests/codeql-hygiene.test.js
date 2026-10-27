@@ -8,12 +8,10 @@ import { sanitizePrompt } from '../src/core.js';
 import { mergeExtraBody } from '../src/providers/image-chat-completions.js';
 import { randomToken } from '../src/random.js';
 
-test('sanitizePrompt: single-pass reformation cannot rebuild a stripped pattern', () => {
-    assert.equal(sanitizePrompt('javajavascript:script:alert(1)'), 'alert(1)', 'scheme strip is stable');
-    const tags = sanitizePrompt('<<script>script>alert(1)</script>>');
-    assert.ok(!/<[^>]*>/.test(tags), 'no complete tag can be re-formed');
-    assert.ok(!tags.includes('javascript:'), 'no scheme can be re-formed');
+test('sanitizePrompt: brackets strip leaves prose, no tag can re-form', () => {
+    assert.equal(sanitizePrompt('<<script>script>alert(1)</script>>'), 'scriptscriptalert(1)/script', 'tags die at the bracket level');
     assert.equal(sanitizePrompt('plain text, no markup'), 'plain text, no markup', 'clean text passes through');
+    assert.equal(sanitizePrompt('a < b and javascript: is inert prose'), 'a < b and javascript: is inert prose'.replace(/[<>]/g, ''), 'schemes are inert in a text prompt');
 });
 
 test('mergeExtraBody: prototype-polluting keys are skipped', () => {

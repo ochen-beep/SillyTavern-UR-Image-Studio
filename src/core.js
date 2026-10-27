@@ -955,14 +955,13 @@ export function extractTextFromResponse(resp) {
     return null;
 }
 
-// Strip HTML markup from prompt
+// Strip HTML markup from prompt: remove the angle brackets themselves —
+// single characters cannot re-form a multi-char tag (CodeQL-safe), and inner
+// text survives ('<i>hi</i>' -> 'ihi/i'). URL-scheme stripping is dropped on
+// purpose: a prompt is prose for an LLM, never used as an href.
 export function sanitizePrompt(t) {
     if (!t) return '';
-    // Loop until stable: a single pass can re-form the stripped pattern
-    // ('javajavascript:script:' loses one 'javascript:' and becomes it again).
-    let prev;
-    do { prev = t; t = t.replace(/<[^>]*>/g, '').replace(/javascript:/gi, ''); } while (t !== prev);
-    return t.trim();
+    return String(t).replace(/[<>]/g, '').trim();
 }
 
 // ── Modal wrappers over ST (like DS Comments) ──
