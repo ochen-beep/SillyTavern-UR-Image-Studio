@@ -958,7 +958,11 @@ export function extractTextFromResponse(resp) {
 // Strip HTML markup from prompt
 export function sanitizePrompt(t) {
     if (!t) return '';
-    return t.replace(/<[^>]*>/g, '').replace(/javascript:/gi, '').trim();
+    // Loop until stable: a single pass can re-form the stripped pattern
+    // ('javajavascript:script:' loses one 'javascript:' and becomes it again).
+    let prev;
+    do { prev = t; t = t.replace(/<[^>]*>/g, '').replace(/javascript:/gi, ''); } while (t !== prev);
+    return t.trim();
 }
 
 // ── Modal wrappers over ST (like DS Comments) ──

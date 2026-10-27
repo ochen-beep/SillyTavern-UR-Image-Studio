@@ -143,12 +143,14 @@ function isPlainObject(value) {
  * @param {unknown} extraBody
  * @returns {{ body: Record<string, unknown>, applied: string[] }}
  */
-function mergeExtraBody(body, extraBody) {
+export function mergeExtraBody(body, extraBody) {
   const extra = isPlainObject(extraBody) ? extraBody : {};
   const applied = [];
   const walk = (target, source) => {
     for (const [key, value] of Object.entries(source)) {
       if (RESERVED_BODY_KEYS.has(key)) continue;
+      // Prototype-pollution guard: extraBody keys come from connection settings.
+      if (key === '__proto__' || key === 'constructor' || key === 'prototype') continue;
       applied.push(key);
       if (isPlainObject(value) && isPlainObject(target[key])) walk(target[key], value);
       else target[key] = value;

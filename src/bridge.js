@@ -4,6 +4,7 @@
  *
  * Publishes `globalThis.URIS` so sibling SillyTavern extensions can use URIS
  * generation without importing URIS internals (import paths and module layout
+import { randomToken } from './random.js';
  * are not public API). The bridge is a thin facade over the existing pipeline:
  * headless requests go straight to generateImageRequest, so pending-request
  * recovery records, diagnostics, native-gallery materialization and the
@@ -375,7 +376,7 @@ function isGenerationAllowed() {
 }
 
 function newRequestId(caller) {
-    const uuid = globalThis.crypto?.randomUUID?.() || `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 10)}`;
+    const uuid = globalThis.crypto?.randomUUID?.() || randomToken(10);
     return `ext_${caller}_${uuid}`;
 }
 

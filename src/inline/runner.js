@@ -25,6 +25,7 @@
  * наблюдаемости, что у мостовых `ext_*`.
  */
 import { state, getCtx, fnv1aHex } from '../core.js';
+import { randomToken } from '../random.js';
 import { resolveChatConfigSnapshot, buildCandidates } from '../pipeline-config.js';
 import { resolvePromptReferenceContext } from '../scene-context.js';
 import { imageToDataUrl } from '../references.js';
@@ -99,7 +100,7 @@ export function buildJobPlan({ trigger, desc, macros = {} }) {
 
 /** `inl_<uuid>` — тот же неймспейс наблюдаемости, что у мостовых `ext_*`. */
 function newInlineRequestId() {
-    const uuid = globalThis.crypto?.randomUUID?.() || `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 10)}`;
+    const uuid = globalThis.crypto?.randomUUID?.() || randomToken(10);
     return `inl_${uuid}`;
 }
 

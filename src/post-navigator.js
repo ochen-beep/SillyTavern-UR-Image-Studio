@@ -11,7 +11,7 @@
  *
  * Does not mutate message.mes and does not depend on the DOM.
  */
-import { state, getCtx, log, warn } from './core.js';
+import { state, getCtx, sanitizePrompt, log, warn } from './core.js';
 
 export const POST_FILTER = {
     AI_ONLY: 'ai-only',      // only !is_user
@@ -149,7 +149,7 @@ export function getPostInfo() {
     const msgId = getCurrentMsgId();
     const msg = ctx.chat?.[msgId];
     if (!msg) return 'Нет поста';
-    const preview = String(msg.mes || '').replace(/<[^>]*>/g, '').slice(0, 50);
+    const preview = sanitizePrompt(msg.mes || '').slice(0, 50);
     const label = msg.is_user ? 'user' : 'AI';
     return `Пост #${msgId} (${label}): ${preview}…`;
 }

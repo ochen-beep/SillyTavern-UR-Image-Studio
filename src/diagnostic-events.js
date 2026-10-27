@@ -4,6 +4,8 @@
  * create a core -> journal -> core initialization cycle.
  */
 
+import { randomToken } from './random.js';
+
 export const LF_DIAGNOSTIC_EVENTS = 'uris_event_log';
 // Sized for a heavy session (~13 events per successful generation): the ring
 // must hold a working day of actions, not just the last dozen generations.
@@ -32,7 +34,7 @@ function createSessionId() {
     try {
         if (globalThis.crypto?.randomUUID) return globalThis.crypto.randomUUID().slice(0, 12);
     } catch { /* fallback below */ }
-    return Math.random().toString(36).slice(2, 14);
+    return randomToken(12);
 }
 
 export function hashDiagnosticId(value) {

@@ -47,7 +47,12 @@ export function clampCropRegion(region, naturalWidth, naturalHeight) {
  * @returns {{src: string, revoke: () => void}}
  */
 export function normalizeCropSource(source) {
-    if (typeof source === 'string') return { src: source, revoke: () => {} };
+    if (typeof source === 'string') {
+        // <img src> hygiene: allow data/blob/http(s) or scheme-less server
+        // paths; anything with another scheme becomes a broken image.
+        const schemeOk = /^(data:image\/|blob:|https?:)/i.test(source) || !/^[a-z][a-z0-9+.-]*:/i.test(source);
+        return { src: schemeOk ? source : '', revoke: () => {} };
+    }
     if (typeof URL !== 'undefined' && typeof URL.createObjectURL === 'function') {
         const url = URL.createObjectURL(source);
         return { src: url, revoke: () => { try { URL.revokeObjectURL(url); } catch { /* already gone */ } } };
