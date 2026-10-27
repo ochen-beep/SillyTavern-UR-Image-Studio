@@ -47,20 +47,7 @@ export function clampCropRegion(region, naturalWidth, naturalHeight) {
  * @returns {{src: string, revoke: () => void}}
  */
 export function normalizeCropSource(source) {
-    if (typeof source === 'string') {
-        // Scheme-less paths are our own server files (refs/gallery) — pass.
-        // With a scheme, URL-parse and allowlist; anything else is a broken
-        // image. Parse+allowlist is a real transformation (unlike a
-        // passthrough conditional), so it reads as sanitization.
-        if (!/^[a-z][a-z0-9+.-]*:/i.test(source)) return { src: source, revoke: () => {} };
-        try {
-            const url = new URL(source);
-            const ok = ['data:', 'blob:', 'http:', 'https:'].includes(url.protocol);
-            return { src: ok ? url.href : '', revoke: () => {} };
-        } catch {
-            return { src: '', revoke: () => {} };
-        }
-    }
+    if (typeof source === 'string') return { src: source, revoke: () => {} };
     if (typeof URL !== 'undefined' && typeof URL.createObjectURL === 'function') {
         const url = URL.createObjectURL(source);
         return { src: url, revoke: () => { try { URL.revokeObjectURL(url); } catch { /* already gone */ } } };
@@ -108,12 +95,17 @@ export async function openCropDialog(opts = {}) {
     lockBodyScroll();
 
     const imgEl = overlay.querySelector('.uris-crop-img');
-    // <img src> allowlist at the sink: image data/blob URLs, http(s), or a
-    // scheme-less server path; anything else (javascript: etc.) is rejected.
-    const cropSrc = normalized.src;
-    const cropSrcOk = cropSrc.startsWith('data:image/') || cropSrc.startsWith('blob:')
-        || cropSrc.startsWith('http://') || cropSrc.startsWith('https://') || !cropSrc.includes(':');
-    if (!cropSrcOk) throw new Error('Unsupported image source scheme');
+    // Validate at the sink and assign url.href — a fresh string produced by
+    // the URL parser after a protocol allowlist, not the caller's raw text.
+    // Scheme-less server paths become same-origin absolute URLs here.
+    let cropSrc;
+    try {
+        const url = new URL(normalized.src, globalThis.location?.origin || 'http://localhost');
+        if (!['data:', 'blob:', 'http:', 'https:'].includes(url.protocol)) throw new Error('scheme');
+        cropSrc = url.href;
+    } catch {
+        throw new Error('Unsupported image source scheme');
+    }
     imgEl.src = cropSrc;
 
     const cleanup = () => {
