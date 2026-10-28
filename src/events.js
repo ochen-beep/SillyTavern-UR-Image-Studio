@@ -18,8 +18,8 @@ let _bound = false;
 let _onAutomation = null;      // callback: ({chatId,msgId,messageText,templateId,requestedAction}) => Promise<void>
                                // templateId is an operation-level snapshot; null lets the pipeline resolve
                                // the effective template from the draft/default active template.
-let _onGenerationEnded = null; // reference for removeListener
-let _onMessageSent = null;     // reference for removeListener
+let _onCharacterRendered = null; // reference for removeListener
+let _onUserRendered = null;     // reference for removeListener
 let _onChatChanged = null;     // reference for removeListener
 let _onChatDeleted = null;     // reference for removeListener (gallery GC)
 let _onPostFollow = null;      // single function for GENERATION_ENDED/MESSAGE_SENT/MESSAGE_SWIPED
@@ -134,21 +134,24 @@ export function bindEvents(handlers) {
         }
     };
 
-    // GENERATION_ENDED → dispatch automation only when enabled and not manual.
-    // makeLast: run after ST handlers so the new post is already in ctx.chat.
-    _onGenerationEnded = () => {
+    // Automation triggers: CHARACTER_MESSAGE_RENDERED / USER_MESSAGE_RENDERED
+    // fire once per rendered message, after DOM insert, with an accurate
+    // swipe_id — including streaming (once at stream end) and NOT for
+    // impersonate. Navigating existing swipes only emits MESSAGE_SWIPED, so
+    // swiping back is free by event semantics. makeLast: run after ST handlers
+    // so the new post is already in ctx.chat.
+    _onCharacterRendered = (msgId) => {
         if (!state.settings.enabled) return;
         const automationMode = state.chatAutomationMode || 'manual';
         if (automationMode === 'manual') return;
         const filter = getFilter();
         if (filter === POST_FILTER.USER_ONLY || filter === POST_FILTER.MANUAL) return;
-        const i = getLastPostIndex();
+        const i = (typeof msgId === 'number' && msgId >= 0) ? msgId : getLastPostIndex();
         if (i != null) triggerIfMatches(i);
     };
-    ctx.eventSource.makeLast(et.GENERATION_ENDED, _onGenerationEnded);
+    ctx.eventSource.makeLast(et.CHARACTER_MESSAGE_RENDERED, _onCharacterRendered);
 
-    // MESSAGE_SENT → dispatch automation when the flow includes user messages.
-    _onMessageSent = (msgId) => {
+    _onUserRendered = (msgId) => {
         if (!state.settings.enabled) return;
         const automationMode = state.chatAutomationMode || 'manual';
         if (automationMode === 'manual') return;
@@ -157,7 +160,7 @@ export function bindEvents(handlers) {
         const i = (typeof msgId === 'number' && msgId >= 0) ? msgId : getLastPostIndex();
         if (i != null) triggerIfMatches(i);
     };
-    ctx.eventSource.on(et.MESSAGE_SENT, _onMessageSent);
+    ctx.eventSource.on(et.USER_MESSAGE_RENDERED, _onUserRendered);
 
     // FOLLOW-LAST-POST: when enabled, snap currentMsgId to the last matching post
     // and notify the UI. Works independently of automationMode — this is navigator
@@ -253,8 +256,8 @@ export function unbindEvents() {
         const et = ctx.event_types;
         // removeListener does not throw if the function is not in the list — but we still try/catch
         // in case eventSource is already partially torn down.
-        try { if (_onGenerationEnded) ctx.eventSource.removeListener(et.GENERATION_ENDED, _onGenerationEnded); } catch {}
-        try { if (_onMessageSent) ctx.eventSource.removeListener(et.MESSAGE_SENT, _onMessageSent); } catch {}
+        try { if (_onCharacterRendered) ctx.eventSource.removeListener(et.CHARACTER_MESSAGE_RENDERED, _onCharacterRendered); } catch {}
+        try { if (_onUserRendered) ctx.eventSource.removeListener(et.USER_MESSAGE_RENDERED, _onUserRendered); } catch {}
         try { if (_onChatChanged) ctx.eventSource.removeListener(et.CHAT_CHANGED, _onChatChanged); } catch {}
         try { if (_onChatDeleted) ctx.eventSource.removeListener(et.CHAT_DELETED, _onChatDeleted); } catch {}
         try { if (_onPostFollow) {
@@ -264,8 +267,8 @@ export function unbindEvents() {
         } } catch {}
         try { if (_onStopAll) ctx.eventSource.removeListener(et.GENERATION_STOPPED, _onStopAll); } catch {}
     }
-    _onGenerationEnded = null;
-    _onMessageSent = null;
+    _onCharacterRendered = null;
+    _onUserRendered = null;
     _onChatChanged = null;
     _onChatDeleted = null;
     _onPostFollow = null;

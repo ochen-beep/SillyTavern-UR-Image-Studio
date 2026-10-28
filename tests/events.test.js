@@ -45,6 +45,8 @@ const event_types = {
     MESSAGE_SWIPED: 'MESSAGE_SWIPED',
     CHAT_CHANGED: 'CHAT_CHANGED',
     GENERATION_STOPPED: 'GENERATION_STOPPED',
+    CHARACTER_MESSAGE_RENDERED: 'CHARACTER_MESSAGE_RENDERED',
+    USER_MESSAGE_RENDERED: 'USER_MESSAGE_RENDERED',
 };
 
 let testCtx = {
@@ -108,17 +110,17 @@ beforeEach(() => {
 
 test('bindEvents registers both auto event listeners', () => {
     bindEvents({ onAutomation: () => {} });
-    assert.ok(makeLastListeners.GENERATION_ENDED);
-    assert.ok(listeners.MESSAGE_SENT);
+    assert.ok(makeLastListeners.CHARACTER_MESSAGE_RENDERED);
+    assert.ok(listeners.USER_MESSAGE_RENDERED);
     unbindEvents();
 });
 
 test('ai-only flow: GENERATION_ENDED triggers, MESSAGE_SENT does not', () => {
     let called = null;
     bindEvents({ onAutomation: ({ msgId }) => { called = msgId; } });
-    listeners.MESSAGE_SENT();
+    listeners.USER_MESSAGE_RENDERED();
     assert.equal(called, null);
-    makeLastListeners.GENERATION_ENDED();
+    makeLastListeners.CHARACTER_MESSAGE_RENDERED();
     assert.equal(called, 3);
     unbindEvents();
 });
@@ -128,9 +130,9 @@ test('user-only flow: MESSAGE_SENT triggers, GENERATION_ENDED does not', () => {
     state.generationFlow = POST_FILTER.USER_ONLY;
     let called = null;
     bindEvents({ onAutomation: ({ msgId }) => { called = msgId; } });
-    makeLastListeners.GENERATION_ENDED();
+    makeLastListeners.CHARACTER_MESSAGE_RENDERED();
     assert.equal(called, null);
-    listeners.MESSAGE_SENT();
+    listeners.USER_MESSAGE_RENDERED();
     assert.equal(called, 2);
     unbindEvents();
 });
@@ -146,8 +148,8 @@ test('all flow: identical duplicate triggers coalesce into one dispatch', () => 
     ];
     const calls = [];
     bindEvents({ onAutomation: ({ msgId }) => { calls.push(msgId); } });
-    makeLastListeners.GENERATION_ENDED();
-    listeners.MESSAGE_SENT();
+    makeLastListeners.CHARACTER_MESSAGE_RENDERED();
+    listeners.USER_MESSAGE_RENDERED();
     // Same chat/msgId/text/action twice in a row = one dispatch (slot dedup).
     assert.deepEqual(calls, [3]);
     unbindEvents();
@@ -163,9 +165,9 @@ test('automation slot: rapid different triggers park latest and drain in order',
         if (msgId === 3) return new Promise(r => { resolveRun = r; });
         return undefined;
     } });
-    makeLastListeners.GENERATION_ENDED();          // msgId 3 — in flight, gated
-    listeners.MESSAGE_SENT(1);                      // parked (msgId 1)
-    listeners.MESSAGE_SENT(0);                      // latest wins: msgId 0 replaces 1
+    makeLastListeners.CHARACTER_MESSAGE_RENDERED();          // msgId 3 — in flight, gated
+    listeners.USER_MESSAGE_RENDERED(1);                      // parked (msgId 1)
+    listeners.USER_MESSAGE_RENDERED(0);                      // latest wins: msgId 0 replaces 1
     assert.deepEqual(calls, [3], 'only the first runs while the slot is busy');
     resolveRun();
     await new Promise(r => setTimeout(r, 0));
@@ -182,8 +184,8 @@ test('automation slot: a payload parked before a chat switch is dropped', async 
         calls.push('run');
         return new Promise(r => { resolveRun = r; });
     } });
-    makeLastListeners.GENERATION_ENDED();
-    listeners.MESSAGE_SENT(1);
+    makeLastListeners.CHARACTER_MESSAGE_RENDERED();
+    listeners.USER_MESSAGE_RENDERED(1);
     // Chat switch mid-flight: the parked payload must not drain into the new chat.
     listeners.CHAT_CHANGED();
     resolveRun();
@@ -197,7 +199,7 @@ test('MESSAGE_SENT uses provided msgId when available', () => {
     state.generationFlow = POST_FILTER.ALL;
     let called = null;
     bindEvents({ onAutomation: ({ msgId }) => { called = msgId; } });
-    listeners.MESSAGE_SENT(1);
+    listeners.USER_MESSAGE_RENDERED(1);
     assert.equal(called, 1);
     unbindEvents();
 });
@@ -207,8 +209,8 @@ test('manual flow: neither auto event triggers', () => {
     state.generationFlow = POST_FILTER.MANUAL;
     let called = false;
     bindEvents({ onAutomation: () => { called = true; } });
-    makeLastListeners.GENERATION_ENDED();
-    listeners.MESSAGE_SENT();
+    makeLastListeners.CHARACTER_MESSAGE_RENDERED();
+    listeners.USER_MESSAGE_RENDERED();
     assert.equal(called, false);
     unbindEvents();
 });
@@ -216,7 +218,7 @@ test('manual flow: neither auto event triggers', () => {
 test('GENERATION_ENDED triggers onAutomation for last AI post in ai-only flow', () => {
     let called = null;
     bindEvents({ onAutomation: ({ msgId }) => { called = msgId; } });
-    makeLastListeners.GENERATION_ENDED();
+    makeLastListeners.CHARACTER_MESSAGE_RENDERED();
     assert.equal(called, 3);
     unbindEvents();
 });
@@ -226,7 +228,7 @@ test('GENERATION_ENDED triggers onAutomation for last AI post in all flow', () =
     state.generationFlow = POST_FILTER.ALL;
     let called = null;
     bindEvents({ onAutomation: ({ msgId }) => { called = msgId; } });
-    makeLastListeners.GENERATION_ENDED();
+    makeLastListeners.CHARACTER_MESSAGE_RENDERED();
     assert.equal(called, 3);
     unbindEvents();
 });
@@ -236,7 +238,7 @@ test('MESSAGE_SENT triggers onAutomation for last user post in user-only flow', 
     state.generationFlow = POST_FILTER.USER_ONLY;
     let called = null;
     bindEvents({ onAutomation: ({ msgId }) => { called = msgId; } });
-    listeners.MESSAGE_SENT();
+    listeners.USER_MESSAGE_RENDERED();
     assert.equal(called, 2);
     unbindEvents();
 });
@@ -245,8 +247,8 @@ test('auto triggers do nothing when extension disabled', () => {
     state.settings.enabled = false;
     let called = false;
     bindEvents({ onAutomation: () => { called = true; } });
-    makeLastListeners.GENERATION_ENDED();
-    listeners.MESSAGE_SENT();
+    makeLastListeners.CHARACTER_MESSAGE_RENDERED();
+    listeners.USER_MESSAGE_RENDERED();
     assert.equal(called, false);
     unbindEvents();
 });
@@ -255,8 +257,8 @@ test('auto triggers do nothing when automationMode is manual', () => {
     state.chatAutomationMode = 'manual';
     let called = false;
     bindEvents({ onAutomation: () => { called = true; } });
-    makeLastListeners.GENERATION_ENDED();
-    listeners.MESSAGE_SENT();
+    makeLastListeners.CHARACTER_MESSAGE_RENDERED();
+    listeners.USER_MESSAGE_RENDERED();
     assert.equal(called, false);
     unbindEvents();
 });
@@ -265,7 +267,7 @@ test('onAutomation receives captured chatId, msgId, messageText, and requestedAc
     state.chatAutomationMode = 'full-pipeline';
     let captured = null;
     bindEvents({ onAutomation: (payload) => { captured = payload; } });
-    makeLastListeners.GENERATION_ENDED();
+    makeLastListeners.CHARACTER_MESSAGE_RENDERED();
     assert.ok(captured);
     assert.equal(captured.chatId, 'test-chat');
     assert.equal(captured.msgId, 3);
@@ -328,10 +330,10 @@ test('automation is suppressed until the current schema-v5 chat config is applie
     let called = false;
     bindEvents({ onAutomation: () => { called = true; } });
     listeners.CHAT_CHANGED();
-    makeLastListeners.GENERATION_ENDED();
+    makeLastListeners.CHARACTER_MESSAGE_RENDERED();
     assert.equal(called, false, 'automation must not run before the current chat config is applied');
     await new Promise(r => setTimeout(r, 0));
-    makeLastListeners.GENERATION_ENDED();
+    makeLastListeners.CHARACTER_MESSAGE_RENDERED();
     assert.equal(called, true, 'automation must run after the current chat config is applied');
     assert.equal(state.activeImageProfileId, 'img-current');
     unbindEvents();
@@ -401,7 +403,7 @@ test('GENERATION_ENDED falls back to state.currentChatId when ctx.chatId is empt
     testCtx.chatId = '';
     let captured = null;
     bindEvents({ onAutomation: (payload) => { captured = payload; } });
-    makeLastListeners.GENERATION_ENDED();
+    makeLastListeners.CHARACTER_MESSAGE_RENDERED();
     assert.equal(captured?.chatId, 'persisted-chat-id', 'must fall back to state.currentChatId');
     assert.equal(captured?.msgId, 3);
     unbindEvents();
@@ -413,7 +415,7 @@ test('GENERATION_ENDED retries automation after delay when chatId becomes availa
     testCtx.chatId = '';
     let captured = null;
     bindEvents({ onAutomation: (payload) => { captured = payload; } });
-    makeLastListeners.GENERATION_ENDED();
+    makeLastListeners.CHARACTER_MESSAGE_RENDERED();
     assert.equal(captured, null, 'must not call immediately without chatId');
     // Simulate ST setting chatId after a short delay
     setTimeout(() => {
@@ -433,7 +435,7 @@ test('GENERATION_ENDED skips automation and logs when no chatId is available any
     testCtx.chatId = '';
     let called = false;
     bindEvents({ onAutomation: () => { called = true; } });
-    makeLastListeners.GENERATION_ENDED();
+    makeLastListeners.CHARACTER_MESSAGE_RENDERED();
     assert.equal(called, false, 'must not call onAutomation immediately without a chatId');
     // Wait longer than the retry delay to ensure retry also fails
     await new Promise(r => setTimeout(r, 400));
@@ -471,7 +473,7 @@ test('GENERATION_ENDED re-reads fresh ctx.chatId after chat opens (stale getCont
         listeners.CHAT_CHANGED();
         await new Promise(r => setTimeout(r, 0));
         // Swipe / new post generation completes
-        makeLastListeners.GENERATION_ENDED();
+        makeLastListeners.CHARACTER_MESSAGE_RENDERED();
         assert.ok(captured, 'automation must fire once a chat is open');
         assert.equal(captured?.chatId, 'real-chat');
     } finally {
@@ -494,7 +496,7 @@ test('CHAT_CHANGED recovers from loadChatConfig error and unblocks automation', 
     await new Promise(r => setTimeout(r, 0));
     assert.ok(dispatched.includes('uris:chat-changed'), 'chat-changed must still be dispatched after failed config load');
     assert.equal(called, false, 'automation should not have run before being triggered');
-    makeLastListeners.GENERATION_ENDED();
+    makeLastListeners.CHARACTER_MESSAGE_RENDERED();
     assert.equal(called, true, 'automation must be able to run after chat config load failure');
     window.dispatchEvent = originalDispatch;
     unbindEvents();
@@ -510,7 +512,7 @@ test('follow=ON: GENERATION_ENDED snaps currentMsgId to last post and dispatches
     let captured = null;
     bindEvents({ onAutomation: (p) => { captured = p; } });
     // Emit to ALL subscribers (makeLast automation + on follow), mirroring ST.
-    if (makeLastListeners.GENERATION_ENDED) makeLastListeners.GENERATION_ENDED();
+    if (makeLastListeners.CHARACTER_MESSAGE_RENDERED) makeLastListeners.CHARACTER_MESSAGE_RENDERED();
     emitAll('GENERATION_ENDED');
     assert.equal(captured, null, 'automation must not fire in manual mode');
     assert.equal(state.currentMsgId, 3, 'currentMsgId must snap to last post');
@@ -541,7 +543,7 @@ test('follow=OFF: GENERATION_ENDED does not touch currentMsgId or dispatch uris:
     const originalDispatch = window.dispatchEvent;
     window.dispatchEvent = (ev) => { dispatched.push(ev.type); return true; };
     bindEvents({ onAutomation: () => {} });
-    makeLastListeners.GENERATION_ENDED();
+    makeLastListeners.CHARACTER_MESSAGE_RENDERED();
     assert.equal(state.currentMsgId, 1, 'currentMsgId must stay where user left it');
     assert.equal(dispatched.includes('uris:post-follow'), false, 'must not dispatch when follow is off');
     window.dispatchEvent = originalDispatch;
@@ -586,7 +588,7 @@ test('GENERATION_ENDED does not trigger automation on a reasoning-only post from
     testCtx.chat = [{ mes: 'u1', is_user: true }, { mes: '<think>partial reasoning never closed', is_user: false }];
     let called = null;
     bindEvents({ onAutomation: ({ msgId }) => { called = msgId; } });
-    makeLastListeners.GENERATION_ENDED();
+    makeLastListeners.CHARACTER_MESSAGE_RENDERED();
     assert.equal(called, null, 'reasoning-only post must not start automation');
     unbindEvents();
 });
@@ -601,7 +603,7 @@ test('reasoning-only last post does not fall back to an older AI post', () => {
     ];
     let called = null;
     bindEvents({ onAutomation: ({ msgId }) => { called = msgId; } });
-    makeLastListeners.GENERATION_ENDED();
+    makeLastListeners.CHARACTER_MESSAGE_RENDERED();
     assert.equal(called, null, 'must skip entirely — no fallback to the older post');
     unbindEvents();
 });
@@ -610,7 +612,7 @@ test('GENERATION_ENDED still triggers when visible content precedes an untermina
     testCtx.chat = [{ mes: 'Scene setup <think>partial', is_user: false }];
     let called = null;
     bindEvents({ onAutomation: ({ msgId }) => { called = msgId; } });
-    makeLastListeners.GENERATION_ENDED();
+    makeLastListeners.CHARACTER_MESSAGE_RENDERED();
     assert.equal(called, 0);
     unbindEvents();
 });
@@ -619,10 +621,10 @@ test('empty and placeholder posts do not trigger automation', () => {
     testCtx.chat = [{ mes: 'u1', is_user: true }, { mes: '   ', is_user: false }];
     let called = null;
     bindEvents({ onAutomation: ({ msgId }) => { called = msgId; } });
-    makeLastListeners.GENERATION_ENDED();
+    makeLastListeners.CHARACTER_MESSAGE_RENDERED();
     assert.equal(called, null, 'whitespace-only post must not start automation');
     testCtx.chat = [{ mes: 'u1', is_user: true }, { mes: '...', is_user: false }];
-    makeLastListeners.GENERATION_ENDED();
+    makeLastListeners.CHARACTER_MESSAGE_RENDERED();
     assert.equal(called, null, "ST's '...' placeholder must not start automation");
     unbindEvents();
 });
@@ -631,10 +633,10 @@ test('system and hidden posts do not trigger automation', () => {
     testCtx.chat = [{ mes: 'u1', is_user: true }, { mes: 'sys text', is_system: true }];
     let called = null;
     bindEvents({ onAutomation: ({ msgId }) => { called = msgId; } });
-    makeLastListeners.GENERATION_ENDED();
+    makeLastListeners.CHARACTER_MESSAGE_RENDERED();
     assert.equal(called, null, 'is_system post must not start automation');
     testCtx.chat = [{ mes: 'u1', is_user: true }, { mes: 'hidden text', is_hidden: true }];
-    makeLastListeners.GENERATION_ENDED();
+    makeLastListeners.CHARACTER_MESSAGE_RENDERED();
     assert.equal(called, null, 'is_hidden post must not start automation');
     unbindEvents();
 });
@@ -645,7 +647,7 @@ test('user-only flow: empty user post does not trigger automation', () => {
     testCtx.chat = [{ mes: '   ', is_user: true }];
     let called = null;
     bindEvents({ onAutomation: ({ msgId }) => { called = msgId; } });
-    listeners.MESSAGE_SENT();
+    listeners.USER_MESSAGE_RENDERED();
     assert.equal(called, null);
     unbindEvents();
 });
@@ -656,8 +658,18 @@ test('closed think block does not block automation (ST parsed the reasoning, mes
     testCtx.chat = [{ mes: 'u1', is_user: true }, { mes: 'Real scene text', is_user: false }];
     let called = null;
     bindEvents({ onAutomation: ({ msgId }) => { called = msgId; } });
-    makeLastListeners.GENERATION_ENDED();
+    makeLastListeners.CHARACTER_MESSAGE_RENDERED();
     assert.equal(called, 1);
     unbindEvents();
 });
 
+
+test('MESSAGE_SWIPED (swipe navigation) never dispatches automation', () => {
+    let called = false;
+    bindEvents({ onAutomation: () => { called = true; } });
+    // Swiping between existing variants emits only MESSAGE_SWIPED — automation
+    // listens to RENDERED events, so revisiting a swipe is free.
+    listeners.MESSAGE_SWIPED(3);
+    assert.equal(called, false, 'swipe navigation must not trigger automation');
+    unbindEvents();
+});
