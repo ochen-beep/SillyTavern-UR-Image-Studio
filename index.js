@@ -202,7 +202,7 @@ async function init() {
             try {
                 const pipeline = await import('./src/pipeline.js');
                 if (requestedAction === 'build-prompt') {
-                    const run = await pipeline.runStage1ForDraft(input);
+                    const run = await pipeline.runStage1ForDraft(input, undefined, undefined, { isAuto: true });
                     if (run.applied) {
                         if (isPanelVisible() && getActiveTab() === 'generate') refreshActive();
                     }

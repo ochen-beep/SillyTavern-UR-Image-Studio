@@ -55,6 +55,25 @@ async function resolveTemplateForDraft(templateId) {
 }
 
 /**
+ * Fingerprint of an AUTO run's identity inputs: scene text + effective
+ * template + image route/params. Stored on the draft (autoPromptFp /
+ * autoDoneFp) so repeat automation for unchanged content+settings is free.
+ * Manual and queue runs never compute or match it.
+ */
+function computeAutoFp({ messageText, templateId, configSnapshot }) {
+    const d = configSnapshot?.generationDefaults || {};
+    return fnv1aHex([
+        String(messageText || ''),
+        templateId || 'base',
+        configSnapshot?.imageProfileId || '',
+        d.modelId || '',
+        d.aspectRatio || '',
+        d.imageSize || '',
+        d.quality || '',
+    ].join('|'));
+}
+
+/**
  * Run Stage 1 for an explicit message draft. Captures identity once, builds one
  * shared snapshot, executes the template runtime, and applies the result only
  * if the run token and prompt revision still match.
@@ -118,6 +137,19 @@ export async function runStage1ForDraft(input, onStatus = () => {}, signal, opts
             ? templateId
             : resolveDraftTemplateId(draft, configSnapshot.templateId ?? state.activeTemplateId);
 
+        // Auto fingerprint skip: identical scene text + identical generation
+        // settings already built this prompt (repeat event, swipe back) — no
+        // second LLM call. Manual and queue runs never skip.
+        const autoFp = opts.isAuto ? computeAutoFp({ messageText, templateId: effectiveTemplateId, configSnapshot }) : null;
+        if (autoFp && draft.autoPromptFp === autoFp && String(draft.prompt || '').trim()) {
+            recordDiagnosticEvent({
+                event: 'stage1-result', stage: 'stage1', requestId: stage1RequestId,
+                chatHash: hashDiagnosticId(chatId), msgId, outcome: 'auto-fingerprint-match',
+                durationMs: performance.now() - startedAt,
+            });
+            return { requestId: stage1RequestId, applied: false, reason: 'auto-fingerprint-match', result: null, snapshot: null, draft };
+        }
+
         const candidates = await buildCandidates(chatId);
         throwIfAborted();
         const snapshot = await buildSceneContextSnapshot({
@@ -155,6 +187,12 @@ export async function runStage1ForDraft(input, onStatus = () => {}, signal, opts
             // Success-only notification (superseded runs stay silent — the
             // newer run will notify). Cancel/error paths below never ring.
             if (apply.applied) playStageSound('stage1');
+            if (apply.applied && autoFp) {
+                try {
+                    // Bookkeeping only: a failed write must not fail the run.
+                    await updateGenerationDraft(chatId, msgId, messageText, d => ({ ...d, autoPromptFp: autoFp }));
+                } catch { /* ignore */ }
+            }
             recordDiagnosticEvent({
                 event: 'stage1-result', stage: 'stage1', requestId: stage1RequestId, chatHash: hashDiagnosticId(chatId), msgId,
                 outcome: apply.applied ? 'applied' : apply.reason || 'superseded',
@@ -225,9 +263,31 @@ export async function runFullPipelineForDraft(input, onStatus = () => {}, signal
     const existing = autoFlights.get(flightKey);
     if (existing) return await raceFlightWithSignal(existing, signal);
     const flight = (async () => {
+        // Auto fingerprint: identical content+settings that already produced a
+        // card are free; a built-but-unimaged prompt jumps straight to Stage 2.
+        const fpDraft = await getGenerationDraft(input.chatId, input.msgId, input.messageText);
+        const autoFp = computeAutoFp({
+            messageText: input.messageText,
+            templateId: input.templateId != null
+                ? input.templateId
+                : resolveDraftTemplateId(fpDraft, chatConfig.templateId ?? state.activeTemplateId),
+            configSnapshot: chatConfig,
+        });
+        if (fpDraft.autoDoneFp === autoFp) {
+            return { applied: false, reason: 'auto-fingerprint-match', result: null, snapshot: null, draft: fpDraft };
+        }
         const run = await runStage1ForDraft(runInput, onStatus, signal, { isAuto: true });
-        if (!run.applied || !run.draft?.prompt) return null;
-        return runStage2ForDraft(runInput, onStatus, signal, { isAuto: true });
+        const promptReady = run.reason === 'auto-fingerprint-match'
+            ? String(run.draft?.prompt || '').trim()
+            : run.applied;
+        if (!promptReady) return null;
+        const card = await runStage2ForDraft(runInput, onStatus, signal, { isAuto: true });
+        if (card) {
+            try {
+                await updateGenerationDraft(input.chatId, input.msgId, input.messageText, d => ({ ...d, autoDoneFp: autoFp }));
+            } catch { /* bookkeeping only */ }
+        }
+        return card;
     })();
     autoFlights.set(flightKey, flight);
     try { return await flight; }

@@ -119,6 +119,10 @@ export function createGenerationDraft(chatId, msgId, messageText) {
         prompt: '',
         promptOrigin: 'empty',
         promptRevision: 0,
+        // Auto-run fingerprints (events-driven automation): the content+settings
+        // hash of the last successful auto Stage 1 prompt build / full pipeline.
+        autoPromptFp: null,
+        autoDoneFp: null,
         aspectRatio: '1:1',
         imageSize: '1K',
         quality: 'auto',
