@@ -30,6 +30,11 @@ let _onStopAll = null;         // GENERATION_STOPPED → abort all in-flight ext
 // stale async loads from overwriting a later chat switch.
 let _chatConfigReady = true;
 let _chatLoadToken = 0;
+// One-slot coalescing queue for event-driven automation: a burst of triggers
+// (fast posts, group-chat rounds) parks the LATEST payload instead of stacking
+// paid runs in parallel. The parked payload never crosses a chat switch.
+let _autoRunning = false;
+let _autoParked = null;
 
 export function bindEvents(handlers) {
     const ctx = getCtx();
@@ -81,13 +86,52 @@ export function bindEvents(handlers) {
         state.currentMsgId = msgId;
         // templateId: null lets the pipeline resolve the effective template from
         // the current draft/default at processing time, rather than snapshotting it.
-        _onAutomation?.({
+        dispatchAutomation({
             chatId,
             msgId,
             messageText: msg.mes || '',
             templateId: null,
             requestedAction: automationMode,
+            chatLoadToken: _chatLoadToken,
         });
+    };
+
+    /**
+     * Dispatch an automation run through the one-slot queue. Latest-wins
+     * parking: while a run is in flight only the newest payload is kept, and it
+     * drains from the running one's finally. A parked payload whose chat token
+     * is stale (chat switched while it waited) is dropped silently.
+     */
+    const samePayload = (a, b) => a && b
+        && a.chatId === b.chatId && a.msgId === b.msgId
+        && a.messageText === b.messageText && a.requestedAction === b.requestedAction;
+    let _autoInflight = null;
+    const dispatchAutomation = (payload) => {
+        if (_autoRunning) {
+            // A trigger identical to the in-flight or parked run is a pure
+            // duplicate (both events fired for the same post) — drop it.
+            if (samePayload(payload, _autoInflight) || samePayload(payload, _autoParked)) return;
+            _autoParked = payload;
+            return;
+        }
+        if (!_onAutomation) return;
+        _autoRunning = true;
+        _autoInflight = payload;
+        const finish = () => {
+            _autoRunning = false;
+            _autoInflight = null;
+            const next = _autoParked;
+            _autoParked = null;
+            if (next && next.chatLoadToken === _chatLoadToken) dispatchAutomation(next);
+        };
+        // The handler call stays synchronous (tests and ST rely on the
+        // immediate dispatch); only the slot drain rides the promise.
+        try {
+            Promise.resolve(_onAutomation(payload)).then(finish, finish);
+        } catch (e) {
+            finish();
+            throw e;
+        }
     };
 
     // GENERATION_ENDED → dispatch automation only when enabled and not manual.
@@ -140,6 +184,7 @@ export function bindEvents(handlers) {
     _onChatChanged = () => {
         const token = ++_chatLoadToken;
         _chatConfigReady = false;
+        _autoParked = null;   // a parked automation payload never crosses a chat switch
         // Fresh snapshot — the ctx captured by bindEvents() has a permanently
         // stale (empty) chatId (see triggerIfMatches above).
         state.currentChatId = getCtx().chatId;
@@ -228,5 +273,7 @@ export function unbindEvents() {
     _onAutomation = null;
     _chatConfigReady = true;
     _chatLoadToken = 0;
+    _autoRunning = false;
+    _autoParked = null;
     _bound = false;
 }

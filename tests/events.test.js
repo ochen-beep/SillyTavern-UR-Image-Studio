@@ -135,7 +135,7 @@ test('user-only flow: MESSAGE_SENT triggers, GENERATION_ENDED does not', () => {
     unbindEvents();
 });
 
-test('all flow: both events trigger', () => {
+test('all flow: identical duplicate triggers coalesce into one dispatch', () => {
     setFilter(POST_FILTER.ALL);
     state.generationFlow = POST_FILTER.ALL;
     testCtx.chat = [
@@ -148,7 +148,47 @@ test('all flow: both events trigger', () => {
     bindEvents({ onAutomation: ({ msgId }) => { calls.push(msgId); } });
     makeLastListeners.GENERATION_ENDED();
     listeners.MESSAGE_SENT();
-    assert.deepEqual(calls, [3, 3]);
+    // Same chat/msgId/text/action twice in a row = one dispatch (slot dedup).
+    assert.deepEqual(calls, [3]);
+    unbindEvents();
+});
+
+test('automation slot: rapid different triggers park latest and drain in order', async () => {
+    setFilter(POST_FILTER.ALL);
+    state.generationFlow = POST_FILTER.ALL;
+    const calls = [];
+    let resolveRun = null;
+    bindEvents({ onAutomation: ({ msgId }) => {
+        calls.push(msgId);
+        if (msgId === 3) return new Promise(r => { resolveRun = r; });
+        return undefined;
+    } });
+    makeLastListeners.GENERATION_ENDED();          // msgId 3 — in flight, gated
+    listeners.MESSAGE_SENT(1);                      // parked (msgId 1)
+    listeners.MESSAGE_SENT(0);                      // latest wins: msgId 0 replaces 1
+    assert.deepEqual(calls, [3], 'only the first runs while the slot is busy');
+    resolveRun();
+    await new Promise(r => setTimeout(r, 0));
+    assert.deepEqual(calls, [3, 0], 'only the latest parked payload drains after completion');
+    unbindEvents();
+});
+
+test('automation slot: a payload parked before a chat switch is dropped', async () => {
+    setFilter(POST_FILTER.ALL);
+    state.generationFlow = POST_FILTER.ALL;
+    const calls = [];
+    let resolveRun = null;
+    bindEvents({ onAutomation: () => {
+        calls.push('run');
+        return new Promise(r => { resolveRun = r; });
+    } });
+    makeLastListeners.GENERATION_ENDED();
+    listeners.MESSAGE_SENT(1);
+    // Chat switch mid-flight: the parked payload must not drain into the new chat.
+    listeners.CHAT_CHANGED();
+    resolveRun();
+    await new Promise(r => setTimeout(r, 0));
+    assert.deepEqual(calls, ['run'], 'parked payload dropped after CHAT_CHANGED');
     unbindEvents();
 });
 
