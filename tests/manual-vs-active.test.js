@@ -83,9 +83,11 @@ test('a quiet post submits without any confirmation', async () => {
     assert.equal(result, true);
 });
 
-test('imported refs keep only canonical same-origin image paths', async () => {
+test('imported refs never carry an external image URL', async () => {
     const kept = normalizePoolReference({ id: 'r1', name: 'A', imagePath: 'user/images/URIS_Refs/a.png' });
     assert.equal(kept.imagePath, 'user/images/URIS_Refs/a.png', 'canonical path survives');
+    const relative = normalizePoolReference({ id: 'r3', name: 'C', imagePath: 'a/b/img.png' });
+    assert.equal(relative.imagePath, 'a/b/img.png', 'legacy relative paths are kept (harmless 404 at worst)');
     const external = normalizePoolReference({ id: 'r2', name: 'B', imagePath: 'https://evil.example/pixel.png' });
     assert.equal(external.imagePath, '', 'an external URL never reaches tiles or fetches');
 });
