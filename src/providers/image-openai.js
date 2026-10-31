@@ -286,10 +286,16 @@ function shouldFallbackToProxyJson(error, connection) {
 // really rejected. Explicit orders are never second-guessed: a pinned
 // editProtocol or an explicit delivery keeps the shipped single-dialect behavior.
 
-/** Auth/quota rejections say nothing about the wire dialect — never fall through on them. */
+/**
+ * Only a client-class rejection (4xx, minus auth/quota statuses) proves the
+ * gateway refused the JSON dialect itself. A 5xx means the gateway or its
+ * upstream broke after possibly accepting the request — the outcome is
+ * ambiguous and the paid img2img leg must not fire on top of it.
+ */
 function isDialectCandidate(error) {
   const status = error?.httpStatus;
   if (!Number.isSafeInteger(status)) return false;
+  if (status < 400 || status > 499) return false;
   return !(status === 401 || status === 402 || status === 403 || status === 429);
 }
 
