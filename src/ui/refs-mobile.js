@@ -53,11 +53,11 @@ export async function renderMobileAll(root) {
 /**
  * Коллаж 2×2 из первых четырёх референсов — превью папки в мобильном списке:
  * узнавание без чтения имени (40+ папок). Экспорт для тестов.
- * @param {{ imagePath?: string }[] | null} refs
+ * @param {{ imagePath?: string, thumbPath?: string }[] | null} refs
  */
 export function mobileFolderCollageHtml(refs) {
     const list = (Array.isArray(refs) ? refs : []).slice(0, 4).map(r =>
-        `<span class="uris-mobile-folder-thumb" style="background-image:url('${escapeHtml(r?.imagePath || '')}')"></span>`);
+        `<span class="uris-mobile-folder-thumb" style="background-image:url('${escapeHtml(r?.thumbPath || r?.imagePath || '')}')"></span>`);
     while (list.length < 4) list.push('<span class="uris-mobile-folder-thumb uris-mobile-folder-thumb-empty"></span>');
     return `<span class="uris-mobile-folder-collage">${list.join('')}</span>`;
 }

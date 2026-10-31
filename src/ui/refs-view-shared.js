@@ -61,7 +61,7 @@ export function poolTileHtml(ref, foldersById, { maxDots = 4, selected = false }
     const dims = Number(ref?.width) > 0 && Number(ref?.height) > 0
         ? ` width="${Number(ref.width)}" height="${Number(ref.height)}"` : '';
     return `<button type="button" class="uris-pool-tile${selectedClass}" data-ref-id="${escapeHtml(ref.id)}" aria-label="${escapeHtml(ref.name)}" title="${escapeHtml(ref.name)}">
-        <img src="${escapeHtml(ref.imagePath)}" alt="${escapeHtml(ref.name)}" loading="lazy" decoding="async"${dims}>
+        <img src="${escapeHtml(ref.thumbPath || ref.imagePath)}" alt="${escapeHtml(ref.name)}" loading="lazy" decoding="async"${dims}>
         ${dots ? `<div class="uris-pool-tile-dots">${dots}</div>` : ''}
         <div class="uris-pool-tile-name">${escapeHtml(ref.name)}</div>
     </button>`;
