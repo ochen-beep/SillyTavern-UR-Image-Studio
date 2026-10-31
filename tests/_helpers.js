@@ -146,7 +146,10 @@ export function makeGzipFrame(input) {
         ? Buffer.from(input.buffer, input.byteOffset, input.byteLength)
         : Buffer.from(input, 'utf-8');
     const compressed = gzipSync(buf);
-    return new Uint8Array(compressed.buffer, compressed.byteOffset, compressed.byteOffset + compressed.byteLength);
+    // Third arg of the view constructor is a LENGTH, not an end offset —
+    // pooled Buffer allocations give gzipSync results a non-zero byteOffset,
+    // and the end-offset form reads past the compressed bytes (or throws).
+    return new Uint8Array(compressed.buffer, compressed.byteOffset, compressed.byteLength);
 }
 
 /** In-memory authoritative collections for reference-library integration tests. */
