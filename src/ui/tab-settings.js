@@ -11,6 +11,7 @@ import {
 } from '../core.js';
 import { playStageSound } from '../notify.js';
 import { runExport, runImportInteractive } from '../data-port.js';
+import { deleteOrphanFiles, findOrphanRefFiles } from '../data-care.js';
 import { exportDiagnosticDump, clearAllDiagnostics } from '../diagnostic-dump.js';
 import { exportNetDump } from '../netdump.js';
 import { reportFailure, URIS_SCOPES } from '../error-pool.js';
@@ -131,8 +132,10 @@ export function render(root) {
                     <button type="button" class="uris-btn uris-btn-outline" id="urisTabExportNet"><i class="fa-solid fa-network-wired"></i> Сетевой дамп</button>
                     <button type="button" class="uris-btn uris-btn-ghost" id="urisTabClearDiag"><i class="fa-solid fa-eraser"></i> Очистить</button>
                     <button type="button" class="uris-btn uris-btn-outline" id="urisTabGalleryRefresh" title="Пересканировать папки на сервере: подхватить внешние добавления и пометить внешние удаления"><i class="fa-solid fa-rotate"></i> Обновить галерею</button>
+                    <button type="button" class="uris-btn uris-btn-outline" id="urisTabOrphanSweep" title="Найти файлы в URIS_Refs и URIS_Thumbs, на которые не ссылается ни одна карточка"><i class="fa-solid fa-broom"></i> Ничьи файлы</button>
                     <button type="button" class="uris-btn uris-btn-danger" id="urisTabGalleryClear"><i class="fa-solid fa-trash"></i> Очистить галерею</button>
                 </div>
+                <div id="urisOrphanSweepBox"></div>
                 <small class="uris-hint">Диагностика содержит технические события и ошибки текущей сессии. Сетевой дамп выгружается отдельно и содержит только метаданные — без промптов и тел запросов/ответов; API-ключи и полные бинарные изображения не экспортируются. Рендер галереи сервер не сканирует — «Обновить галерею» запускает сверку с папками вручную; «Очистить галерею» удаляет генерации текущего чата.</small>
             </section>
         </div>`;
@@ -324,6 +327,36 @@ function bindDataActions(root) {
         } catch (e) {
             error('clearAllDiagnostics:', e);
             reportFailure({ scope: URIS_SCOPES.diagnostics, message: e?.message || String(e), toast: true, toastText: 'Не удалось полностью очистить диагностику: ' + (e?.message || e), toastTitle: DISPLAY_NAME });
+        }
+    });
+    // Orphan sweep: report-only until the user confirms the deletion — the
+    // referenced-set check must never guess wrong about a live record.
+    root.querySelector('#urisTabOrphanSweep')?.addEventListener('click', async () => {
+        const box = root.querySelector('#urisOrphanSweepBox');
+        if (!box) return;
+        box.innerHTML = '<small class="uris-hint">Сканирую папки…</small>';
+        try {
+            const orphans = await findOrphanRefFiles();
+            if (!orphans.length) {
+                box.innerHTML = '<small class="uris-hint">Ничьих файлов нет — папки референсов и миниатюр чистые.</small>';
+                return;
+            }
+            box.innerHTML = orphans.map(p =>
+                `<label class="checkbox_label"><input type="checkbox" checked data-orphan-path="${escapeHtml(p)}"><span class="uris-hint">${escapeHtml(p)}</span></label>`
+            ).join('') + '<button type="button" class="uris-btn uris-btn-danger" id="urisOrphanDelete"><i class="fa-solid fa-trash"></i> Удалить отмеченные</button>';
+            box.querySelector('#urisOrphanDelete')?.addEventListener('click', async () => {
+                const paths = [...box.querySelectorAll('[data-orphan-path]')]
+                    .filter(el => el.checked).map(el => el.getAttribute('data-orphan-path'));
+                if (!paths.length) return;
+                if (!(await showConfirmModal(`Удалить файлы (${paths.length})? Отменить это нельзя.`))) return;
+                const deleted = await deleteOrphanFiles(paths);
+                toastr?.success(`Удалено файлов: ${deleted}`, DISPLAY_NAME);
+                refreshActive();
+            });
+        } catch (e) {
+            box.innerHTML = '';
+            error('orphan sweep:', e);
+            reportFailure({ scope: URIS_SCOPES.storage, message: e?.message || String(e), toast: true, toastText: 'Свип ничьих файлов: ' + (e?.message || e), toastTitle: DISPLAY_NAME });
         }
     });
 }

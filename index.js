@@ -13,7 +13,7 @@
 import {
     state, DISPLAY_NAME,
     loadSettings, saveSettings, flushSettings, getCtx, log, warn, error,
-    debounce, applyUiScale, applyFontScale, abortAllGenerations,
+    debounce, applyUiScale, applyFontScale, abortAllGenerations, showConfirmModal,
 } from './src/core.js';
 import { initNotifyUnlock } from './src/notify.js';
 import {
@@ -55,6 +55,25 @@ export async function onEnable()   { log('onEnable'); await safeInit(); }
 export function onDisable()  { log('onDisable'); recordDiagnosticEvent({ event: 'disable' }); flushDiagnosticEvents(); cleanup(); }
 /** SillyTavern extension install hook. */
 export function onInstall()  { log('onInstall'); }
+/**
+ * SillyTavern extension removal hook: wipes URIS-owned server data after an
+ * explicit confirmation. Gallery images in character folders stay — they are
+ * part of ST's native gallery by design.
+ */
+export async function onClean() {
+    const proceed = await showConfirmModal('Удалить все данные UR Image Studio на сервере: хранилища, референсы и миниатюры? Отменить это нельзя.');
+    if (!proceed) { log('Clean cancelled by user'); return; }
+    try {
+        const { deleteUserFiles, deleteOwnedImageFolders } = await import('./src/data-care.js');
+        const files = await deleteUserFiles();
+        const images = await deleteOwnedImageFolders();
+        log(`Clean: removed ${files} file(s), ${images} image(s).`);
+        toastr?.info(`UR Image Studio: данные удалены (${files} файл(ов), ${images} картинок)`, DISPLAY_NAME);
+    } catch (e) {
+        error('onClean:', e);
+        toastr?.error(`Не удалось полностью удалить данные: ${e?.message || e}`, DISPLAY_NAME);
+    }
+}
 
 /** Initializes the extension once, guarding against repeated calls. */
 async function safeInit() {
