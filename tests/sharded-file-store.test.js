@@ -176,15 +176,36 @@ describe('load from manifest', () => {
         assert.equal(toastErrors.length, 1);
     });
 
-    it('a shard the manifest names but the server cannot deliver → readonly + toast', async () => {
+    it('a manifest naming a missing shard rebuilds from the scan instead of bricking', async () => {
         const store = makeStore();
         serverFiles.set(manifestName(store), JSON.stringify({
             v: 1, kind: 'manifest', store: 'x',
             shards: [{ id: 's0000', count: 1, min: 1, max: 1 }],
         }));
         missingNames.add(shardName(store, 's0000'));
-        assert.equal(await store.ready(), 'readonly');
-        assert.match(toastErrors[0], /часть данных/);
+        // The shard file is gone — its records are unrecoverable, but the
+        // store must come up functional with a rewritten manifest, not
+        // stay readonly for the session.
+        assert.equal(await store.ready(), 'file');
+        assert.deepEqual(store.snapshot(), []);
+        assert.equal(store.mode(), 'file');
+    });
+
+    it('a missing later shard keeps the readable prefix via the scan', async () => {
+        const store = makeStore();
+        serverFiles.set(manifestName(store), JSON.stringify({
+            v: 1, kind: 'manifest', store: 'x',
+            shards: [
+                { id: 's0000', count: 1, min: 1000, max: 1000 },
+                { id: 's0001', count: 1, min: 2000, max: 2000 },
+            ],
+        }));
+        serverFiles.set(shardName(store, 's0000'), JSON.stringify({
+            v: 1, kind: 'shard', store: 'x', id: 's0000', records: [card(0, 1000)],
+        }));
+        missingNames.add(shardName(store, 's0001'));
+        assert.equal(await store.ready(), 'file');
+        assert.deepEqual(store.snapshot().map(r => r.id), ['c0000'], 'readable shards survive the recovery');
     });
 
     it('a transient shard-read failure at load retries; the store still comes up file', async t => {
@@ -368,6 +389,10 @@ describe('flush surface', () => {
         await small.mutate(list => { list.unshift(card(0)); });
         failUploads = false;
         small.flushOnUnload();
+        // The manifest send is chained behind the shard outcomes: a manifest
+        // naming an undelivered shard would brick the next session.
+        await new Promise(resolve => setImmediate(resolve));
+        await new Promise(resolve => setImmediate(resolve));
         assert.ok(uploads.some(u => u.keepalive), 'a small dirty shard rides the keepalive');
         assert.ok(uploads.some(u => u.keepalive && u.name === manifestName(small)),
             'the manifest rides too when every dirty shard flew (skipped === 0)');
@@ -376,6 +401,27 @@ describe('flush surface', () => {
         assert.equal(flush.outcome, 'sent');
         assert.equal(flush.details.shards, 2, 'one shard + the manifest ride');
         assert.equal(flush.details.skipped, 0);
+    });
+
+    it('flushOnUnload does not send the manifest when a shard send fails', async () => {
+        const small = makeStore();
+        await small.ready();
+        failUploads = true;
+        await small.mutate(list => { list.unshift(card(0)); });
+        // failUploads stays on: the unload-flush retry send fails as well,
+        // which the manifest gate must observe instead of lying about what
+        // the server can deliver.
+        small.flushOnUnload();
+        await new Promise(resolve => setImmediate(resolve));
+        await new Promise(resolve => setImmediate(resolve));
+        assert.ok(uploads.some(u => u.keepalive && u.name.startsWith(small.shardPrefix)),
+            'the shard retry flew (and failed)');
+        assert.equal(uploads.some(u => u.keepalive && u.name === manifestName(small)), false,
+            'the manifest never rides over a failed shard send');
+        const flush = journal.listDiagnosticEvents().find(e => e.event === 'store-unload-flush');
+        assert.ok(flush, 'the suppression is loud');
+        assert.equal(flush.outcome, 'skipped');
+        assert.equal(flush.details.failed, 1);
     });
 
     it('flushOnUnload does not send the manifest when it skipped a dirty shard for size', async () => {
