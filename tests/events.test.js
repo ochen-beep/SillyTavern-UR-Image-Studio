@@ -573,9 +573,12 @@ test('onStopAll fires on every GENERATION_STOPPED and is removed by unbindEvents
     assert.equal(stopped, 2, 'handler must not fire after unbindEvents');
 });
 
-test('bindEvents without onStopAll does not subscribe GENERATION_STOPPED', () => {
+test('bindEvents without onStopAll still subscribes GENERATION_STOPPED for the hold', () => {
     bindEvents({ onAutomation: () => {} });
-    assert.equal(listeners.GENERATION_STOPPED, undefined);
+    // The stop hold (drop parked automation, block the slot drain) must work
+    // even when the caller passed no stop handler — e.g. a busy tab.
+    assert.ok(listeners.GENERATION_STOPPED, 'stop listener is registered unconditionally');
+    assert.doesNotThrow(() => emitAll('GENERATION_STOPPED'));
     unbindEvents();
 });
 
