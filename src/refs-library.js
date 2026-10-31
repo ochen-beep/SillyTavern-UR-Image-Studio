@@ -245,7 +245,11 @@ export function normalizePoolReference(data = {}) {
         aliases: uniqueStrings(normalizeAliases(data.aliases)),
         description: String(data.description || ''),
         ...(bindingMode === 'description' ? { bindingMode } : {}),
-        imagePath: data.imagePath || '',
+        // Imported files must land only on canonical same-origin storage paths:
+        // an arbitrary external URL would ride every tile's <img src> and the
+        // generation-time fetch. Non-canonical input loses the image, the card
+        // survives with its name and description.
+        imagePath: canonicalizeNativeImagePath(data.imagePath) || '',
         folders: uniqueStrings(Array.isArray(data.folders) ? data.folders.map(sanitizeId).filter(Boolean) : []),
         createdAt: Number.isFinite(data.createdAt) ? data.createdAt : Date.now(),
         // Edit time drives cross-device merge resolution in file-store; absent

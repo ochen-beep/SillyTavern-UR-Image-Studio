@@ -168,6 +168,11 @@ export const state = {
     // are saved. Map.update/remove is managed in pipeline.runStage2.
     stage2Chains: new Map(),
 
+    // Live Stage 2 runs per post: Map<'chatId:msgId', count>. A manual submit
+    // consults this before paying for a second generation of the same post —
+    // an auto/bridge run in flight is invisible to the queue's dedup.
+    activeStage2ByPost: new Map(),
+
     // Active profiles are managed by the per-chat schema-v5 config.
     activeImageProfileId: null,
     // Chat-scoped automation config (schema-v5 projection, see chat-binding.js).
