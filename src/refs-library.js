@@ -272,6 +272,10 @@ export function normalizePoolReference(data = {}) {
     if (sourceBytes !== null) item.sourceBytes = sourceBytes;
     if (optimizedBytes !== null) item.optimizedBytes = optimizedBytes;
     if (optimizationVersion) item.optimizationVersion = optimizationVersion;
+    // Server-side pool-tile thumbnail (URIS_Thumbs); absent on records from
+    // before the ingest thumbnails, which fall back to the full imagePath.
+    const thumbPath = canonicalizeNativeImagePath(data.thumbPath);
+    if (thumbPath) item.thumbPath = thumbPath;
     return item;
 }
 

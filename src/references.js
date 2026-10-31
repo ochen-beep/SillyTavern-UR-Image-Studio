@@ -7,6 +7,7 @@ import { getCtx, log, warn } from './core.js';
 import { canonicalizeNativeImagePath } from './native-image-path.js';
 import { autoFetch } from './proxy.js';
 import { formatForMime, sanitizeUploadFilename } from './st-upload-format.js';
+import { makeThumbnailForPath } from './native-image-storage.js';
 import { MAX_REFERENCE_BYTES_PER_IMAGE, MAX_REFERENCE_BYTES_TOTAL } from './reference-limits.js';
 
 export async function imageToDataUrl(url, options = {}) {
@@ -447,10 +448,19 @@ export async function uploadReferenceImage(dataUrl, filename, subfolder = 'URIS_
 export async function ingestReferenceImage(input, filename, {
     optimize,
     upload,
+    thumb,
     subfolder = 'URIS_Refs',
 } = {}) {
     const result = await (optimize || optimizeReferenceImage)(input);
     const imagePath = await (upload || uploadReferenceImage)(result.dataUrl, filename, subfolder);
+    // Pool tiles decode the full edge-1024 file on every scroll frame: a small
+    // server-side thumbnail keeps large pools cheap. Best-effort — a failed
+    // thumbnail leaves the record on the full-image fallback, never fails the
+    // ingest. Rides in `metadata` so every caller's existing spread persists it.
+    let thumbPath = null;
+    try {
+        thumbPath = await (thumb || makeThumbnailForPath)(imagePath, { filename: `ref_${filename}` }) || null;
+    } catch { /* thumbnails are an optimization, never a gate */ }
     return {
         imagePath,
         metadata: {
@@ -460,6 +470,7 @@ export async function ingestReferenceImage(input, filename, {
             sourceBytes: result.sourceBytes,
             optimizedBytes: result.optimizedBytes,
             optimizationVersion: result.optimizationVersion,
+            ...(thumbPath ? { thumbPath } : {}),
         },
     };
 }

@@ -55,7 +55,7 @@ export async function showPoolPicker({ title = 'Выберите референ�
             if (!grid) return;
             grid.innerHTML = filteredRefs().map(r => {
                 return `<button type="button" class="uris-pool-tile uris-pick-tile ${selected.has(r.id) ? 'uris-pick-selected' : ''}" data-ref-id="${escapeHtml(r.id)}" aria-label="${escapeHtml(r.name)}" aria-pressed="${selected.has(r.id)}" title="${escapeHtml(r.name)}">
-                    <img src="${escapeHtml(r.imagePath)}" alt="${escapeHtml(r.name)}" loading="lazy">
+                    <img src="${escapeHtml(r.thumbPath || r.imagePath)}" alt="${escapeHtml(r.name)}" loading="lazy">
                     <div class="uris-pool-tile-name">${escapeHtml(r.name)}</div>
                 </button>`;
             }).join('');
