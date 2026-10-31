@@ -11,6 +11,11 @@ import { state, getCtx, log, warn, error } from './core.js';
 import { recordDiagnosticEvent, hashDiagnosticId } from './diagnostic-events.js';
 import { loadChatConfig, applyChatConfigToState } from './chat-binding.js';
 import { cancelForeignQueueItems } from './pipeline-queue.js';
+// Same graph pipeline-queue already pulls in (no new startup modules): the
+// config snapshot is captured at trigger time, before the automation handler
+// pays a cold import — a chat switch inside that window must not rebrand the
+// run with the new chat's config.
+import { createChatConfigSnapshot } from './pipeline-config.js';
 import { removeGalleryForChat } from './storage.js';
 import { POST_FILTER, setFilter, getFilter, getLastPostIndex, setCurrentMsgId, isGenerationEligible } from './post-navigator.js';
 
@@ -35,6 +40,10 @@ let _chatLoadToken = 0;
 // paid runs in parallel. The parked payload never crosses a chat switch.
 let _autoRunning = false;
 let _autoParked = null;
+// Set by GENERATION_STOPPED: a parked payload must not drain after the user
+// pressed Stop ("Stop stops everything"). The next real trigger clears it —
+// new events keep working, the queue does not resume on its own.
+let _stopHold = false;
 
 export function bindEvents(handlers) {
     const ctx = getCtx();
@@ -84,6 +93,8 @@ export function bindEvents(handlers) {
             return;
         }
         state.currentMsgId = msgId;
+        // A real trigger that passed every filter ends the Stop hold.
+        _stopHold = false;
         // templateId: null lets the pipeline resolve the effective template from
         // the current draft/default at processing time, rather than snapshotting it.
         dispatchAutomation({
@@ -93,6 +104,7 @@ export function bindEvents(handlers) {
             templateId: null,
             requestedAction: automationMode,
             chatLoadToken: _chatLoadToken,
+            chatConfig: createChatConfigSnapshot(),
         });
     };
 
@@ -107,6 +119,10 @@ export function bindEvents(handlers) {
         && a.messageText === b.messageText && a.requestedAction === b.requestedAction;
     let _autoInflight = null;
     const dispatchAutomation = (payload) => {
+        // Drain-after-Stop: finish() hands the parked payload here, and under
+        // the hold it must be dropped, not started. New triggers never see
+        // this branch — triggerIfMatches clears the hold before dispatching.
+        if (_stopHold) return;
         if (_autoRunning) {
             // A trigger identical to the in-flight or parked run is a pure
             // duplicate (both events fired for the same post) — drop it.
@@ -243,9 +259,15 @@ export function bindEvents(handlers) {
     // GENERATION_STOPPED: the user pressed ST's global Stop button (stopGeneration
     // emits it unconditionally, even when nothing was generating). The handler
     // ("Stop stops everything") cancels all in-flight extension generations and
-    // the batch queue; it is a no-op when idle.
-    _onStopAll = handlers?.onStopAll || null;
-    if (_onStopAll) ctx.eventSource.on(et.GENERATION_STOPPED, _onStopAll);
+    // the batch queue, and drops any parked automation payload; it is a no-op
+    // when idle. Subscribed unconditionally: the hold must work even when the
+    // busy-tab guard left this tab without a generation handler.
+    _onStopAll = () => {
+        _stopHold = true;
+        _autoParked = null;
+        handlers?.onStopAll?.();
+    };
+    ctx.eventSource.on(et.GENERATION_STOPPED, _onStopAll);
 
     log('Events bound.');
 }
@@ -278,5 +300,6 @@ export function unbindEvents() {
     _chatLoadToken = 0;
     _autoRunning = false;
     _autoParked = null;
+    _stopHold = false;
     _bound = false;
 }
