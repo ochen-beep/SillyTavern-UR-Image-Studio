@@ -81,6 +81,24 @@ export function bindPoolGridDelegation(host, { onOpen, menuItems }) {
         const tile = target?.closest?.('.uris-pool-tile');
         return tile && host.contains(tile) ? tile : null;
     };
+    // Image error events do not bubble, so this listens in the capture phase.
+    // A ref file deleted outside the extension (manual cleanup, ST's Data
+    // Maid) must not look like a silently broken tile.
+    host.addEventListener('error', (e) => {
+        const img = e.target;
+        if (img?.tagName !== 'IMG') return;
+        const tile = img.closest('.uris-pool-tile');
+        if (!tile || !host.contains(tile)) return;
+        tile.classList.add('uris-ref-missing');
+        img.removeAttribute('src');
+        img.alt = 'Файл потерян';
+        if (!tile.querySelector('.uris-ref-missing-badge')) {
+            const badge = document.createElement('div');
+            badge.className = 'uris-ref-missing-badge';
+            badge.textContent = 'Файл потерян';
+            tile.appendChild(badge);
+        }
+    }, true);
     host.addEventListener('click', (e) => {
         const tile = tileOf(e.target);
         if (tile) onOpen(tile.dataset.refId);
