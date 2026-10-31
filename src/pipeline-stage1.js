@@ -277,6 +277,13 @@ export async function runFullPipelineForDraft(input, onStatus = () => {}, signal
             return { applied: false, reason: 'auto-fingerprint-match', result: null, snapshot: null, draft: fpDraft };
         }
         const run = await runStage1ForDraft(runInput, onStatus, signal, { isAuto: true });
+        // Re-read the done-fingerprint between the paid stages: a parallel
+        // trigger can complete the same run while this Stage 1 was in flight —
+        // its Stage 2 already paid, this one must not run again.
+        const settled = await getGenerationDraft(input.chatId, input.msgId, input.messageText);
+        if (settled.autoDoneFp === autoFp) {
+            return { applied: false, reason: 'auto-fingerprint-match', result: null, snapshot: null, draft: settled };
+        }
         const promptReady = run.reason === 'auto-fingerprint-match'
             ? String(run.draft?.prompt || '').trim()
             : run.applied;
