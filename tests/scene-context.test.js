@@ -199,7 +199,9 @@ test('materializeStage2References throws when image unavailable', async () => {
         // Name and path, not the internal id: this text surfaces to the user.
         await assert.rejects(
             () => materializeStage2References(snapshot),
-            /Reference image unavailable: Aria Rose \(\/missing\.png\)/
+            error => error?.code === 'REFERENCE_FILE_MISSING'
+                && /Aria Rose \(\/missing\.png\)/.test(error.message)
+                && /Data Maid/.test(error.message),
         );
     } finally {
         globalThis.fetch = originalFetch;
