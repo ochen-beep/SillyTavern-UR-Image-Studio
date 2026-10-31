@@ -32,6 +32,13 @@ const route = {
     transport: { bodyKind: 'json', proxyEligible: true, directCors: 'preferred' },
 };
 
+/** Ref fixtures use same-origin storage paths (external URLs no longer pass the import gate). */
+const pngResponse = () => ({
+    ok: true, status: 200,
+    headers: { get: () => null },
+    blob: async () => new Blob([new Uint8Array([0x89, 0x50, 0x4e, 0x47])], { type: 'image/png' }),
+});
+
 beforeEach(async () => {
     lfMock = makeInMemoryLFA();
     installStGlobals();
@@ -127,7 +134,7 @@ test('submission prompt wins over a newer draft prompt; the draft is never rewri
 test('submission corrections win over empty draft corrections: excluded reference is never fetched or sent', async () => {
     const mira = await createRef({
         name: 'Mira', aliases: ['Mira'], description: 'scarfed detective',
-        imagePath: 'https://cdn.example.test/mira-excluded.png',
+        imagePath: 'user/images/Refs/mira-excluded.png',
     });
     saveChatRefs({ referenceIds: [mira.id] });
 
@@ -141,9 +148,9 @@ test('submission corrections win over empty draft corrections: excluded referenc
     let sentRefs = null;
     const restore = mockFetch((url, options) => {
         const u = String(url);
-        if (u.includes('cdn.example.test/mira-excluded.png')) {
+        if (u.endsWith('user/images/Refs/mira-excluded.png')) {
             refFetches.push(u);
-            return { ok: true, status: 200, json: async () => ({}) };
+            return pngResponse();
         }
         if (u.endsWith('/images/generations')) {
             bodies.push(String(options?.body || ''));
@@ -180,7 +187,7 @@ test('submission corrections win over empty draft corrections: excluded referenc
 test('submission corrections win over empty draft corrections: included reference is materialized and sent', async () => {
     const mira = await createRef({
         name: 'Mira', aliases: ['Mira'], description: 'scarfed detective',
-        imagePath: 'https://cdn.example.test/mira-included.png',
+        imagePath: 'user/images/Refs/mira-included.png',
     });
     saveChatRefs({ referenceIds: [mira.id] });
 
@@ -195,9 +202,9 @@ test('submission corrections win over empty draft corrections: included referenc
     let editsPrompt = '';
     const restore = mockFetch((url, options) => {
         const u = String(url);
-        if (u.includes('cdn.example.test/mira-included.png')) {
+        if (u.endsWith('user/images/Refs/mira-included.png')) {
             refFetches.push(u);
-            return { ok: true, status: 200, json: async () => ({}) };
+            return pngResponse();
         }
         if (u.endsWith('/images/edits')) {
             const body = options?.body;
@@ -238,7 +245,7 @@ test('submission corrections win over empty draft corrections: included referenc
 test('a mid-run draft edit neither leaks into a submission run nor trips the revision guard', async () => {
     const mira = await createRef({
         name: 'Mira', aliases: ['Mira'], description: 'scarfed detective',
-        imagePath: 'https://cdn.example.test/mira-midrun.png',
+        imagePath: 'user/images/Refs/mira-midrun.png',
     });
     saveChatRefs({ referenceIds: [mira.id] });
 
@@ -255,11 +262,11 @@ test('a mid-run draft edit neither leaks into a submission run nor trips the rev
     const editsPrompts = [];
     const restore = mockFetch((url, options) => {
         const u = String(url);
-        if (u.includes('cdn.example.test/mira-midrun.png')) {
+        if (u.endsWith('user/images/Refs/mira-midrun.png')) {
             refFetchSeen();
             // Hold the materialize window open so the draft can be edited
             // exactly between input capture and snapshot creation.
-            return refFetchGate.then(() => ({ ok: true, status: 200, json: async () => ({}) }));
+            return refFetchGate.then(() => pngResponse());
         }
         if (u.endsWith('/images/edits')) {
             const body = options?.body;
