@@ -99,10 +99,10 @@ test('chain: multipart CORS-dead + JSON accepted → JSON via proxy wins', async
   } finally { restore(); }
 });
 
-test('chain: JSON dialect rejected (agnes 500) → img2img via generations+image wins', async () => {
+test('chain: JSON dialect rejected (422) → img2img via generations+image wins', async () => {
   const transport = scriptedTransport((url, options, kind) => {
     if (kind === 'multipart') throw Object.assign(new TypeError('Failed to fetch'), { code: 'MULTIPART_CORS_REQUIRED' });
-    if (url.endsWith('/images/edits')) return jsonResponse({ error: { message: "aimage_edit() missing 1 required positional argument: 'image'" } }, 500);
+    if (url.endsWith('/images/edits')) return jsonResponse({ error: { message: 'edits endpoint requires multipart' } }, 422);
     if (url.endsWith('/images/generations')) return jsonResponse({ data: [{ b64_json: 'aTJp' }] });
     throw new Error(`unexpected ${url}`);
   });
@@ -112,7 +112,7 @@ test('chain: JSON dialect rejected (agnes 500) → img2img via generations+image
   });
   try {
     const result = await invokeImageProvider({
-      endpoint: 'https://agnes.example', apiKey: 'k', connection: connection(),
+      endpoint: 'https://gw.example', apiKey: 'k', connection: connection(),
       route: AUTO_ROUTE(), request: request(), transport,
     });
     assert.equal(result.value, 'data:image/png;base64,aTJp');
@@ -121,6 +121,31 @@ test('chain: JSON dialect rejected (agnes 500) → img2img via generations+image
     const img2imgBody = transport.calls[2].body;
     assert.deepEqual(img2imgBody.image, [PNG, JPEG], 'референсы едут массивом data URL');
     assert.equal(img2imgBody.prompt, 'Edit this');
+  } finally { restore(); }
+});
+
+test('chain: JSON leg answered 502 → terminal, the paid img2img leg never fires', async () => {
+  // A 5xx means the gateway/upstream broke after possibly accepting the
+  // request: the outcome is ambiguous and a second paid POST on top of it is
+  // a double billing, not a dialect discovery.
+  const transport = scriptedTransport((url, options, kind) => {
+    if (kind === 'multipart') throw Object.assign(new TypeError('Failed to fetch'), { code: 'MULTIPART_CORS_REQUIRED' });
+    if (url.endsWith('/images/edits')) return jsonResponse({ error: { message: 'bad gateway' } }, 502);
+    throw new Error(`unexpected ${url}`);
+  });
+  const restore = mockFetch((_url, options) => {
+    if (options?.method === 'OPTIONS') throw new TypeError('Failed to fetch');
+    throw new Error('unexpected direct fetch');
+  });
+  try {
+    await assert.rejects(
+      () => invokeImageProvider({
+        endpoint: 'https://gw.example', apiKey: 'k', connection: connection(),
+        route: AUTO_ROUTE(), request: request(), transport,
+      }),
+      error => error?.httpStatus === 502,
+    );
+    assert.equal(transport.calls.length, 2, 'multipart + JSON only — no img2img leg');
   } finally { restore(); }
 });
 
