@@ -551,7 +551,14 @@ export async function materializeStage2References(snapshot, options = {}) {
             }
             if (!dataUrl) {
                 const label = ref.name || ref.id || '(unnamed)';
-                throw new Error(`Reference image unavailable: ${label} (${ref.imagePath || 'no path'})`);
+                // Typed and actionable: the most common cause is the file being
+                // deleted outside the extension (manual cleanup, ST's Data Maid,
+                // which cannot see the pool's references). The run stops — the
+                // user explicitly attached this reference — but the message
+                // names the exact card to fix instead of failing generically.
+                const error = new Error(`Файл референса не найден: ${label} (${ref.imagePath || 'нет пути'}). Возможно, файл удалён вне расширения — например, встроенной уборкой Data Maid.`);
+                error.code = 'REFERENCE_FILE_MISSING';
+                throw error;
             }
             // v3: re-encode stored webp refs before the byte budget is computed
             // and before any provider sees them (multipart, JSON edits, Gemini
