@@ -108,6 +108,7 @@ export async function runStage2ForDraft(input, onStatus = () => {}, signal, opts
     let releaseNext = null;
     let myNext = null;
     let chainKey = null;
+    let postKey = null;   // 'chatId:msgId' while a run of this post is in flight
 
     // True once the run passed the abort gate; pairs uris:stage2-end with a
     // start (a pre-start abort emits neither).
@@ -135,6 +136,13 @@ export async function runStage2ForDraft(input, onStatus = () => {}, signal, opts
         useSignal = ownController.signal;
         activeRequestId = crypto.randomUUID();
         state.activeGenerations.set(activeRequestId, ownController);
+        // Live-run registry per post: a manual submit on the same post must be
+        // able to see an auto/bridge generation in flight before paying for a
+        // second one. Only posts with a real message id are trackable.
+        if (msgId != null) {
+            postKey = `${chatId}:${msgId}`;
+            state.activeStage2ByPost.set(postKey, (state.activeStage2ByPost.get(postKey) || 0) + 1);
+        }
         // Already dead (Stop pressed / cleanup before this call ran) — do not
         // even queue into the chain.
         if (useSignal.aborted) throw new DOMException('Aborted', 'AbortError');
@@ -420,6 +428,11 @@ export async function runStage2ForDraft(input, onStatus = () => {}, signal, opts
     } finally {
         if (activeRequestId) {
             state.activeGenerations.delete(activeRequestId);
+            if (postKey) {
+                const left = (state.activeStage2ByPost.get(postKey) || 1) - 1;
+                if (left > 0) state.activeStage2ByPost.set(postKey, left);
+                else state.activeStage2ByPost.delete(postKey);
+            }
             if (started) {
                 const cancelled = useSignal?.aborted || failure?.name === 'AbortError';
                 recordDiagnosticEvent({
