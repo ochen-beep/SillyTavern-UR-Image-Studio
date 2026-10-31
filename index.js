@@ -196,29 +196,36 @@ async function init() {
     bindEvents({
         // Фоновая автоматизация: уведомления — только в ленту INFO и звуком;
         // тосты здесь — мусорный дубль (политика 2026-10-02: фон не тостит).
-        onAutomation: async ({ chatId, msgId, messageText, templateId, requestedAction }) => {
-            if (!state.settings.enabled) return;
-            const input = { chatId, msgId, messageText, templateId };
-            try {
-                const pipeline = await import('./src/pipeline.js');
-                if (requestedAction === 'build-prompt') {
-                    const run = await pipeline.runStage1ForDraft(input, undefined, undefined, { isAuto: true });
-                    if (run.applied) {
-                        if (isPanelVisible() && getActiveTab() === 'generate') refreshActive();
+        // Вкладка, проигравшая гонку за синглтон-лок, автоматизацию не слушает:
+        // иначе оба окна платят за один и тот же пост дважды. Навигатор и панель
+        // остаются — они read-only.
+        ...(lockState === 'busy' ? {} : {
+            onAutomation: async ({ chatId, msgId, messageText, templateId, requestedAction, chatConfig }) => {
+                if (!state.settings.enabled) return;
+                // chatConfig был снят в момент триггера (events.js) — окно
+                // холодного import() ниже не переименовывает прогон чужим чатом.
+                const input = { chatId, msgId, messageText, templateId, chatConfig };
+                try {
+                    const pipeline = await import('./src/pipeline.js');
+                    if (requestedAction === 'build-prompt') {
+                        const run = await pipeline.runStage1ForDraft(input, undefined, undefined, { isAuto: true });
+                        if (run.applied) {
+                            if (isPanelVisible() && getActiveTab() === 'generate') refreshActive();
+                        }
+                    } else if (requestedAction === 'full-pipeline') {
+                        await pipeline.runFullPipelineForDraft(input);
+                        if (isPanelVisible() && getActiveTab() === 'gallery') refreshActive();
                     }
-                } else if (requestedAction === 'full-pipeline') {
-                    await pipeline.runFullPipelineForDraft(input);
-                    if (isPanelVisible() && getActiveTab() === 'gallery') refreshActive();
+                } catch (e) {
+                    if (e?.name === 'AbortError') {
+                        // отмена — не ошибка
+                    } else {
+                        error('Auto generation:', e.message);
+                        reportFailure({ scope: URIS_SCOPES.auto, message: e.message, context: e?.urisContext || { post: input.msgId } });
+                    }
                 }
-            } catch (e) {
-                if (e?.name === 'AbortError') {
-                    // отмена — не ошибка
-                } else {
-                    error('Auto generation:', e.message);
-                    reportFailure({ scope: URIS_SCOPES.auto, message: e.message, context: e?.urisContext || { post: input.msgId } });
-                }
-            }
-        },
+            },
+        }),
         // ST's global Stop button (stopGeneration) always emits GENERATION_STOPPED.
         // "Stop stops everything": cancel every in-flight extension generation and
         // the batch queue. Safe when idle — both calls are no-ops then.
@@ -293,7 +300,9 @@ async function init() {
     // cfg.enabled is synced with the master toggle at startup. The previous
     // direct bindScanner/initRender calls left every chat that never touched
     // the Media toggle with a dead scanner while the checkbox showed enabled.
-    if (state.settings.inlineEnabled) {
+    // A busy tab also skips the scanner: its trigger word would queue the
+    // paid inline job in both windows.
+    if (state.settings.inlineEnabled && lockState !== 'busy') {
         (await import('./src/ui/tab-media.js')).applyInlineRuntime();
     }
 
