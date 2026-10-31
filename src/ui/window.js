@@ -8,6 +8,7 @@ import { listPendingBrowserRequests, discardPendingBrowserRequest, clearPendingB
 import { bindTabBarScroll } from './tab-bar-scroll.js';
 import { listQueueLog, queueBadgeCount, clearQueueLog, hasLiveQueueLane } from './queue-log.js';
 import { stopQueue, cancelQueuedItem, resubmitQueueRow } from '../pipeline-queue.js';
+import { guardDuplicateSubmission } from './submit-guard.js';
 
 const WIN_ID = 'urisWindow';
 export function isMobileViewport() { return window.innerWidth <= 768; }
@@ -623,7 +624,12 @@ function renderQueuePanel(winEl) {
     panel.querySelectorAll('[data-queue-retry]').forEach(btn => btn.addEventListener('click', () => {
         const row = listQueueLog().find(r => r.id === btn.getAttribute('data-queue-retry'));
         if (!row?.retry) return;
-        resubmitQueueRow(row.retry).catch(e => {
+        resubmitQueueRow(row.retry, {
+            // The same paid generation queued or running twice is a second
+            // charge: the retry path runs the same duplicate check as the
+            // manual submit (double click and live auto-retry included).
+            guard: (item) => guardDuplicateSubmission(item, { chatId: row.retry.chatId, msgId: row.retry.msgId }),
+        }).catch(e => {
             // Повторно упавшая задача — не unhandled rejection: та же запись
             // «Генерация», что у ручной отправки (QUEUE-строку красит
             // noteFinished в processQueue, пулу нужен свой durable-след).
