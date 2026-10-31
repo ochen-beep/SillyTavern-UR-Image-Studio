@@ -41,10 +41,18 @@ export const CHAT_COMPLETIONS_IMAGE_CONFIGS = new Set(['openrouter', 'new-api'])
 const SECRET_KEYS = new Set([
   'apikey', 'apitoken', 'xapikey', 'xapitoken', 'xgoogapikey', 'token', 'password', 'secret', 'secretid', 'credential', 'credentialid', 'authorization',
   'accesstoken', 'refreshtoken', 'bearertoken', 'clientsecret', 'privatekey',
+  'key', 'secretkey',
 ]);
 
+// Gateways commonly send secrets as suffixed custom fields (`my_api_key`,
+// `xauthtoken`): after separator stripping the suffix survives, so it is
+// checked on the normalized name. Bare `key`-suffixed words like `monkey`
+// do not match — only full apikey/secret/token endings count.
+const SECRET_SUFFIX_RE = /(?:apikey|secret|token)$/;
+
 export function isSecretKey(key) {
-  return SECRET_KEYS.has(String(key).replace(/[\s_-]/g, '').toLowerCase());
+  const normalized = String(key).replace(/[\s_-]/g, '').toLowerCase();
+  return SECRET_KEYS.has(normalized) || SECRET_SUFFIX_RE.test(normalized);
 }
 
 function plain(value) {
