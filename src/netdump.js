@@ -258,7 +258,11 @@ function responseMeta(response) {
 export function scrubUrl(rawUrl) {
     try {
         const url = new URL(String(rawUrl), 'http://stub.local');
-        for (const key of ['key', 'token', 'access_token', 'api_key', 'apikey']) {
+        // Basic-auth credentials in the authority must not survive either —
+        // this dump is an evidence file meant to be shared.
+        url.username = '';
+        url.password = '';
+        for (const key of ['key', 'token', 'access_token', 'api_key', 'apikey', 'secret', 'password', 'auth', 'sig', 'credential']) {
             if (url.searchParams.has(key)) url.searchParams.set(key, '<redacted>');
         }
         const value = url.toString();

@@ -8,6 +8,9 @@
 import { recordFromFetch, recordFromFetchError } from './netdump.js';
 import { tunnelBypassHeaders } from './tunnel-bypass.js';
 import { serialize } from './serialize.js';
+// error-pool is a leaf module (no imports) — no cycle. Its scrubber is the
+// single secret-redaction point shared with the log buffer below.
+import { redactSecrets } from './error-pool.js';
 // Inline trigger registry: pure module (no core import) — no cycle. Used by
 // loadSettings to normalize settings.inlineTriggers (see defaultSettings).
 import { sanitizeTriggerList, DEFAULT_TRIGGERS } from './inline/triggers.js';
@@ -355,7 +358,10 @@ function serializeLogArgs(args) {
 
 function push(buffer, level, args, limit) {
     const ts = new Date().toISOString();
-    buffer.push(`[${ts}] [${level}] ${serializeLogArgs(args)}`);
+    // The buffer feeds the diagnostic dump — an export meant to leave the
+    // machine — so secrets are scrubbed once here (connection URLs carrying
+    // `?key=…`, Bearer headers, userinfo) instead of at every logging site.
+    buffer.push(`[${ts}] [${level}] ${redactSecrets(serializeLogArgs(args))}`);
     if (buffer.length > limit) buffer.shift();
 }
 

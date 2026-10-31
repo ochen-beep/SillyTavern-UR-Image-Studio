@@ -45,11 +45,23 @@ function nowTs() {
     return _lastTs;
 }
 
-function safeErrorText(value) {
+/**
+ * Flatten a value to one line and scrub every credential shape that travels
+ * in logs: Bearer headers, secret-named query params, userinfo authority.
+ * Shared with the log buffer in core.js — anything that can leave the machine
+ * (diagnostic dump, error feed) goes through this. No length cap: callers
+ * that need one apply their own (the buffer keeps its per-arg truncation).
+ */
+export function redactSecrets(value) {
     const text = String(value ?? '').replace(/[\r\n]+/g, ' ').trim();
     return text.replace(/(Bearer\s+)[^\s,;]+/ig, '$1<redacted>')
-        .replace(/([?&](?:key|token|secret|password|api[-_]?key)=)[^&\s]+/ig, '$1<redacted>')
-        .slice(0, 1000);
+        .replace(/([?&](?:key|token|secret|password|api[-_]?key|access[-_]token|auth|sig|credential)=)[^&\s]+/ig, '$1<redacted>')
+        .replace(/([a-z][a-z0-9+.-]*:\/\/)[^@/\s]+@/ig, '$1<redacted>@');
+}
+
+/** Error-feed flavor: redacted and capped to a panel-friendly length. */
+export function safeErrorText(value) {
+    return redactSecrets(value).slice(0, 1000);
 }
 
 function emitChanged() {
