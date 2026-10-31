@@ -365,6 +365,23 @@ export function createShardedFileStore(config) {
         const bad = results.find(result => result.reason !== 'ok');
         if (bad) {
             if (bad.reason === 'transient') return null;   // not proof of absence — retry via ready()
+            if (bad.reason === 'missing') {
+                // A manifest naming a shard the server cannot deliver used to
+                // brick the session readonly. The scan is safe — it only reads
+                // shard files and writes a derived manifest — the same recovery
+                // the corrupt-manifest path uses; a two-writer race row whose
+                // shard 404'd folds into the scan result as well.
+                mode = 'file';
+                writeBlockedReason = null;
+                try {
+                    await rebuildFromScan();
+                } catch {
+                    return null;   // recovery write failed transiently — retry via ready()
+                }
+                emit('store-mode', { store: label, result: 'file', reason: 'missing-shard-recovery', shard: bad.id });
+                log(`sharded-store[${label}]: manifest named a missing shard (${bad.id}) — rebuilt from scan`);
+                return mode;
+            }
             mode = 'readonly';
             writeBlockedReason = 'shard-unreadable';
             emit('store-mode', { store: label, result: 'readonly', reason: 'shard-unreadable', shard: bad.id });
@@ -1100,30 +1117,44 @@ export function createShardedFileStore(config) {
             if (mode !== 'file') return;
             if (metaStore) metaStore.flushOnUnload();
             if (!dirtyShards.size && !manifestDirty) return;
-            let sent = 0, skipped = 0, bytes = 0;
+            let sent = 0, skipped = 0, failed = 0, bytes = 0;
+            const shardSends = [];
             for (const id of [...dirtyShards]) {
                 const state = shardState.get(id);
                 if (!state) continue;
                 const json = JSON.stringify(shardDoc(label, version, id, state.records));
                 if (json.length > keepaliveLimit) { skipped++; continue; }
                 try {
-                    void fetch(UPLOAD_URL, {
-                        method: 'POST',
-                        headers: stHeaders(),
-                        body: JSON.stringify({ name: shardFileName(id), data: textToBase64(json) }),
-                        keepalive: true,
-                    });
+                    shardSends.push(
+                        fetch(UPLOAD_URL, {
+                            method: 'POST',
+                            headers: stHeaders(),
+                            body: JSON.stringify({ name: shardFileName(id), data: textToBase64(json) }),
+                            keepalive: true,
+                        }).then(response => { if (!response?.ok) failed++; }, () => { failed++; }),
+                    );
                     sent++;
                     bytes += json.length;
-                } catch { /* nothing else can be done during teardown */ }
+                } catch { failed++; }
             }
-            // Suppressed when any shard was skipped: a manifest naming a file
-            // the server cannot deliver would leave the next session
-            // permanently readonly ('shard-unreadable') — a reload cannot fix
-            // that; a MISSING manifest is the recoverable state.
+            // Suppressed when any shard was skipped OR failed: a manifest
+            // naming a file the server cannot deliver would leave the next
+            // session permanently readonly ('shard-unreadable') — a reload
+            // cannot fix that; a MISSING manifest is the recoverable state
+            // (rebuildFromScan). The send therefore waits for the shard
+            // outcomes; if the page dies before the chain completes, the
+            // manifest stays behind on purpose.
             if (manifestDirty && !skipped) {
-                const json = JSON.stringify(manifestDoc(label, version, shards.map(row => ({ ...row }))));
-                if (json.length <= keepaliveLimit) {
+                void Promise.all(shardSends).then(() => {
+                    if (failed) {
+                        emit('store-unload-flush', { store: label, result: 'skipped', shards: sent, skipped, failed, bytes });
+                        return;
+                    }
+                    const json = JSON.stringify(manifestDoc(label, version, shards.map(row => ({ ...row }))));
+                    if (json.length > keepaliveLimit) {
+                        emit('store-unload-flush', { store: label, result: 'skipped', shards: sent, skipped: skipped + 1, failed, bytes });
+                        return;
+                    }
                     try {
                         void fetch(UPLOAD_URL, {
                             method: 'POST',
@@ -1133,8 +1164,10 @@ export function createShardedFileStore(config) {
                         });
                         sent++;
                         bytes += json.length;
+                        emit('store-unload-flush', { store: label, result: 'sent', shards: sent, skipped, failed, bytes });
                     } catch { /* teardown */ }
-                } else skipped++;
+                });
+                return;
             }
             if (sent || skipped) {
                 emit('store-unload-flush', { store: label, result: sent ? 'sent' : 'skipped', shards: sent, skipped, bytes });
