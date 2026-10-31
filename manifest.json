@@ -7,7 +7,7 @@
     "author": "beep",
     "version": "0.9.8",
     "homePage": "https://github.com/ochen-beep/SillyTavern-UR-Image-Studio",
-    "auto_update": true,
+    "auto_update": false,
     "hooks": {
         "install": "onInstall",
         "update": "onUpdate",
