@@ -453,6 +453,33 @@ export function createFileStore(config) {
             if (parsed.reason === 'found' || parsed.reason === 'older') fileValue = parsed.value;
         }
 
+        // A corrupt parse may be a transient truncation (flaky network,
+        // tunnel hiccup), not real damage: re-read before treating it as
+        // such. Only a still-corrupt document counts as broken, and its text
+        // is parked in a `.corrupt` side file before any repair write — the
+        // repair must never be the step that loses data silently.
+        if (readResult === 'corrupt') {
+            const reread = await readFile().catch(() => null);
+            if (reread !== null && reread !== undefined) {
+                const rereadParsed = parseDoc(reread);
+                if (rereadParsed.reason === 'found' || rereadParsed.reason === 'older') {
+                    text = reread;
+                    parsed = rereadParsed;
+                    readResult = parsed.reason;
+                    fileValue = parsed.value;
+                    log(`file-store[${label}]: corrupt parse settled on re-read (${readResult}) — transient truncation`);
+                }
+            }
+            if (readResult === 'corrupt' && text) {
+                try {
+                    await uploadFile({ name: `${name}.corrupt`, data: textToBase64(text) });
+                    warn(`file-store[${label}]: corrupt document parked at ${name}.corrupt before repair`);
+                } catch (cause) {
+                    warn(`file-store[${label}]: corrupt side-file write failed (repair proceeds):`, cause?.message || cause);
+                }
+            }
+        }
+
         // A document from a newer build cannot be managed by this one: load it
         // read-only, never repair it away.
         if (readResult === 'newer') {
