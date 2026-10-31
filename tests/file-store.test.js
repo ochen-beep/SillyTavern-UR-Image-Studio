@@ -164,6 +164,41 @@ describe('file-store: load', () => {
         assert.deepEqual(serverDoc(store), [], 'пустой документ-ремонт записан');
     });
 
+    it('a twice-corrupt document is parked in a .corrupt side file before repair', async () => {
+        const store = makeStore();
+        const broken = '{"v":1,items":[{"id":"only-half';
+        serverFiles.set(store.name, broken);
+        await store.ready();
+        assert.equal(serverFiles.get(`${store.name}.corrupt`), broken,
+            'the broken text is preserved next to the store before the repair overwrites it');
+        await store.flush();
+        assert.deepEqual(serverDoc(store), [], 'the repair still writes the empty mirror');
+    });
+
+    it('a transient truncation settles on the re-read and keeps the data', async () => {
+        const store = makeStore();
+        const good = JSON.stringify({ v: 1, items: [{ id: 'kept' }] });
+        serverFiles.set(store.name, good);   // the real server holds the full document
+        let reads = 0;
+        const prevFetch = globalThis.fetch;
+        globalThis.fetch = async (url, options) => {
+            const u = String(url);
+            if (options?.method !== 'POST' && u === `/user/files/${encodeURIComponent(store.name)}`) {
+                reads += 1;
+                if (reads === 1) return { ok: true, status: 200, text: async () => good.slice(0, good.length - 5) };
+            }
+            return prevFetch(url, options);
+        };
+        try {
+            await store.ready();
+            assert.equal(store.diagnostics().readResult, 'found', 'the re-read settled the transient truncation');
+            assert.deepEqual(store.snapshot(), [{ id: 'kept' }], 'no data was lost to the repair path');
+            assert.equal(serverFiles.get(`${store.name}.corrupt`), undefined, 'no side file for a transient glitch');
+        } finally {
+            globalThis.fetch = prevFetch;
+        }
+    });
+
     it('a document from a newer build is read-only, not repaired away', async () => {
         const store = makeStore();
         serverFiles.set(store.name, JSON.stringify({ v: 99, items: [{ id: 'old' }] }));
