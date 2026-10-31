@@ -356,10 +356,13 @@ export function cancelForeignQueueItems(currentChatId) {
  * строки и поставить в очередь. Конфиг чата резолвится заново на момент
  * повтора (актуальное подключение), текст сообщения для обычного поста читается
  * живым — гварды stale-chat/message-changed работают как у первой отправки.
+ * `deps.guard` — асинхронная проверка построенного item (UI-слой ставит гвард
+ * дубликатов): false отменяет постановку, возвращается null.
  * @param {{chatId:string,msgId:number,messageText:string,templateId:string|null,submission:object}} retry
+ * @param {{guard?:Function}} [deps]
  * @returns {Promise<object|null>}
  */
-export async function resubmitQueueRow(retry) {
+export async function resubmitQueueRow(retry, deps = {}) {
     const messageText = retry.chatId === STUDIO_CHAT_ID
         ? String(retry.messageText || '')
         : (getCtx().chat?.[retry.msgId]?.mes || '');
@@ -371,5 +374,6 @@ export async function resubmitQueueRow(retry) {
         templateId: retry.templateId,
         submission: retry.submission,
     });
+    if (deps.guard && !(await deps.guard(item))) return null;
     return enqueueGeneration(item);
 }
