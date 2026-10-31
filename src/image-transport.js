@@ -139,6 +139,21 @@ function withDiagnostic(options, diagnostic, role = 'generation', bodyKind = nul
  * @param {number} [timeoutMs=120000]
  * @returns {Promise<Response>}
  */
+/**
+ * Append the scrubbed endpoint (method + origin/path, no query — it can
+ * carry signed tokens) to a transport failure. Network errors used to escape
+ * without naming the endpoint they hit, which made wrong-path mistakes
+ * (/v1 vs /v1beta) diagnostically invisible. User cancellation stays
+ * untouched. Idempotent per message.
+ */
+function stampEndpoint(error, url, method) {
+    if (!error || error?.name === 'AbortError') return error;
+    const target = `${method} ${String(url).split('?')[0]}`;
+    if (String(error.message || '').includes(target)) return error;
+    error.message = error.message ? `${error.message} → ${target}` : target;
+    return error;
+}
+
 export async function fetchImageRoute(url, options = {}, route, timeoutMs = 120000) {
     const transport = transportFor(route, options);
     const method = String(options.method || 'GET').toUpperCase();
@@ -187,7 +202,7 @@ export async function fetchImageRoute(url, options = {}, route, timeoutMs = 1200
             return stampAttempt(response, { initialDelivery: 'proxy', finalDelivery: 'proxy', rescuedBy: null, attempts: 1 });
         } catch (error) {
             if (method === 'POST') recordDiagnosticEvent({ event: 'dispatch-error', level: 'error', stage: diagnostic?.stage || 'stage2', requestId: diagnostic?.requestId || null, attemptId: rootAttemptId, attemptIndex: attemptDiagnostic.attemptIndex, delivery: 'proxy', bodyKind: transport.bodyKind, outcome: error?.name === 'AbortError' ? 'abort' : 'network-unknown', durationMs: Date.now() - attemptStartedAt, details: { code: error?.code || null } });
-            throw error;
+            throw stampEndpoint(error, url, method);
         }
     }
     const attemptStartedAt = Date.now();
@@ -205,19 +220,19 @@ export async function fetchImageRoute(url, options = {}, route, timeoutMs = 1200
     } catch (error) {
         if (isAbortOrTimeout(error, options.signal)) {
             if (method === 'POST') recordDiagnosticEvent({ event: 'dispatch-error', level: 'error', stage: diagnostic?.stage || 'stage2', requestId: diagnostic?.requestId || null, attemptId: rootAttemptId, attemptIndex: attemptDiagnostic.attemptIndex, delivery: 'direct', bodyKind: transport.bodyKind, outcome: error?.name === 'AbortError' ? 'abort' : 'timeout', durationMs: Date.now() - attemptStartedAt, details: { code: error?.code || null } });
-            throw error;
+            throw stampEndpoint(error, url, method);
         }
 
         if (transport.bodyKind === 'multipart') {
             if (isCorsOrNetworkError(error)) {
                 if (method === 'POST') recordDiagnosticEvent({ event: 'dispatch-error', level: 'error', stage: diagnostic?.stage || 'stage2', requestId: diagnostic?.requestId || null, attemptId: rootAttemptId, attemptIndex: attemptDiagnostic.attemptIndex, delivery: 'direct', bodyKind: transport.bodyKind, outcome: 'preflight-cors', durationMs: Date.now() - attemptStartedAt, details: { code: MULTIPART_CORS_REQUIRED } });
-                throw multipartCorsError(error);
+                throw stampEndpoint(multipartCorsError(error), url, method);
             }
             if (method === 'POST') recordDiagnosticEvent({ event: 'dispatch-error', level: 'error', stage: diagnostic?.stage || 'stage2', requestId: diagnostic?.requestId || null, attemptId: rootAttemptId, attemptIndex: attemptDiagnostic.attemptIndex, delivery: 'direct', bodyKind: transport.bodyKind, outcome: 'network-unknown', durationMs: Date.now() - attemptStartedAt, details: { code: error?.code || null } });
-            throw error;
+            throw stampEndpoint(error, url, method);
         }
 
-        if (!isCorsOrNetworkError(error)) throw error;
+        if (!isCorsOrNetworkError(error)) throw stampEndpoint(error, url, method);
 
         // ── Preflight oracle (2026-09-28) ──────────────────────────────────
         // For an auto-policy JSON POST a CORS/network TypeError is almost
@@ -268,7 +283,7 @@ export async function fetchImageRoute(url, options = {}, route, timeoutMs = 1200
                     return stampAttempt(response, { initialDelivery: 'direct', finalDelivery: 'proxy', rescuedBy: 'preflight-oracle', attempts: 2 });
                 } catch (fallbackError) {
                     if (method === 'POST') recordDiagnosticEvent({ event: 'dispatch-error', level: 'error', stage: diagnostic?.stage || 'stage2', requestId: diagnostic?.requestId || null, attemptId: fallbackDiagnostic.attemptId, attemptIndex: fallbackDiagnostic.attemptIndex, parentAttemptId: fallbackDiagnostic.parentAttemptId, delivery: 'proxy', bodyKind: 'json', outcome: fallbackError?.name === 'AbortError' ? 'abort' : 'network-unknown', details: { code: fallbackError?.code || null, reason: 'preflight-oracle' } });
-                    throw fallbackError;
+                    throw stampEndpoint(fallbackError, url, method);
                 }
             }
         }
@@ -281,7 +296,7 @@ export async function fetchImageRoute(url, options = {}, route, timeoutMs = 1200
         if (method === 'POST' && transport.bodyKind === 'json') {
             noteDeliveryPostOutcome({ connId: diagnostic?.connId, endpoint: url, delivery: 'direct', ok: false }).catch(() => {});
         }
-        throw ambiguousDeliveryError(error, 'image', transport.deliveryPolicy);
+        throw stampEndpoint(ambiguousDeliveryError(error, 'image', transport.deliveryPolicy), url, method);
     }
 }
 
