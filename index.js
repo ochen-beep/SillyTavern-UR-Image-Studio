@@ -64,9 +64,8 @@ export async function onClean() {
     const proceed = await showConfirmModal('Удалить все данные UR Image Studio на сервере: хранилища, референсы и миниатюры? Отменить это нельзя.');
     if (!proceed) { log('Clean cancelled by user'); return; }
     try {
-        const { deleteUserFiles, deleteOwnedImageFolders } = await import('./src/data-care.js');
-        const files = await deleteUserFiles();
-        const images = await deleteOwnedImageFolders();
+        const { cleanAllData } = await import('./src/data-care.js');
+        const { files, images } = await cleanAllData();
         log(`Clean: removed ${files} file(s), ${images} image(s).`);
         toastr?.info(`UR Image Studio: данные удалены (${files} файл(ов), ${images} картинок)`, DISPLAY_NAME);
     } catch (e) {

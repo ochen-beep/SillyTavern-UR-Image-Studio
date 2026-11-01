@@ -63,3 +63,25 @@ test('deleteUserFiles removes named stores and bounded shard range', async () =>
     assert.ok(deleted.includes('uris_templates.json.corrupt'), 'corrupt side files are swept too');
     assert.equal(count, deleted.length);
 });
+
+test('deleteUserFiles real path targets user/files and covers the folders store', async () => {
+    // The /api/files/delete endpoint resolves paths against the user ROOT:
+    // a `files/…` prefix is rejected with 400 (proven live 2026-11-01) —
+    // the walk must speak `user/files/…` and know every uris store.
+    const calls = [];
+    const restore = mockFetch((url, options) => {
+        if (String(url) === '/api/files/delete') {
+            calls.push(JSON.parse(options.body).path);
+            const p = calls[calls.length - 1];
+            return { ok: p.endsWith('uris_refs_shard_s0000.json') || p.endsWith('uris_refs_shard_s0001.json'), status: 200 };
+        }
+        throw new Error(`unexpected ${url}`);
+    });
+    try {
+        await deleteUserFiles();
+    } finally { restore(); }
+    assert.ok(calls.length > 0 && calls.length < 300, `the walk is bounded (${calls.length} calls)`);
+    assert.ok(calls.every(p => p.startsWith('user/files/')), 'every path targets user/files');
+    assert.ok(calls.includes('user/files/uris_gallery_folders.json'), 'the gallery folders store is covered');
+    assert.ok(calls.includes('user/files/uris_refs_meta.json.corrupt'), 'corrupt side files of named stores are covered');
+});
