@@ -874,6 +874,13 @@ export function createFileStore(config) {
         },
 
         flush,
+        /** Clean-hook support: kill all writes for the rest of the session so
+         * no pending or later flush can resurrect the files being deleted. */
+        suspend() {
+            mode = 'readonly';
+            writeBlockedReason = 'cleaned';
+            refusePersist('cleaned');
+        },
         flushOnUnload,
 
         /** Size/shape summary for the diagnostics panel and the footprint log. */
@@ -924,6 +931,15 @@ export function createFileStore(config) {
 /** Registered stores, for the Settings-tab storage panel. */
 export function listFileStores() {
     return [...STORES.values()].map(store => store.footprint());
+}
+
+/**
+ * Clean-hook support: freeze every registered store so neither a pending
+ * mutation nor a later flush can resurrect the server files the clean hook
+ * is about to delete.
+ */
+export function suspendAllStoresForClean() {
+    for (const store of STORES.values()) store.suspend?.();
 }
 
 /** Flush every registered store (page unload / extension disable). */

@@ -1173,6 +1173,12 @@ export function createShardedFileStore(config) {
                 emit('store-unload-flush', { store: label, result: sent ? 'sent' : 'skipped', shards: sent, skipped, bytes });
             }
         },
+        /** Clean-hook support: same freeze as the plain store's suspend(). */
+        suspend() {
+            mode = 'readonly';
+            writeBlockedReason = 'cleaned';
+            refusePersist('cleaned');
+        },
         footprint() {
             return {
                 label,

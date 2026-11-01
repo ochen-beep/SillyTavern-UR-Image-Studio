@@ -11,7 +11,7 @@ import { listNativeImages, THUMBNAIL_FOLDER } from './native-image-storage.js';
 import { canonicalizeNativeImagePath } from './native-image-path.js';
 import { listRefs } from './refs-library.js';
 import { listCards } from './gallery-index.js';
-import { listFileStores } from './file-store.js';
+import { listFileStores, suspendAllStoresForClean } from './file-store.js';
 
 const REFS_FOLDER = 'URIS_Refs';
 
@@ -75,7 +75,10 @@ async function deleteUserFile(name) {
     const res = await fetch('/api/files/delete', {
         method: 'POST',
         headers: { ...(ctx?.getRequestHeaders?.() ?? {}), 'Content-Type': 'application/json' },
-        body: JSON.stringify({ path: `files/${name}` }),
+        // The endpoint resolves the path against the user ROOT: the files dir
+        // lives at `user/files/…`, not `files/…` (verified live — a `files/`
+        // prefix is rejected with 400 and deletes nothing).
+        body: JSON.stringify({ path: `user/files/${name}` }),
     });
     return res.ok;
 }
@@ -83,7 +86,7 @@ async function deleteUserFile(name) {
 /** Named stores plus the corrupt side files a repair may have parked. */
 function ownedFileNames() {
     const names = [
-        'uris_gallery.json', 'uris_gallery_manifest.json',
+        'uris_gallery.json', 'uris_gallery_manifest.json', 'uris_gallery_folders.json',
         'uris_refs.json', 'uris_refs_manifest.json', 'uris_refs_meta.json',
         'uris_presets.json', 'uris_templates.json', 'uris_studio.json',
     ];
@@ -126,4 +129,16 @@ export async function deleteOwnedImageFolders(deps = {}) {
     const listFolder = deps.listFolder || ((folder) => listNativeImages({ folder }));
     const files = [...await listFolder(REFS_FOLDER), ...await listFolder(THUMBNAIL_FOLDER)];
     return deleteOrphanFiles(files);
+}
+
+/**
+ * The clean-hook entry point. Order matters: stores are frozen FIRST — the
+ * extension is still live when ST runs the clean hook, and any later flush
+ * would resurrect the files deleted below (proven live 2026-11-01).
+ */
+export async function cleanAllData() {
+    suspendAllStoresForClean();
+    const files = await deleteUserFiles();
+    const images = await deleteOwnedImageFolders();
+    return { files, images };
 }
