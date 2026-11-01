@@ -95,6 +95,7 @@ export function makeCardReorderable(container, { selector, onReorder, longPressM
             document.removeEventListener('pointermove', move);
             document.removeEventListener('pointerup', finish);
             document.removeEventListener('pointercancel', finish);
+            document.removeEventListener('touchmove', blockTouchScroll);
             window.removeEventListener('keydown', onEscape, true);
             ghost?.remove();
             ghost = null;
@@ -104,6 +105,17 @@ export function makeCardReorderable(container, { selector, onReorder, longPressM
         };
 
         const onEscape = (ev) => { if (ev.key === 'Escape') cleanup(); };
+
+        /**
+         * A touch-action change mid-gesture is ignored by the browser — the
+         * gesture was classified as scroll at pointerdown, and once scrolling
+         * starts the pointer stream dies with pointercancel. Cancelling the
+         * touchmove while the drag is active is the only way to keep the
+         * pointer stream alive after the long-press has grabbed the card.
+         */
+        const blockTouchScroll = (ev) => {
+            if (dragging) ev.preventDefault();
+        };
 
         /** Индекс вставки: сколько живых карточек имеют центр выше курсора. */
         const insertionIndex = () => {
@@ -151,6 +163,7 @@ export function makeCardReorderable(container, { selector, onReorder, longPressM
         document.addEventListener('pointermove', move);
         document.addEventListener('pointerup', finish);
         document.addEventListener('pointercancel', finish);
+        if (isTouch) document.addEventListener('touchmove', blockTouchScroll, { passive: false });
         window.addEventListener('keydown', onEscape, true);
 
         if (isTouch) {
