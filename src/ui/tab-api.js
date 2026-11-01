@@ -298,6 +298,16 @@ export async function renderImageConnSection(host) {
             imageProfileId: id,
             ...(changed ? { generationDefaults: { modelId: null } } : {}),
         });
+        // The model pick is provider-bound: a card switch invalidates it, and
+        // in global-params mode the pick lives in globalGenerationDefaults —
+        // without this clear the old card's model rides on the new card.
+        if (changed && state.settings?.useParametersForAllChats === true) {
+            state.settings.globalGenerationDefaults = {
+                ...(state.settings.globalGenerationDefaults || {}),
+                modelId: null,
+            };
+            saveSettings();
+        }
         state.activeImageProfileId = id;
         if (changed) {
             state.generationDefaults = { ...(state.generationDefaults || {}), modelId: null };
