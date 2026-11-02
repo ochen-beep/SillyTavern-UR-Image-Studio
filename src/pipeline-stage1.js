@@ -187,14 +187,6 @@ export async function runStage1ForDraft(input, onStatus = () => {}, signal, opts
             // Success-only notification (superseded runs stay silent — the
             // newer run will notify). Cancel/error paths below never ring.
             if (apply.applied) playStageSound('stage1');
-            if (apply.applied) {
-                try {
-                    // The recipe this composed prompt was built from: Stage 2
-                    // carries it into the gallery card so the render names its
-                    // template next to the model. Bookkeeping only.
-                    await updateGenerationDraft(chatId, msgId, messageText, d => ({ ...d, templateId: effectiveTemplateId || null }));
-                } catch { /* ignore */ }
-            }
             if (apply.applied && autoFp) {
                 try {
                     // Bookkeeping only: a failed write must not fail the run.

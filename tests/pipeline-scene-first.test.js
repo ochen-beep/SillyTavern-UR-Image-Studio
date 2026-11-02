@@ -471,6 +471,10 @@ test('active template change affects only default draft, not override draft', as
     assert.equal(runDefaultB.draft.templateId, null);
     assert.equal(runOverrideB.draft.templateSelection, 'override');
     assert.equal(runOverrideB.draft.templateId, localTpl.id);
+    // History field: the recipe each composed prompt was actually built from —
+    // the active template for default drafts, the local one for overrides.
+    assert.equal(runDefaultB.draft.composedTemplateId, tplB.id);
+    assert.equal(runOverrideB.draft.composedTemplateId, localTpl.id);
 });
 
 test('createStage2Snapshot builds frozen submission snapshot', async () => {
