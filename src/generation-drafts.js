@@ -116,6 +116,10 @@ export function createGenerationDraft(chatId, msgId, messageText) {
         messageHash: hashMessage(messageText),
         templateSelection: 'default',
         templateId: null,
+        // History, not selection: the template that composed the current
+        // prompt (Stage 1 stamps it on apply). templateId stays the local
+        // override field — resolveDraftTemplateId owns that contract.
+        composedTemplateId: null,
         prompt: '',
         promptOrigin: 'empty',
         promptRevision: 0,
@@ -299,6 +303,9 @@ export async function applyStage1Result(draft, token, promptRevision, result, me
             templateId: selection === 'override'
                 ? (result.templateId ?? current.templateId)
                 : current.templateId,
+            // History, not selection: the recipe this composed prompt was built
+            // from. Stage 2 carries it into the gallery card (templateName).
+            composedTemplateId: result.templateId ?? current.composedTemplateId ?? null,
             prompt: result.prompt ?? current.prompt,
             promptOrigin: result.prompt ? 'stage1' : current.promptOrigin,
             stage1: {

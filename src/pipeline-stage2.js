@@ -312,7 +312,7 @@ export async function runStage2ForDraft(input, onStatus = () => {}, signal, opts
             sourceMsgId: msgId,
             // The template that composed this prompt — the gallery card names
             // it next to the model so a render is traceable to its recipe.
-            templateId: draft.templateId || null,
+            templateId: draft.composedTemplateId || null,
         };
         recordDiagnosticEvent({
             event: 'dispatch-start', stage: 'stage2', requestId: activeRequestId,
