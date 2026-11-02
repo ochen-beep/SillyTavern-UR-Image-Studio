@@ -247,6 +247,24 @@ function registerActionButtons(pswp, ctx) {
             });
         }
     });
+    // Нижняя подпись полного просмотра: те же факты, что на бейдже карточки
+    // сетки (шаблон-рецепт и модель). Живёт и гаснет вместе с вендорным UI.
+    pswp.on('uiRegister', () => {
+        pswp.ui.registerElement({
+            name: 'uris-caption', order: 5, isButton: false, appendTo: 'root',
+            className: 'uris-pswp-caption', html: '',
+        });
+    });
+    const syncCaption = () => {
+        const el = pswp.element?.querySelector('.uris-pswp-caption');
+        if (!el) return;
+        const item = ctx.items[pswp.currIndex];
+        const template = typeof item?.templateName === 'string' ? item.templateName.trim() : '';
+        const model = typeof item?.modelId === 'string' ? item.modelId.trim() : '';
+        el.textContent = [template, model].filter(Boolean).join(' · ');
+    };
+    pswp.on('change', syncCaption);
+    pswp.on('firstUpdate', syncCaption);
     if (!refMode) pswp.on('change', syncFavUi);
     return refMode ? null : syncFavUi;
 }

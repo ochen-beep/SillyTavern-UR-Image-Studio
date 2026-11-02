@@ -45,6 +45,9 @@ function decodeFolderFromPath(value) {
 }
 const ALLOWED = [
     'id', 'imagePath', 'prompt', 'negativePrompt', 'connectionId', 'routeId', 'modelId',
+    // Name of the prompt template that composed this render, frozen at
+    // generation time (image-api resolves it from the draft's templateId).
+    'templateName',
     'generationContract', 'aspectRatio', 'imageSize', 'quality', 'referenceIds', 'provenance',
     'status', 'createdAt', 'updatedAt', 'sourceMsgId', 'style', 'refs', 'refsSig', 'stage2Snapshot',
     // Natural pixel dimensions: PhotoSwipe needs them before opening (open
@@ -155,6 +158,7 @@ export function sanitizeGalleryCard(input = {}, existing = null) {
     out.connectionId = cleanText(out.connectionId, existing?.connectionId || '');
     out.routeId = cleanText(out.routeId, existing?.routeId || '');
     out.modelId = cleanText(out.modelId, existing?.modelId || '');
+    out.templateName = cleanText(out.templateName, existing?.templateName || '');
     out.generationContract = cleanText(out.generationContract, existing?.generationContract || '');
     out.status = out.status === 'missing' ? 'missing' : 'ready';
     out.hidden = out.hidden === true ? true : false;

@@ -57,12 +57,13 @@ test('persists sanitized card metadata without bytes or secrets', async () => {
     const { addCard, listCards } = await import('../src/gallery-index.js');
     const card = await addCard({
         id: 'card-1', imagePath: 'user/images/UR%20Image%20Studio/one.png', prompt: 'portrait',
-        routeId: 'route-1', modelId: 'model-1', referenceIds: ['ref-1'], status: 'ready',
+        routeId: 'route-1', modelId: 'model-1', templateName: 'txt2img', referenceIds: ['ref-1'], status: 'ready',
         apiKey: 'must-not-persist', providerMetadata: { token: 'also-not-persist', seed: 5 },
         src: 'data:image/png;base64,secret-image-bytes', result: { value: 'data:image/png;base64,more-bytes' },
     });
 
     assert.equal(card.id, 'card-1');
+    assert.equal(card.templateName, 'txt2img', 'the recipe template name rides on the card');
     // Запись коалесцируется: читаем файл после flush, а не по таймингу микротасков.
     const { flushGalleryWrites } = await import('../src/gallery-index.js');
     await flushGalleryWrites();

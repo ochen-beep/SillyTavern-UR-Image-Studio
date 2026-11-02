@@ -9,6 +9,7 @@ import { isCorsProxyAvailable, isCorsOrNetworkError } from './proxy.js';
 import { deliveryHintFor, noteProbe } from './delivery-evidence.js';
 import { materializeImageResult, getCharacterImageFolder, makeThumbnailForPath } from './native-image-storage.js';
 import { addCard, updateCard } from './gallery-index.js';
+import { getTemplate } from './prompt-templates.js';
 import { providerError, assertApiKeyForContract } from './providers/image-base.js';
 import { summarizeReference } from './references.js';
 import { aspectDeviates } from './aspect-ratio.js';
@@ -61,6 +62,7 @@ function pendingSnapshot(connectionId, route, request) {
         referenceBindings: request.referenceBindings || [],
         chatId: request.chatId ?? null,
         sourceMsgId: request.sourceMsgId ?? null,
+        templateId: request.templateId ?? null,
     };
 }
 
@@ -353,6 +355,12 @@ export async function generateImageRequest(imageConnId, request, onStatus, signa
             });
         }
         recordDiagnosticEvent({ event: 'materialize-result', stage: 'stage2', requestId: request.requestId, outcome: 'uploaded', details: { imagePathClass: typeof imagePath === 'string' ? imagePath.split('/').slice(0, 2).join('/') : null, bytes: outputMeta.bytes ?? null, mimeType: outputMeta.mimeType ?? null, width: outWidth, height: outHeight, aspectRatio: outputAspect, requestedAspectRatio: snapshot.aspectRatio } });
+        // The card names its recipe template next to the model. The name is
+        // frozen at generation time: a later rename or delete of the template
+        // must not rewrite the history of renders made with it.
+        const templateName = snapshot.templateId
+            ? String((await getTemplate(snapshot.templateId))?.name || '').trim()
+            : '';
         const galleryEntry = await addCard({
             imagePath,
             // Top-level natural dimensions (image-dimensions.js consumes these);
@@ -362,6 +370,7 @@ export async function generateImageRequest(imageConnId, request, onStatus, signa
             connectionId: imageConnId,
             routeId: route.id,
             modelId: route.modelId,
+            templateName,
             generationContract: route.generationContract,
             aspectRatio: snapshot.aspectRatio,
             imageSize: snapshot.imageSize,
