@@ -39,6 +39,10 @@
     color: #fff; font-size: var(--uris-font-sm); line-height: 1.2; text-align: left;
     white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
+/* Две строки бейджа: шаблон-рецепт сверху, модель ниже; каждая строка
+   обрезается по ширине карточки независимо. */
+.uris-model-badge .uris-badge-line { display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.uris-badge-model { font-size: 11px; opacity: .82; }
 .uris-card-actions { display: flex; justify-content: space-around; padding: 4px; background: rgba(0,0,0,.3); }
 .uris-card-btn { background: none; border: none; color: var(--uris-text-mut); cursor: pointer; padding: 6px; font-size: var(--uris-font); }
 .uris-card-btn:hover { color: var(--uris-text-strong); }

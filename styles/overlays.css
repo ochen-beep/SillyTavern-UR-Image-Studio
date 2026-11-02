@@ -605,6 +605,18 @@ div.pswp__img--placeholder,
 .pswp__button.uris-pswp-act:hover { opacity: 1; background: rgba(255, 255, 255, 0.12); }
 .pswp__button.uris-pswp-act-danger:hover { background: var(--uris-err-hover); }
 .pswp__button.uris-pswp-act:focus-visible { outline: 2px solid #fff; outline-offset: -2px; }
+/* Подпись полного просмотра: шаблон + модель — те же факты, что на бейдже
+   карточки сетки. Гаснет вместе с вендорным UI; на таче строка компактнее. */
+.uris-pswp-caption {
+    position: absolute; left: 0; right: 0; bottom: 0; z-index: 10;
+    padding: 22px 14px 12px; text-align: center; color: #fff;
+    font-size: var(--uris-font-sm); line-height: 1.35;
+    background: linear-gradient(to top, rgba(0,0,0,.72), rgba(0,0,0,0));
+    pointer-events: none; opacity: 0; transition: opacity .2s ease;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.pswp--ui-visible .uris-pswp-caption { opacity: 1; }
+.pswp--touch .uris-pswp-caption { font-size: 12px; padding: 18px 10px 10px; }
 @media (max-width: 768px) {
     .pswp__button.uris-pswp-act { font-size: calc(18px * var(--uris-font-scale, 1)); }
 }

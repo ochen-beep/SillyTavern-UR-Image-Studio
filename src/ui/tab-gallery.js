@@ -221,11 +221,15 @@ function card(it, i) {
     // подсветка карточки. Наверх ленты карточку ставит orderGalleryItems.
     const favOn = it.favorite === true;
     const favBadge = favOn ? '<span class="uris-fav-badge" title="В избранном"><i class="fa-solid fa-star"></i></span>' : '';
-    // Название модели — градиентная подпись на нижней кромке миниатюры.
-    // Legacy-карточки и карточки после reconcile модель не знают — подписи нет.
+    // Подпись на нижней кромке миниатюры: название шаблона-рецепта первой
+    // строкой, модель второй (каждая обрезается по ширине карточки).
+    // Legacy-карточки не знают ни того, ни другого — подписи нет.
     const model = typeof it.modelId === 'string' ? it.modelId.trim() : '';
-    const modelBadge = model
-        ? `<span class="uris-model-badge" title="Модель: ${escapeHtml(model)}">${escapeHtml(model)}</span>`
+    const template = typeof it.templateName === 'string' ? it.templateName.trim() : '';
+    const badgeTitle = [template ? `Шаблон: ${template}` : '', model ? `Модель: ${model}` : '']
+        .filter(Boolean).join('\n');
+    const modelBadge = (model || template)
+        ? `<span class="uris-model-badge" title="${escapeHtml(badgeTitle)}">${template ? `<span class="uris-badge-line uris-badge-template">${escapeHtml(template)}</span>` : ''}${model ? `<span class="uris-badge-line uris-badge-model">${escapeHtml(model)}</span>` : ''}</span>`
         : '';
     const gotoBtn = it.sourceMsgId != null
         ? `<button class="uris-card-btn" data-act="goto" title="Перейти к посту-источнику" aria-label="Перейти к посту-источнику"><i class="fa-solid fa-arrow-up-right-from-square"></i></button>`
