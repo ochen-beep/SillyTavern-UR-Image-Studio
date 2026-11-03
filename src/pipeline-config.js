@@ -69,6 +69,25 @@ export async function resolveChatConfigSnapshot() {
     };
 }
 
+/**
+ * Stage 1 variant of the chat-config snapshot: template and generation
+ * defaults only, without the image-route resolution. Prompt building never
+ * touches the image model, so a reclassified or broken image model in the
+ * chat defaults must not block it (Stage 2 keeps the full validation via
+ * resolveChatConfigSnapshot at submit time).
+ * @returns {Promise<import('./core.js').ChatConfigSnapshot>}
+ */
+export async function resolveStage1ChatConfigSnapshot() {
+    const binding = await loadChatConfig();
+    const config = binding.config;
+    return {
+        imageProfileId: config.imageProfileId ?? null,
+        templateId: config.templateId ?? null,
+        generationDefaults: effectiveGenerationDefaults(config.generationDefaults || {}),
+        imageRoute: null,
+    };
+}
+
 // ── Active presets resolution (chat-scoped snapshot) ──
 
 /**

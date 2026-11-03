@@ -760,6 +760,62 @@ test('stage-1 result discarded by a live prompt edit reports why instead of sile
     }
 });
 
+test('stage-1 input skips image-model validation that would block prompt building', async () => {
+    // A chat model reclassified as text-only makes the full config snapshot
+    // throw; prompt building never touches the image model, so Stage 1 must
+    // still get its input.
+    const originalCtx = globalThis.SillyTavern.getContext;
+    const originalLf = globalThis.SillyTavern.libs.localforage;
+    const store = new Map();
+    const chatMetadata = {};
+    // Stable envelope: the connection store lives in extensionSettings, a fresh
+    // object per getContext() call would detach every write.
+    const extensionSettings = {
+        ur_image_studio: {
+            imageConnections: { schemaVersion: 1, connections: [], catalogs: {}, galleryIndex: [], templates: [], presets: [], refs: [], folders: [], selectedRouteId: null },
+        },
+    };
+    globalThis.SillyTavern.libs.localforage = {
+        getItem: async k => (store.has(k) ? store.get(k) : null),
+        setItem: async (k, v) => { store.set(k, v); },
+        removeItem: async k => { store.delete(k); },
+    };
+    globalThis.SillyTavern.getContext = () => ({
+        chatId: 'c1',
+        chat: [{ mes: 'hello' }],
+        chatMetadata,
+        extensionSettings,
+        saveSettingsDebounced: () => {},
+        getRequestHeaders: () => ({}),
+    });
+    state.currentMsgId = 0;
+    try {
+        const { createConnection } = await import('../src/connection-store.js');
+        const { patchChatConfig } = await import('../src/chat-binding.js');
+        const { resolveChatConfigSnapshot } = await import('../src/pipeline-config.js');
+        const { makeFakeDocument } = await import('./fake-dom.js');
+        const { root } = makeFakeDocument();
+
+        await createConnection({
+            id: 'img-conn', kind: 'image', name: 'Test', endpoint: 'https://api.test/v1',
+            detected: { modelIds: ['gpt-4o-mini'], modelMetadata: [{ modelId: 'gpt-4o-mini', mediaKind: 'text' }] },
+        });
+        await patchChatConfig({ imageProfileId: 'img-conn', generationDefaults: { modelId: 'gpt-4o-mini' } });
+
+        await assert.rejects(() => resolveChatConfigSnapshot(), /не поддерживает генерацию изображений/,
+            'the full (Stage 2) snapshot still rejects the non-image chat model');
+
+        const input = await tabGenerate.prepareSubmissionInput(root, { light: true });
+        assert.ok(input, 'stage-1 input resolves despite the non-image chat model');
+        assert.equal(input.chatConfig.imageRoute, null, 'no image-route resolution for stage 1');
+        assert.equal(input.messageText, 'hello');
+    } finally {
+        globalThis.SillyTavern.getContext = originalCtx;
+        globalThis.SillyTavern.libs.localforage = originalLf;
+        state.currentMsgId = null;
+    }
+});
+
 test('submitCurrentGeneration surfaces storage errors via toastr', async () => {
     const originalCtx = globalThis.SillyTavern.getContext;
     const originalGetItem = globalThis.SillyTavern.libs.localforage.getItem;
