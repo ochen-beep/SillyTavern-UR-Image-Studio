@@ -8,6 +8,7 @@
  */
 import { state, getCtx, trace, warn } from './core.js';
 import { randomToken } from './random.js';
+import { STUDIO_CHAT_ID } from './studio-scope.js';
 import { recordDiagnosticEvent, hashDiagnosticId } from './diagnostic-events.js';
 import { generateImageRequest } from './image-api.js';
 import { observeCapabilityAttempt } from './capability-observer.js';
@@ -54,7 +55,10 @@ async function loadDraftForStage2(chatId, msgId, messageText) {
     const key = generationDraftKey(chatId, msgId);
     const raw = await SillyTavern.libs.localforage.getItem(key);
     const currentHash = hashMessage(messageText);
-    if (raw && raw.messageHash !== currentHash) {
+    // The studio scene is a free-form input, not an immutable source message:
+    // its draft is deliberately not bound to a text hash (same exception as
+    // getGenerationDraft, the queue's studio branch and the stale badge).
+    if (chatId !== STUDIO_CHAT_ID && raw && raw.messageHash !== currentHash) {
         throw new Error('Source message changed; rebuild the prompt');
     }
     return raw || createGenerationDraft(chatId, msgId, messageText);
