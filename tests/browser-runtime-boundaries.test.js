@@ -32,3 +32,11 @@ test('normal browser generation has no legacy server dispatch or recovery depend
     assert.doesNotMatch(generateTab, /from '\.\/image-recovery\.js'|resumeServerRequest|PendingServer/);
     assert.doesNotMatch(imageApi, /from '\.\/image-recovery\.js'/);
 });
+
+test('pipeline request ids survive plain-HTTP origins (crypto.randomUUID is secure-context-only)', async () => {
+    for (const path of ['src/pipeline-stage1.js', 'src/pipeline-stage2.js']) {
+        const src = await source(path);
+        assert.doesNotMatch(src, /[^?.]crypto\.randomUUID\(/, `${path} must not call crypto.randomUUID() bare`);
+        assert.match(src, /randomUUID\?\.\(\) \|\| randomToken/, `${path} must use the guarded idiom`);
+    }
+});

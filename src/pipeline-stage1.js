@@ -7,6 +7,7 @@
  * (entry point is Stage 1) and imports Stage 2 to avoid circular dependencies.
  */
 import { state, fnv1aHex, getCtx } from './core.js';
+import { randomToken } from './random.js';
 import { buildStage1ContextParts } from './stage1-context.js';
 import { recordDiagnosticEvent, hashDiagnosticId } from './diagnostic-events.js';
 import { generatePromptText } from './text-api.js';
@@ -92,7 +93,8 @@ function computeAutoFp({ messageText, templateId, configSnapshot }) {
 export async function runStage1ForDraft(input, onStatus = () => {}, signal, opts = {}) {
     const { chatId, msgId, messageText, templateId, chatConfig } = input;
     const startedAt = performance.now();
-    const stage1RequestId = crypto.randomUUID();
+    // Guarded: crypto.randomUUID is secure-context-only and absent on plain-HTTP origins.
+    const stage1RequestId = globalThis.crypto?.randomUUID?.() || randomToken(10);
     recordDiagnosticEvent({ requestId: stage1RequestId, event: 'stage1-start', stage: 'stage1', chatHash: hashDiagnosticId(chatId), msgId, details: { source: state.settings.apiSource || null } });
 
     // Every Stage 1 owns a controller registered in activeGenerations, so it is
