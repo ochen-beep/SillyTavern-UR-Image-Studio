@@ -7,6 +7,7 @@
  * for "regenerate". runStage2ForDraft is the primary scene-first entry point.
  */
 import { state, getCtx, trace, warn } from './core.js';
+import { randomToken } from './random.js';
 import { recordDiagnosticEvent, hashDiagnosticId } from './diagnostic-events.js';
 import { generateImageRequest } from './image-api.js';
 import { observeCapabilityAttempt } from './capability-observer.js';
@@ -134,7 +135,8 @@ export async function runStage2ForDraft(input, onStatus = () => {}, signal, opts
             else signal.addEventListener('abort', () => ownController.abort(), { once: true });
         }
         useSignal = ownController.signal;
-        activeRequestId = crypto.randomUUID();
+        // Guarded: crypto.randomUUID is secure-context-only and absent on plain-HTTP origins.
+        activeRequestId = globalThis.crypto?.randomUUID?.() || randomToken(10);
         state.activeGenerations.set(activeRequestId, ownController);
         // Live-run registry per post: a manual submit on the same post must be
         // able to see an auto/bridge generation in flight before paying for a
