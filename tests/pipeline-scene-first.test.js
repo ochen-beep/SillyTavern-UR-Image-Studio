@@ -554,6 +554,34 @@ test('runStage2ForDraft rejects stale message hash without provider call', async
     }
 });
 
+test('runStage2ForDraft does not apply the stale-hash guard to the studio scene', async () => {
+    // The studio scene is a free-form input, not an immutable source message:
+    // the draft is created on the first render with an empty scene and must not
+    // be rebound to a later text (same exception as getGenerationDraft / queue /
+    // stale badge).
+    await setupImageApi();
+    const { STUDIO_CHAT_ID, STUDIO_MSG_ID } = await import('../src/studio-scope.js');
+    const { updateGenerationDraft } = await import('../src/generation-drafts.js');
+    const { runStage2ForDraft } = await import('../src/pipeline.js');
+
+    await updateGenerationDraft(STUDIO_CHAT_ID, STUDIO_MSG_ID, '', d => ({
+        ...d,
+        sceneText: 'a hero walks in',
+        prompt: 'studio prompt',
+        promptOrigin: 'manual',
+    }));
+
+    let fetchCalls = 0;
+    const restore = mockServerImageApi(() => { fetchCalls += 1; });
+    try {
+        const card = await runStage2ForDraft({ chatId: STUDIO_CHAT_ID, msgId: STUDIO_MSG_ID, messageText: 'a hero walks in', templateId: null });
+        assert.ok(card, 'studio run reaches the provider');
+        assert.equal(fetchCalls, 1, 'image API was called');
+    } finally {
+        restore();
+    }
+});
+
 test('runStage2ForDraft submits immutable snapshot even if draft is mutated', async () => {
     await setupImageApi();
     const { runStage2ForDraft } = await import('../src/pipeline.js');
