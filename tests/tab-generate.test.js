@@ -659,6 +659,30 @@ test('bindGenerate attaches Stage 1 and Stage 2 click handlers without throwing'
     assert.ok(!clickSels.includes('#urisPrimaryGenerate'), 'legacy primary button is not referenced');
 });
 
+test('stage-1 click failure toasts and lands in the error pool instead of dying silently', async () => {
+    // Regression: the catch block read `input` declared inside try, so every
+    // Stage 1 failure escaped as an unhandled ReferenceError — no toast, no
+    // pool entry, no re-render. beforeEach leaves apiSource unset, so
+    // generatePromptText throws before any network.
+    let tab;
+    const toasts = [];
+    const originalToastr = globalThis.toastr;
+    try {
+        tab = await setupGenerateTab('c1');
+        globalThis.toastr = { error: (msg) => toasts.push(String(msg)), success() {}, warning() {}, info() {} };
+        clearUrisErrors();
+        const btn = tab.root.querySelector('#urisBuildPrompt');
+        await btn.click(); // pre-fix this promise rejected with ReferenceError
+        assert.equal(btn.disabled, false, 'button is live again');
+        assert.ok(toasts.some(t => /Источник text-LLM/.test(t)), `failure reached the user as a toast: ${toasts.join('|') || '(none)'}`);
+        assert.ok(listUrisErrors().some(e => /Источник text-LLM/.test(e.message)), 'failure is recorded in the header error pool');
+    } finally {
+        globalThis.toastr = originalToastr;
+        clearUrisErrors();
+        tab?.restore();
+    }
+});
+
 test('submitCurrentGeneration surfaces storage errors via toastr', async () => {
     const originalCtx = globalThis.SillyTavern.getContext;
     const originalGetItem = globalThis.SillyTavern.libs.localforage.getItem;
