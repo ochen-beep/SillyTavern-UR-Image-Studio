@@ -818,16 +818,19 @@ export function bindGenerate(root) {
     // Stage 1 always builds or rebuilds the prompt independently of Stage 2.
     const buildPromptButton = root.querySelector('#urisBuildPrompt');
     buildPromptButton?.addEventListener('click', withBusy(buildPromptButton, async () => {
+        // let-outside-try: the catch reads it to report the failed post; a
+        // try-scoped const made every failure a silent ReferenceError instead.
+        let input = null;
         try {
-            const input = await prepareSubmissionInput(root);
+            input = await prepareSubmissionInput(root);
             if (!input) return;
             const run = await runStage1ForDraft(input);
             if (run.applied) {
                 toastr?.success('Промпт построен');
             }
         } catch (e) {
-            error('Generate action:', e.message);
-            reportFailure({ scope: URIS_SCOPES.stage1, message: e.message, context: input ? { post: input.msgId } : null, toast: true });
+            error('Generate action:', e?.message || e);
+            reportFailure({ scope: URIS_SCOPES.stage1, message: e?.message || String(e), context: input ? { post: input.msgId } : null, toast: true });
         }
         await render(root);
     }));
