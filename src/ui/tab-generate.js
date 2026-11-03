@@ -17,7 +17,7 @@ import { getActiveTab, refreshActive } from './tabs.js';
 import { getRefSync } from '../refs-library.js';
 import { showSingleImage } from './lightbox.js';
 import { editTextModal } from './text-editor.js';
-import { resolveChatConfigSnapshot } from '../pipeline-config.js';
+import { resolveChatConfigSnapshot, resolveStage1ChatConfigSnapshot } from '../pipeline-config.js';
 import { getConnection } from '../connections.js';
 import {
     detectModelFamily,
@@ -822,7 +822,9 @@ export function bindGenerate(root) {
         // try-scoped const made every failure a silent ReferenceError instead.
         let input = null;
         try {
-            input = await prepareSubmissionInput(root);
+            // Stage 1 runs on the light config: image-model eligibility is
+        // irrelevant to building a prompt and must not block it.
+        input = await prepareSubmissionInput(root, { light: true });
             if (!input) return;
             const run = await runStage1ForDraft(input);
             if (run.applied) {
@@ -951,10 +953,12 @@ export function syncGenerateEnabled(root) {
  * the visible editor state. The snapshot is what a queued Stage 2 will send:
  * later edits belong to the next submission and must not leak into this one.
  * @param {HTMLElement} root
+ * @param {{light?:boolean}} [opts] light — Stage 1 chat-config snapshot without
+ *   the image-model validation: prompt building does not touch the image model.
  * @returns {Promise<object|null>} null when there is no post to submit for
  */
-export async function prepareSubmissionInput(root) {
-    const chatConfig = await resolveChatConfigSnapshot();
+export async function prepareSubmissionInput(root, { light = false } = {}) {
+    const chatConfig = light ? await resolveStage1ChatConfigSnapshot() : await resolveChatConfigSnapshot();
     const scope = activeScope(root);
     if (!scope.studio && scope.msgId == null) {
         toastr?.warning('Нет поста');
