@@ -683,6 +683,83 @@ test('stage-1 click failure toasts and lands in the error pool instead of dying 
     }
 });
 
+test('stage-1 result discarded by a live prompt edit reports why instead of silence', async () => {
+    // The user edits the prompt while the LLM call is in flight: the edit wins
+    // (promptRevision guard), the built result is discarded — and the click
+    // handler must say so instead of showing nothing after a long run.
+    let tab;
+    const infos = [];
+    const successes = [];
+    const originalToastr = globalThis.toastr;
+    const originalCtx = globalThis.SillyTavern.getContext;
+    const originalLf = globalThis.SillyTavern.libs.localforage;
+    const originalTemplateId = state.activeTemplateId;
+    const store = new Map();
+    let releaseGate;
+    let sendReached = false;
+    const gate = new Promise(r => { releaseGate = r; });
+    try {
+        tab = await setupGenerateTab('c1');
+        globalThis.SillyTavern.libs.localforage = {
+            getItem: async k => (store.has(k) ? store.get(k) : null),
+            setItem: async (k, v) => { store.set(k, v); },
+            removeItem: async k => { store.delete(k); },
+        };
+        globalThis.SillyTavern.getContext = () => ({
+            chatId: 'c1',
+            chat: [{ mes: 'hello' }],
+            chatMetadata: {},
+            extensionSettings: { connectionManager: { profiles: [{ id: 'p1', name: 'P1' }] } },
+            saveSettingsDebounced: () => {},
+            getRequestHeaders: () => ({}),
+            ConnectionManagerRequestService: {
+                sendRequest: async () => { sendReached = true; await gate; return 'freshly built prompt'; },
+            },
+        });
+        state.settings.apiSource = 'profile';
+        state.settings.profileId = 'p1';
+        // beforeEach resets settings to a bare object; callWithRetry needs the
+        // retry fields present (undefined maxRetries runs zero attempts).
+        state.settings.maxRetries = 0;
+        state.settings.retryDelay = 10;
+        state.activeTemplateId = null;
+        globalThis.toastr = {
+            info: (msg) => infos.push(String(msg)),
+            success: (msg) => successes.push(String(msg)),
+            warning: (msg) => infos.push('WARN:' + String(msg)),
+            error: (msg) => infos.push('ERR:' + String(msg)),
+        };
+
+        const btn = tab.root.querySelector('#urisBuildPrompt');
+        const clickPromise = btn.click();
+        for (let i = 0; i < 40 && !sendReached; i++) await new Promise(r => setTimeout(r, 50));
+        assert.ok(sendReached, 'the run reached the text LLM call');
+
+        // User types over the prompt while the call is in flight.
+        const promptEl = tab.root.querySelector('#urisPrompt');
+        promptEl.value = 'user typed over it';
+        promptEl.dispatchEvent({ type: 'input', target: promptEl, stopPropagation() {}, preventDefault() {} });
+        await new Promise(r => setTimeout(r, 550)); // 400ms autosave debounce + persist
+
+        releaseGate();
+        await clickPromise;
+
+        assert.ok(infos.some(t => /отредактирован вручную/.test(t)), `discard explained to the user: ${infos.join('|') || '(none)'}`);
+        assert.deepEqual(successes, [], 'no false success toast');
+        const { getGenerationDraft } = await import('../src/generation-drafts.js');
+        const draft = await getGenerationDraft('c1', 0, 'hello');
+        assert.equal(draft.prompt, 'user typed over it', 'the manual edit survives, the build result does not');
+    } finally {
+        releaseGate();
+        globalThis.toastr = originalToastr;
+        globalThis.SillyTavern.getContext = originalCtx;
+        globalThis.SillyTavern.libs.localforage = originalLf;
+        state.activeTemplateId = originalTemplateId;
+        clearUrisErrors();
+        tab?.restore();
+    }
+});
+
 test('submitCurrentGeneration surfaces storage errors via toastr', async () => {
     const originalCtx = globalThis.SillyTavern.getContext;
     const originalGetItem = globalThis.SillyTavern.libs.localforage.getItem;

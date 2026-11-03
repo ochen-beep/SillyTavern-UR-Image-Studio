@@ -827,6 +827,12 @@ export function bindGenerate(root) {
             const run = await runStage1ForDraft(input);
             if (run.applied) {
                 toastr?.success('Промпт построен');
+            } else if (run.reason === 'prompt-edited') {
+                // The live manual edit outranks the finished build — say so
+                // instead of leaving a long run looking like a silent failure.
+                toastr?.info('Промпт отброшен: отредактирован вручную');
+            } else if (run.reason === 'superseded') {
+                toastr?.info('Промпт отброшен: заменён более новым прогоном');
             }
         } catch (e) {
             error('Generate action:', e?.message || e);
