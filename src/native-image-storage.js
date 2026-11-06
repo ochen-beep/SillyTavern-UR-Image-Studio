@@ -10,6 +10,8 @@ import {
 import { formatForMime, formatForMimeOrDefault, sanitizeUploadFilename } from './st-upload-format.js';
 import { optimizeReferenceImage } from './references.js';
 import { isStudioActive, STUDIO_IMAGE_FOLDER } from './studio-scope.js';
+import { uploadNamedUserFile } from './user-files-storage.js';
+import { randomToken } from './random.js';
 
 export { NATIVE_GALLERY_FOLDER };
 
@@ -158,14 +160,15 @@ export async function makeThumbnailForPath(imagePath, { filename, signal, timeou
         formats: ['image/webp'],
     });
     const base = String(filename || '').replace(/\.[^.]+$/, '') || `thumb_${Date.now()}`;
-    // uploadPayload sanitizes the whole filename and the server derives the
-    // extension from `format` — pass a bare base name only.
-    return uploadPayload(await blobPayload(optimized.blob), {
-        filename: `${sanitizeUploadFilename(base)}_thumb`,
-        ch_name: THUMBNAIL_FOLDER,
-        signal,
-        timeoutMs,
-    });
+    // С 2026-11 миниатюры пишутся в user/files под защитой реестра
+    // (user-files-storage.js) — URIS_Thumbs в user/images Data Maid считала
+    // «ничьими». user/files отдаётся статикой, <img src> работает как раньше.
+    // Оптимизатор выше выдаёт webp, поэтому расширение фиксировано.
+    return uploadNamedUserFile(
+        `uris_thumb_${sanitizeUploadFilename(base)}_${randomToken(6)}.webp`,
+        (await blobPayload(optimized.blob)).image,
+        { signal: signal ?? (timeoutMs ? AbortSignal.timeout(timeoutMs) : undefined) },
+    );
 }
 
 /** Materialize a normalized provider result then upload it to the native gallery. */
