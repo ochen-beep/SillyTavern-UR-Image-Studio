@@ -163,7 +163,7 @@ test('import/export round-trips a current chat config and refs', async () => {
     assert.equal(cfgBefore.refs.referenceIds[0], 'rt-ref');
 
 	    const exported = await exportUrisData();
-	    assert.equal(exported.version, 9);
+	    assert.equal(exported.version, 10);
 	    assert.equal(exported.module, 'ur_image_studio');
     assert.deepEqual(Object.keys(exported.data.chatMetadata), ['roundtrip-chat']);
     const exportedChat = exported.data.chatMetadata['roundtrip-chat'];

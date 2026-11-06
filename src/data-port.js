@@ -23,9 +23,10 @@ import { invalidateTemplateCache, replaceTemplateStoreRecords, getTemplateRecord
 import { reportFailure, URIS_SCOPES } from './error-pool.js';
 import { invalidatePoolCache, getRefsForExport, replaceRefsRecords } from './refs-library.js';
 import { getParamPresetsForExport, replaceParamPresetRecords } from './param-presets.js';
+import { getCardsForExport, importGalleryCards } from './gallery-index.js';
 import { recordDiagnosticEvent } from './diagnostic-events.js';
 
-const BACKUP_VERSION = 9;
+const BACKUP_VERSION = 10;
 const BACKUP_MODULE = MODULE_NAME;
 
 /**
@@ -91,6 +92,8 @@ function migrateConnectionV7(connection) {
  * @type {Record<number, (data: object) => object>}
  */
 const BACKUP_MIGRATORS = {
+    // v9 -> v10: structural no-op (galleryCards section added, optional).
+    9: data => ({ ...data, version: 10 }),
     // v6 -> v7: structural no-op (version tag bump only).
     6: data => ({ ...data, version: 7 }),
     // v7 -> v8: connection records move to the derived-dialect read model.
@@ -153,10 +156,11 @@ function migrateBackupVersion(data) {
     }
     return current;
 }
-// Gallery files and metadata are intentionally not portable: native files remain
-// on the source SillyTavern installation and cards would otherwise restore as
-// broken entries. Keep this list aligned with summarizeBackup/import UI.
-const PORTABLE_KEYS = ['connections', 'templates', 'presets', 'refs', 'folders', 'selectedRouteId'];
+// Gallery card metadata rides `shared.galleryCards` (file bytes stay on the
+// source installation — a restored card re-links by imagePath when the same
+// file exists, and shows as 'missing' otherwise). Keep this list aligned with
+// summarizeBackup/import UI.
+const PORTABLE_KEYS = ['connections', 'templates', 'presets', 'refs', 'folders', 'selectedRouteId', 'galleryCards'];
 const TRANSIENT_FIELDS = new Set(['pendingOperation', 'pending', 'recovery', 'recoveryState', 'requestJournal', 'journal', 'dataUrl', 'imageUrl', 'imageBytes', 'rawBytes', 'blob', 'base64']);
 
 function plain(value) { return value !== null && typeof value === 'object' && !Array.isArray(value); }
@@ -395,6 +399,10 @@ export async function exportUrisData(options = {}) {
         }
         const freshPresets = await getParamPresetsForExport();
         if (freshPresets) sharedSource.presets = freshPresets;
+        const freshCards = await getCardsForExport();
+        // Пустая секция не экспортируется: иначе replace-импорт такого бэкапа
+        // стёр бы живую галерею «пустым» содержимым.
+        if (freshCards?.length) sharedSource.galleryCards = freshCards;
         data.shared = normalizeShared(sharedSource);
         data.data.extensionSettings = settings
             ? sanitizeBackupValue(Object.fromEntries(Object.entries(settings).filter(([key]) => key !== 'imageConnections' && key !== 'recoveryState')))
@@ -420,6 +428,7 @@ export async function exportUrisData(options = {}) {
             refs: Array.isArray(data.shared?.refs) ? data.shared.refs.length : 0,
             presets: Array.isArray(data.shared?.presets) ? data.shared.presets.length : 0,
             templates: Array.isArray(data.shared?.templates) ? data.shared.templates.length : 0,
+            galleryCards: Array.isArray(data.shared?.galleryCards) ? data.shared.galleryCards.length : 0,
         },
     });
     return data;
@@ -505,11 +514,13 @@ async function snapshotSafeData() {
     const templateRecords = await getTemplateRecordsForExport();
     const refsRecords = await getRefsForExport();
     const presetRecords = await getParamPresetsForExport();
+    const galleryCards = await getCardsForExport();
     return {
         extensionSettings,
         templateRecords,
         refsRecords,
         presetRecords,
+        galleryCards,
         chatMetadata,
         hasChatBinding,
         chatBinding: hasChatBinding ? cloneExact(chatMetadata[META_KEY]) : undefined,
@@ -569,6 +580,13 @@ async function restoreSafeSnapshot(snapshot) {
             recordError('presetFileStore', cause, { operation: 'restore' });
         }
     }
+    if (Array.isArray(snapshot.galleryCards)) {
+        try {
+            await importGalleryCards(snapshot.galleryCards, 'replace');
+        } catch (cause) {
+            recordError('galleryFileStore', cause, { operation: 'restore' });
+        }
+    }
     log('Rollback: snapshot restored');
     return rollbackErrors;
 }
@@ -593,6 +611,9 @@ export async function importUrisData(data, options = {}) {
     const snapshot = await snapshotSafeData();
 
     try {
+        // Карточки галереи — только в file-store, не в settings blob: иначе
+        // весь индекс копировался бы в settings.json на каждый импорт.
+        const { galleryCards: incomingCards, ...blobShared } = incomingShared;
         // Settings: merge — merge, replace — full replace.
         const ctx = getCtx();
         if (incomingSettings && typeof incomingSettings === 'object') {
@@ -600,18 +621,18 @@ export async function importUrisData(data, options = {}) {
                 ? { ...incomingSettings }
                 : { ...(ctx.extensionSettings[MODULE_NAME] || {}), ...incomingSettings };
         }
-        if (Object.keys(incomingShared).length > 0) {
+        if (Object.keys(blobShared).length > 0) {
             const current = ctx.extensionSettings[MODULE_NAME] || {};
             const currentConnections = current[IMAGE_CONNECTION_SETTINGS_KEY] || {};
             current[IMAGE_CONNECTION_SETTINGS_KEY] = mode === 'replace'
-                ? incomingShared
-                : mergeSharedSettings(currentConnections, incomingShared);
+                ? blobShared
+                : mergeSharedSettings(currentConnections, blobShared);
             ctx.extensionSettings[MODULE_NAME] = current;
         }
         if (incomingSettings && typeof incomingSettings === 'object') {
             try { ctx.saveSettingsDebounced(); } catch { /* non-critical */ }
             log('extensionSettings restored');
-        } else if (Object.keys(incomingShared).length > 0) {
+        } else if (Object.keys(blobShared).length > 0) {
             try { ctx.saveSettingsDebounced(); } catch { /* non-critical */ }
             log('Portable shared settings restored');
         } else if (mode === 'replace' && ctx.extensionSettings[MODULE_NAME]) {
@@ -658,6 +679,8 @@ export async function importUrisData(data, options = {}) {
             // arrays — "absent" must not mean "wipe".
             if (sharedCarries('refs') || sharedCarries('folders')) await replaceRefsRecords(restoredPool);
             if (sharedCarries('presets')) await replaceParamPresetRecords(restoredPresets);
+            // Карточки в blob не попадают (нет legacy-совместимости) — прямо в стор.
+            if (sharedCarries('galleryCards')) await importGalleryCards(cloneExact(incomingCards), mode);
         } catch (cause) {
             warn('importUrisData: file store sync failed', cause?.message);
         }
@@ -668,7 +691,7 @@ export async function importUrisData(data, options = {}) {
         try { invalidateTemplateCache(); } catch (e) { warn('importUrisData: template cache invalidation failed', e?.message); }
         try { invalidatePoolCache(); } catch (e) { warn('importUrisData: refs pool cache invalidation failed', e?.message); }
 
-        const importedRecords = ['connections', 'templates', 'presets', 'refs', 'folders']
+        const importedRecords = ['connections', 'templates', 'presets', 'refs', 'folders', 'galleryCards']
             .reduce((sum, key) => sum + (Array.isArray(incomingShared[key]) ? incomingShared[key].length : 0), 0);
         log('Imported records:', importedRecords, 'chat bindings:', importedChatBindings);
         recordDiagnosticEvent({
@@ -716,7 +739,7 @@ export function summarizeBackup(data) {
         folders: Array.isArray(shared.folders) ? shared.folders.length : 0,
         templates: Array.isArray(shared.templates) ? shared.templates.length : 0,
         chatConfigs,
-        galleryIncluded: false,
+        galleryIncluded: Array.isArray(shared.galleryCards) ? shared.galleryCards.length : 0,
         secretsIncluded: false,
     };
 }
@@ -791,11 +814,11 @@ async function pickBackupImportMode(summary) {
         `Референсы: ${summary.refs}`,
         `Папки: ${summary.folders}`,
         `Конфигурации чатов: ${summary.chatConfigs}`,
-        'Галерея: не включена',
+        `Галерея (карточки): ${summary.galleryIncluded || 'не включена'}`,
         'API-ключи: не включены',
         '',
         '⚠️ API-ключи не переносятся — их нужно ввести заново.',
-        '⚠️ Галерея не переносится.',
+        ...(summary.galleryIncluded ? [] : ['⚠️ Галерея не переносится.']),
         '⚠️ Конфигурации чатов используют исходный chatId.',
         '',
         'Нажмите ОК для замены (replace), Отмена для слияния (merge).',
@@ -803,7 +826,7 @@ async function pickBackupImportMode(summary) {
     const useReplace = await showConfirmModal(lines.join('\n'));
     if (useReplace) {
         const confirmed = await showConfirmModal(
-            'ВНИМАНИЕ: режим replace удалит текущие безопасные данные URIS (кроме галереи и API-ключей) и заменит их содержимым бэкапа.\n\nНажмите ОК для подтверждения замены.'
+            'ВНИМАНИЕ: режим replace удалит текущие безопасные данные URIS (кроме API-ключей) и заменит их содержимым бэкапа.\n\nНажмите ОК для подтверждения замены.'
         );
         return confirmed ? 'replace' : null;
     }

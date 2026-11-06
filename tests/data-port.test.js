@@ -63,10 +63,10 @@ function seed() {
 
 beforeEach(seed);
 
-test('v9 export carries no localforage section — collections live in shared', async () => {
+test('v10 export carries no localforage section — collections live in shared', async () => {
     const backup = await exportUrisData();
 
-    assert.equal(backup.version, 9);
+    assert.equal(backup.version, 10);
     assert.deepEqual(backup.secrets, { excluded: true, excludedKeys: [LF_API_KEY] });
     assert.equal(Object.hasOwn(backup, 'imageConnections'), false);
     // Никакие ключи браузерного хранилища (секреты, галерея, legacy-коллекции)
@@ -77,7 +77,7 @@ test('v9 export carries no localforage section — collections live in shared', 
 // isSecretLfKey удалён (2026-10-06): экспорт v9 структурно не читает localforage,
 // секреты не могут попасть в бэкап — инвариант покрывает final-verification round-trip.
 
-test('v9 normalization folds legacy localforage collections into shared and drops the rest', () => {
+test('v10 normalization folds legacy localforage collections into shared and drops the rest', () => {
     const normalized = normalizeBackup({
         version: 7,
         module: MODULE_NAME,
@@ -93,7 +93,7 @@ test('v9 normalization folds legacy localforage collections into shared and drop
         },
     });
 
-    assert.equal(normalized.version, 9);
+    assert.equal(normalized.version, 10);
     assert.deepEqual(normalized.data.localforage, {});
     assert.deepEqual(normalized.shared.templates, [{ id: 'template-legacy' }]);
     assert.equal(Object.hasOwn(normalized, 'imageConnections'), false);
@@ -109,19 +109,19 @@ test('normalization rejects retired v2 through v5 backup formats', () => {
     }
 });
 
-test('normalization migrates a v6 backup (three releases behind) forward to v9', () => {
+test('normalization migrates a v6 backup (three releases behind) forward to v10', () => {
     const normalized = normalizeBackup({
         version: 6,
         module: MODULE_NAME,
         data: { localforage: {}, chatMetadata: {} },
     });
-    assert.equal(normalized.version, 9);
+    assert.equal(normalized.version, 10);
     assert.equal(normalized.module, MODULE_NAME);
 });
 
 test('normalization rejects a backup from a newer version', () => {
     assert.throws(() => normalizeBackup({
-        version: 10, module: MODULE_NAME, data: { localforage: {} },
+        version: 11, module: MODULE_NAME, data: { localforage: {} },
     }), /newer version/);
 });
 
@@ -278,7 +278,7 @@ test('export includes the active chat binding only', async () => {
     });
 });
 
-test('v9 exports portable shared records without image bytes, recovery state, or secrets', async () => {
+test('v10 exports portable shared records without image bytes, recovery state, or secrets', async () => {
     extensionSettings = {
         imageConnections: {
             connections: [{ id: 'conn-1', apiKey: 'browser-secret', selectedRoute: { id: 'r1', apiFamily: 'openai' } }],
@@ -305,7 +305,7 @@ test('v9 exports portable shared records without image bytes, recovery state, or
 
     const backup = await exportUrisData();
 
-    assert.equal(backup.version, 9);
+    assert.equal(backup.version, 10);
     assert.deepEqual(backup.shared.connections, [{ id: 'conn-1', selectedRoute: { id: 'r1', resolutionState: 'unresolved', unresolved: true }, selectedRouteId: 'r1' }]);
     assert.equal(backup.shared.galleryCards, undefined);
     assert.deepEqual(backup.shared.refs, [{ id: 'ref-1', imagePath: 'user/images/ref.png' }]);
@@ -315,7 +315,7 @@ test('v9 exports portable shared records without image bytes, recovery state, or
     assert.equal(Object.hasOwn(backup.data.extensionSettings, 'recoveryState'), false);
 });
 
-test('v7 backup migrates connections to the derived-dialect read model (through v9)', () => {
+test('v7 backup migrates connections to the derived-dialect read model (through v10)', () => {
     const normalized = normalizeBackup({
         version: 7,
         module: MODULE_NAME,
@@ -340,7 +340,7 @@ test('v7 backup migrates connections to the derived-dialect read model (through 
         },
     });
 
-    assert.equal(normalized.version, 9);
+    assert.equal(normalized.version, 10);
     const [connection] = normalized.shared.connections;
     assert.deepEqual(connection.model, { id: 'gemini-3.1-flash-image', source: 'list' });
     assert.deepEqual(connection.detected, {
@@ -788,4 +788,35 @@ test('import result contract: importedRecords (не importedKeys) — поле, 
     assert.equal(typeof result.importedRecords, 'number', 'тосты читают result.importedRecords');
     assert.equal(result.importedKeys, undefined, 'regression: тост показывал «Импортировано undefined записей»');
     assert.equal(typeof result.importedChatBindings, 'number', 'второе поле тоста тоже контрактовано');
+});
+
+test('v10: экспорт несёт карточки галереи; merge дополняет, replace замещает; битые карточки пропускаются', async () => {
+    const gallery = await import('../src/gallery-index.js');
+    gallery.resetGalleryStoreForTests();
+    try {
+        await gallery.addCard({ id: 'c1', imagePath: 'user/images/Damien/a.png', prompt: 'one' });
+        await gallery.addCard({ id: 'c2', imagePath: 'user/images/Damien/b.png', prompt: 'two' });
+
+        const backup = await exportUrisData();
+        assert.equal(backup.version, 10);
+        assert.equal(backup.shared.galleryCards.length, 2);
+        assert.equal(backup.shared.galleryCards[0].prompt, 'two', 'unshift: новые первыми');
+
+        backup.shared.galleryCards = [
+            { id: 'c1', imagePath: 'user/images/Damien/a.png', prompt: 'updated' },
+            { id: 'c3', imagePath: 'user/images/Damien/c.png', prompt: 'three' },
+            { id: 'junk', prompt: 'нет imagePath — пропуск' },
+        ];
+        await importUrisData(backup, { mode: 'merge' });
+        let cards = await gallery.listCards({ reconcile: false });
+        assert.deepEqual(cards.map(c => c.id).sort(), ['c1', 'c2', 'c3']);
+        assert.equal(cards.find(c => c.id === 'c1').prompt, 'updated', 'incoming wins');
+
+        await importUrisData(backup, { mode: 'replace' });
+        cards = await gallery.listCards({ reconcile: false });
+        assert.deepEqual(cards.map(c => c.id).sort(), ['c1', 'c3'], 'replace: живое c2 вытеснено');
+    } finally {
+        gallery.resetGalleryStoreForTests();
+        serverFiles.clear();
+    }
 });
