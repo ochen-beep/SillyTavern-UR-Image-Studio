@@ -31,6 +31,7 @@ import { bindAbortUI, unbindAbortUI } from './src/ui/generation-lifecycle-ui.js'
 import { createSettingsPanel } from './src/ui/settings-panel.js';
 import { setCurrentMsgId, getLastPostIndex } from './src/post-navigator.js';
 import { refreshPoolCache, ensureRefsStoreReady } from './src/refs-library.js';
+import { ensureOwnedFilesRegistered } from './src/data-care.js';
 import { sweepStaleRunningDrafts } from './src/generation-drafts.js';
 import { reportFailure, URIS_SCOPES } from './src/error-pool.js';
 import { loadDiagnosticEvents, flushDiagnosticEvents, recordDiagnosticEvent } from './src/diagnostic-events.js';
@@ -144,6 +145,10 @@ async function init() {
         ensureParamPresetStoreReady(),
         ensureStudioStoreReady(),
     ]);
+    // Data Maid shield: re-register owned server files the registry lost
+    // (pre-registry installs, manual settings edits). Cheap, idempotent,
+    // network-free; a missing extensionSettings is a no-op inside.
+    try { ensureOwnedFilesRegistered(); } catch (e) { warn('registry sync:', e?.message || e); }
 
     // v4: 6 tabs (API / References / Generation / Gallery / Templates / Settings)
     // Lazy render: a tab module loads on first open, not at tavern startup

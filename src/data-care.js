@@ -12,6 +12,7 @@ import { canonicalizeNativeImagePath } from './native-image-path.js';
 import { listRefs } from './refs-library.js';
 import { listCards } from './gallery-index.js';
 import { listFileStores, suspendAllStoresForClean } from './file-store.js';
+import { unprotectUserFile, clearProtectedRegistry, syncProtectedRegistry } from './user-files-storage.js';
 
 const REFS_FOLDER = 'URIS_Refs';
 
@@ -80,7 +81,19 @@ async function deleteUserFile(name) {
         // prefix is rejected with 400 and deletes nothing).
         body: JSON.stringify({ path: `user/files/${name}` }),
     });
+    // 404 stays "not deleted" — the shard range walk in deleteUserFiles counts
+    // misses and stops after a run of them.
+    if (res.ok) unprotectUserFile(`user/files/${name}`);
     return res.ok;
+}
+
+/**
+ * Register every owned file name in the Data Maid shield registry (init-time
+ * reconcile: files written before the registry existed, entries wiped by a
+ * manual settings edit). Idempotent and network-free.
+ */
+export function ensureOwnedFilesRegistered() {
+    return syncProtectedRegistry(ownedFileNames());
 }
 
 /** Named stores plus the corrupt side files a repair may have parked. */
@@ -140,5 +153,9 @@ export async function cleanAllData() {
     suspendAllStoresForClean();
     const files = await deleteUserFiles();
     const images = await deleteOwnedImageFolders();
+    // The shield registry tracks nothing after this point — drop the key
+    // entirely instead of unprotecting names one by one (shards the range
+    // walk never reached would leak otherwise).
+    clearProtectedRegistry();
     return { files, images };
 }

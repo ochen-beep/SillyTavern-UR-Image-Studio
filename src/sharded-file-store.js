@@ -39,6 +39,7 @@
 
 import { log, warn, unrefTimer } from './core.js';
 import { recordDiagnosticEvent } from './diagnostic-events.js';
+import { protectUserFile, unprotectUserFile } from './user-files-storage.js';
 import {
     KEEPALIVE_BODY_LIMIT, textToBase64, stHeaders, mergeServerValue,
     parseVersionedDoc, registerFileStoreForDiagnostics, createFileStore,
@@ -83,6 +84,9 @@ async function uploadDoc(name, doc) {
         body: JSON.stringify({ name, data: textToBase64(json) }),
     });
     if (!res.ok) throw new Error(`upload failed: ${res.status} ${await res.text().catch(() => '')}`);
+    // Data Maid shield (see user-files-storage.js): shards and manifests are
+    // URIS-owned files; unregistering happens on deleteDocFile.
+    protectUserFile(`user/files/${name}`);
     return json.length;
 }
 
@@ -97,7 +101,11 @@ async function deleteDocFile(name) {
         headers: stHeaders(),
         body: JSON.stringify({ path: `user/files/${name}` }),
     });
-    if (res.ok || res.status === 404) return;
+    if (res.ok || res.status === 404) {
+        // Deleted on purpose (empty-shard GC): lift the Data Maid registration.
+        unprotectUserFile(`user/files/${name}`);
+        return;
+    }
     throw new Error(`delete failed: ${res.status} ${await res.text().catch(() => '')}`);
 }
 
