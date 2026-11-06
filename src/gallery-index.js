@@ -186,6 +186,40 @@ export async function addCard(input) {
     return card;
 }
 
+/** Export snapshot: all cards as stored, or null while the store mirror is
+ *  not loaded — an export must never substitute "unknown" with "empty". */
+export async function getCardsForExport() {
+    await galleryStore.ready();
+    const snap = galleryStore.snapshot();
+    return snap === null ? null : snap.map(card => ({ ...card }));
+}
+
+/**
+ * Backup import (data-port): 'merge' — incoming wins per id, current order
+ * preserved, new ids appended; 'replace' — the store becomes the incoming set.
+ * Cards without a usable imagePath are skipped (sanitizeGalleryCard throws).
+ */
+export async function importGalleryCards(incoming = [], mode = 'merge') {
+    const clean = [];
+    for (const raw of Array.isArray(incoming) ? incoming : []) {
+        // id приходит из чужого файла: сначала через SAFE_ID_RE (sanitizeGalleryCard
+        // с existing доверил бы исходный id как есть — он идёт в HTML-атрибуты).
+        const id = sanitizeId(raw?.id);
+        if (!id) { warn('importGalleryCards: skipped card with unusable id', raw?.id); continue; }
+        try { clean.push(sanitizeGalleryCard({ ...raw, id }, { ...raw, id })); }
+        catch { warn('importGalleryCards: skipped card without imagePath', id); }
+    }
+    await galleryStore.mutate(list => {
+        if (mode === 'replace') { list.length = 0; list.push(...clean); return; }
+        const pos = new Map(list.map((card, i) => [card.id, i]));
+        for (const card of clean) {
+            if (pos.has(card.id)) list[pos.get(card.id)] = card;
+            else list.push(card);
+        }
+    });
+    return clean.length;
+}
+
 export async function updateCard(id, patch) {
     return galleryStore.mutate(list => {
         const existing = list.find(item => item.id === id);
