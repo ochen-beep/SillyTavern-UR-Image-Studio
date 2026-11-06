@@ -303,6 +303,16 @@ export async function generateImageRequest(imageConnId, request, onStatus, signa
             timeoutMs: conn.timeoutMs,
             withMetadata: true,
             diagnostic,
+            // PNG iTXt-сайдкар: метаданные генерации едут внутри самого файла
+            // (templateName тут ещё не разрешён — карточка его допишет; сайдкар
+            // это recovery-опора, не полная копия карточки).
+            sidecar: {
+                v: 1, requestId: snapshot.requestId, prompt: snapshot.prompt,
+                model: route.modelId, connectionId: imageConnId, routeId: route.id,
+                contract: route.generationContract, aspect: snapshot.aspectRatio,
+                size: snapshot.imageSize, quality: snapshot.quality,
+                refs: snapshot.referenceIds, chatId: snapshot.chatId, createdAt: Date.now(),
+            },
         });
         const imagePath = materialized.imagePath;
         // width/height come from blobMetadata (createImageBitmap decode) and may
