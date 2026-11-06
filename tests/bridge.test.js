@@ -516,3 +516,38 @@ test('bridge: gallery/recovery/capability reads respect the gate and validation 
         assert.equal(globalThis.URIS, undefined);
     }
 });
+
+test('bridge: requestId fallback works without crypto.randomUUID (plain-HTTP)', async () => {
+    // Regression: the randomToken import once sat inside the module docblock,
+    // so on plain-HTTP origins (no crypto.randomUUID) every bridge call died
+    // with ReferenceError instead of reaching dispatch.
+    const { state } = await import('../src/core.js');
+    const savedSettings = state.settings;
+    const savedCrypto = Object.getOwnPropertyDescriptor(globalThis, 'crypto');
+    const realCrypto = globalThis.crypto;
+    // Plain-HTTP secure-context-less crypto: getRandomValues exists, randomUUID does not.
+    Object.defineProperty(globalThis, 'crypto', {
+        value: { getRandomValues: (buf) => realCrypto.getRandomValues(buf) },
+        configurable: true,
+        writable: true,
+    });
+    const bridge = activateBridge();
+    const savedST = globalThis.SillyTavern;
+    // Minimal ST mock so connection lookup returns "not found" → NO_CONNECTION.
+    globalThis.SillyTavern = { getContext: () => ({ extensionSettings: {} }) };
+    try {
+        state.settings = { enabled: true, bridgeEnabled: true };
+        // newRequestId runs before dispatch; without the fallback this rejects
+        // with ReferenceError instead of the structured NO_CONNECTION.
+        await assert.rejects(
+            () => bridge.generate({ prompt: 'x', connectionId: 'conn-404' }, { caller: 'lab' }),
+            e => e instanceof UrisBridgeError && e.code === 'NO_CONNECTION',
+        );
+    } finally {
+        state.settings = savedSettings;
+        Object.defineProperty(globalThis, 'crypto', savedCrypto);
+        if (savedST === undefined) delete globalThis.SillyTavern; else globalThis.SillyTavern = savedST;
+        deactivateBridge();
+        assert.equal(globalThis.URIS, undefined);
+    }
+});

@@ -4,7 +4,6 @@
  *
  * Publishes `globalThis.URIS` so sibling SillyTavern extensions can use URIS
  * generation without importing URIS internals (import paths and module layout
-import { randomToken } from './random.js';
  * are not public API). The bridge is a thin facade over the existing pipeline:
  * headless requests go straight to generateImageRequest, so pending-request
  * recovery records, diagnostics, native-gallery materialization and the
@@ -33,6 +32,7 @@ import {
     VALID_IMAGE_SIZES,
 } from './core.js';
 import { buildStage1ContextParts } from './stage1-context.js';
+import { randomToken } from './random.js';
 import { resolveChatConfigSnapshot, buildCandidates } from './pipeline-config.js';
 import { resolveConnection, listImageConnections } from './connections.js';
 import { resolveDispatchPlan } from './dispatch-plan.js';
