@@ -60,6 +60,7 @@
 
 import { getCtx, log, warn, unrefTimer } from './core.js';
 import { recordDiagnosticEvent } from './diagnostic-events.js';
+import { protectUserFile } from './user-files-storage.js';
 
 /** Below this body size a keepalive unload flush is attempted (fetch keepalive cap ≈64KB). */
 export const KEEPALIVE_BODY_LIMIT = 60 * 1024;
@@ -349,6 +350,9 @@ export function createFileStore(config) {
             body: JSON.stringify(payload),
         });
         if (!res.ok) throw new Error(`upload failed: ${res.status} ${await res.text().catch(() => '')}`);
+        // Data Maid shield: a file ST's Clean-Up can see must be a registered
+        // URIS-owned file, or the report offers it for deletion.
+        protectUserFile(`user/files/${payload.name}`);
     }
 
     /**

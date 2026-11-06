@@ -129,8 +129,14 @@ describe('template file store', () => {
         await store.flushTemplateWrites();
         assert.deepEqual(fileTemplates(), []);
 
-        // File-mode writes never touch the settings blob.
-        assert.equal(saveCalls, 0);
+        // File-mode writes never land template data in the settings blob; the
+        // only settings writes are the Data Maid shield registry entries.
+        assert.equal(extensionSettings.ur_image_studio?.imageConnections?.templates, undefined);
+        assert.ok(
+            (extensionSettings.character_attachments?.['URIS Storage'] || [])
+                .some(e => e.url === `user/files/${store.TEMPLATE_FILE_NAME}`),
+            'template file must be registered in the Data Maid shield',
+        );
     });
 
     it('updates the right record even when unsupported legacy records shift filtered indices', async () => {

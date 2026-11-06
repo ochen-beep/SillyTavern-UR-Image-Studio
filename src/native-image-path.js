@@ -51,3 +51,25 @@ export function nativeImagePathFromBasename(value, folder = NATIVE_IMAGE_FOLDER)
     if (!filename || !folder) return null;
     return `user/images/${encodeSegment(folder)}/${encodeSegment(filename)}`;
 }
+
+/**
+ * Return one canonical ST user-file path (`user/files/<name>`, flat), or null
+ * for untrusted input. user/files is what the Data Maid file scan walks; files
+ * listed in extension_settings.character_attachments are treated as known —
+ * see user-files-storage.js. Same traversal/scheme rules as the image variant.
+ */
+export function canonicalizeUserFilePath(value) {
+    if (typeof value !== 'string' || !value || hasControls(value) || /[\\?#]/.test(value)) return null;
+    const source = value.startsWith('/') ? value.slice(1) : value;
+    if (/^[a-z][a-z0-9+.-]*:/i.test(source)) return null;
+    const parts = source.split('/');
+    if (parts.length !== 3 || parts[0] !== 'user' || parts[1] !== 'files') return null;
+    const filename = decodeSegment(parts[2]);
+    if (!filename) return null;
+    return `user/files/${encodeSegment(filename)}`;
+}
+
+/** Any URIS-stored server path: native image or user file. */
+export function canonicalizeStoredPath(value) {
+    return canonicalizeNativeImagePath(value) || canonicalizeUserFilePath(value);
+}
