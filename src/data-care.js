@@ -27,7 +27,11 @@ async function referencedPaths(deps) {
         }
     }
     for (const card of cards) {
-        if (card.thumbPath) used.add(canonicalizeStoredPath(card.thumbPath) || card.thumbPath);
+        // Карточка может ссылаться и на файл в URIS-папках (референс, поднятый
+        // в галерею) — иначе свип удалит бинарник из-под живой карточки.
+        for (const p of [card.thumbPath, card.imagePath]) {
+            if (p) used.add(canonicalizeStoredPath(p) || p);
+        }
     }
     return used;
 }
