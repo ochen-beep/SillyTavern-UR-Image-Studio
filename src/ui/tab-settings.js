@@ -15,7 +15,7 @@ import { deleteOrphanFiles, findOrphanRefFiles } from '../data-care.js';
 import { exportDiagnosticDump, clearAllDiagnostics } from '../diagnostic-dump.js';
 import { exportNetDump } from '../netdump.js';
 import { reportFailure, URIS_SCOPES } from '../error-pool.js';
-import { reconcileCards } from '../gallery-index.js';
+import { reconcileCards, restoreCardsFromSidecars } from '../gallery-index.js';
 import { clearGallery } from '../storage.js';
 import { isStudioActive, resolveActiveChatId } from '../studio-scope.js';
 import { refreshActive, renderTabs } from './tabs.js';
@@ -133,6 +133,7 @@ export function render(root) {
                     <button type="button" class="uris-btn uris-btn-ghost" id="urisTabClearDiag"><i class="fa-solid fa-eraser"></i> Очистить</button>
                     <button type="button" class="uris-btn uris-btn-outline" id="urisTabGalleryRefresh" title="Пересканировать папки на сервере: подхватить внешние добавления и пометить внешние удаления"><i class="fa-solid fa-rotate"></i> Обновить галерею</button>
                     <button type="button" class="uris-btn uris-btn-outline" id="urisTabOrphanSweep" title="Найти файлы в URIS_Refs и URIS_Thumbs, на которые не ссылается ни одна карточка"><i class="fa-solid fa-broom"></i> Ничьи файлы</button>
+                    <button type="button" class="uris-btn uris-btn-outline" id="urisTabSidecarRestore" title="Прочитать подписи, вшитые в файлы картинок при генерации, и по ним создать карточки для картинок, карточек не имеющих. Сами файлы не меняются и не копируются. Работает для картинок, сгенерированных после этого обновления."><i class="fa-solid fa-wand-magic-sparkles"></i> Восстановить карточки ${UNSTABLE_BADGE}</button>
                     <button type="button" class="uris-btn uris-btn-danger" id="urisTabGalleryClear"><i class="fa-solid fa-trash"></i> Очистить галерею</button>
                 </div>
                 <div id="urisOrphanSweepBox"></div>
@@ -327,6 +328,29 @@ function bindDataActions(root) {
         } catch (e) {
             error('clearAllDiagnostics:', e);
             reportFailure({ scope: URIS_SCOPES.diagnostics, message: e?.message || String(e), toast: true, toastText: 'Не удалось полностью очистить диагностику: ' + (e?.message || e), toastTitle: DISPLAY_NAME });
+        }
+    });
+    // Sidecar restore: additive-only (создаёт карточки, ничего не удаляет и
+    // не перезаписывает) — подтверждение не нужно, результат в тосте.
+    root.querySelector('#urisTabSidecarRestore')?.addEventListener('click', async () => {
+        const box = root.querySelector('#urisOrphanSweepBox');
+        if (!box) return;
+        box.innerHTML = '<small class="uris-hint">Сканирую картинки и читаю вшитые подписи…</small>';
+        try {
+            const { scanned, restored } = await restoreCardsFromSidecars({
+                onProgress: (done, total) => {
+                    box.innerHTML = `<small class="uris-hint">Папки: ${done} из ${total}…</small>`;
+                },
+            });
+            box.innerHTML = `<small class="uris-hint">Картинок без карточки: ${scanned}. Восстановлено по вшитым подписям: ${restored}.</small>`;
+            if (restored) {
+                toastr?.success(`Восстановлено карточек: ${restored}`, DISPLAY_NAME);
+                refreshActive();
+            }
+        } catch (e) {
+            box.innerHTML = '';
+            error('sidecar restore:', e);
+            reportFailure({ scope: URIS_SCOPES.storage, message: e?.message || String(e), toast: true, toastText: 'Восстановление по подписям: ' + (e?.message || e), toastTitle: DISPLAY_NAME });
         }
     });
     // Orphan sweep: report-only until the user confirms the deletion — the

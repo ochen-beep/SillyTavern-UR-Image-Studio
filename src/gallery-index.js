@@ -22,10 +22,11 @@
  * folders and are only referenced by `imagePath`.
  */
 
-import { uid, log, warn, sanitizeId } from './core.js';
+import { uid, log, warn, sanitizeId, getCtx } from './core.js';
 import { listNativeImages } from './native-image-storage.js';
 import { canonicalizeNativeImagePath, NATIVE_IMAGE_FOLDER } from './native-image-path.js';
 import { createShardedFileStore } from './sharded-file-store.js';
+import { readUrisSidecar } from './png-sidecar.js';
 
 export const GALLERY_FILE_NAME = 'uris_gallery.json';
 export const GALLERY_MANIFEST_NAME = 'uris_gallery_manifest.json';
@@ -369,4 +370,81 @@ export function mergeFolderWithCards(paths, cards) {
 
 export function resetGalleryStoreForTests() {
     galleryStore.reset();
+}
+
+// ── Восстановление карточек из PNG-сайдкаров (фаза 4) ──
+
+async function defaultReadSidecar(path) {
+    try {
+        const res = await fetch(`/${path}`);
+        if (!res.ok) return null;
+        return await readUrisSidecar(await res.blob());
+    } catch { return null; }
+}
+
+async function defaultListFolders() {
+    const ctx = getCtx();
+    const res = await fetch('/api/images/folders', {
+        method: 'POST',
+        headers: { ...(ctx?.getRequestHeaders?.() ?? {}), 'Content-Type': 'application/json' },
+    });
+    if (!res.ok) throw new Error(`folders list failed: ${res.status}`);
+    const list = await res.json().catch(() => []);
+    return Array.isArray(list) ? list : [];
+}
+
+/**
+ * Пройти по всем папкам user/images и для каждого PNG без карточки прочитать
+ * вшитый при генерации iTXt-блок (см. png-sidecar.js) и создать по нему
+ * карточку. Файлы без блока не трогаются (folder-first их и так показывает),
+ * существующие карточки не перезаписываются. Возвращает { scanned, restored }.
+ */
+export async function restoreCardsFromSidecars(deps = {}) {
+    await galleryStore.ready();
+    const listFolders = deps.listFolders || defaultListFolders;
+    const listFiles = deps.listFiles || ((folder) => listNativeImages({ folder }));
+    const readSidecar = deps.readSidecar || defaultReadSidecar;
+    const known = new Set(cards().map(c => canonicalizeNativeImagePath(c.imagePath)).filter(Boolean));
+    let scanned = 0, restored = 0;
+    // Служебные папки бинарников — не галерейный контент.
+    const folders = (await listFolders()).filter(f => f !== 'URIS_Thumbs' && f !== 'URIS_Refs');
+    // Папки сканируются параллельно (десятки персонажей × тяжёлый листинг
+    // папки — последовательный обход ощущался как зависание на минуту).
+    const progress = typeof deps.onProgress === 'function' ? deps.onProgress : null;
+    let doneFolders = 0;
+    progress?.(0, folders.length);
+    await Promise.all(folders.map(async (folder) => {
+        try {
+            for (const path of await listFiles(folder).catch(() => [])) {
+            const canonical = canonicalizeNativeImagePath(path);
+            if (!canonical || known.has(canonical)) continue;
+            scanned++;
+            if (!/\.png$/i.test(canonical)) continue;   // сайдкар пишется только в PNG
+            const meta = await readSidecar(canonical);
+            if (!meta || typeof meta !== 'object') continue;
+            const input = {
+                imagePath: canonical,
+                prompt: typeof meta.prompt === 'string' ? meta.prompt : '',
+                connectionId: meta.connectionId || '', routeId: meta.routeId || '',
+                modelId: meta.model || '', generationContract: meta.contract || '',
+                provenance: { chatId: meta.chatId || null, requestId: meta.requestId || null, restored: true },
+                status: 'ready',
+            };
+            if (typeof meta.negativePrompt === 'string' && meta.negativePrompt) input.negativePrompt = meta.negativePrompt;
+            if (meta.aspect) input.aspectRatio = meta.aspect;
+            if (meta.size) input.imageSize = meta.size;
+            if (meta.quality) input.quality = meta.quality;
+            if (Array.isArray(meta.refs)) input.referenceIds = meta.refs;
+            if (Number.isFinite(meta.createdAt)) input.createdAt = meta.createdAt;
+            try {
+                await addCard(input);
+                restored++;
+                known.add(canonical);
+            } catch (e) { warn('sidecar restore skipped', canonical, e?.message || e); }
+            }
+        } finally {
+            progress?.(++doneFolders, folders.length);
+        }
+    }));
+    return { scanned, restored };
 }
