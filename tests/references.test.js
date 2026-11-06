@@ -425,25 +425,21 @@ test('ingestReferenceImage optimizes once, uploads optimizer data, and returns m
     ]);
 });
 
-test('uploadReferenceImage posts to /api/images/upload', async () => {
+test('uploadReferenceImage writes to protected user/files (Data Maid shield)', async () => {
     const originalFetch = globalThis.fetch;
     const calls = [];
     globalThis.fetch = async (url, options) => {
         calls.push({ url, options });
-        return { ok: true, json: async () => ({ path: '/user/images/URIS_Refs/test.png' }) };
+        return { ok: true, json: async () => ({ path: 'user/files/ignored' }) };
     };
     try {
         const path = await uploadReferenceImage('data:image/png;base64,abc', 'test');
-        // Canonicalized once here, so the value is root-relative and encoded
-        // exactly one time no matter what raw spelling ST answered with.
-        assert.equal(path, 'user/images/URIS_Refs/test.png');
+        assert.match(path, /^user\/files\/uris_ref_test_[a-z0-9]+\.png$/, 'user/files + uris_ref_ prefix');
         assert.equal(calls.length, 1);
-        assert.equal(calls[0].url, '/api/images/upload');
+        assert.equal(calls[0].url, '/api/files/upload');
         const body = JSON.parse(calls[0].options.body);
-        assert.equal(body.format, 'png');
-        assert.equal(body.ch_name, 'URIS_Refs');
-        assert.equal(body.image, 'abc');
-        assert.equal(body.filename, 'test');
+        assert.equal(body.data, 'abc');
+        assert.match(body.name, /^uris_ref_test_[a-z0-9]+\.png$/);
     } finally {
         globalThis.fetch = originalFetch;
     }
@@ -477,10 +473,9 @@ test('uploadReferenceImage sanitizes filename', async () => {
         await uploadReferenceImage('data:image/png;base64,abc', '../../my file name.png');
         assert.equal(calls.length, 1);
         const body = JSON.parse(calls[0].options.body);
-        // Traversal and separators are gone, and the dot is folded too: ST runs
-        // removeFileExtension() on this field, so a surviving dot would silently
-        // truncate the name to "my_file_name".
-        assert.equal(body.filename, 'my_file_name_png');
+        // Traversal и разделители вычищены до допустимого /api/files/upload
+        // алфавита [a-zA-Z0-9_-.], имя несёт uris_ref_ префикс.
+        assert.match(body.name, /^uris_ref_my_file_name_[a-z0-9]+\.png$/);
     } finally {
         globalThis.fetch = originalFetch;
     }
@@ -497,7 +492,7 @@ test('uploadReferenceImage falls back to ref when filename is empty', async () =
         await uploadReferenceImage('data:image/png;base64,abc', '   ');
         assert.equal(calls.length, 1);
         const body = JSON.parse(calls[0].options.body);
-        assert.equal(body.filename, 'ref');
+        assert.match(body.name, /^uris_ref_ref_[a-z0-9]+\.png$/);
     } finally {
         globalThis.fetch = originalFetch;
     }

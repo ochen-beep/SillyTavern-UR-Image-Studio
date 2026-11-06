@@ -8,11 +8,11 @@
  */
 import { getCtx } from './core.js';
 import { listNativeImages, THUMBNAIL_FOLDER } from './native-image-storage.js';
-import { canonicalizeNativeImagePath } from './native-image-path.js';
+import { canonicalizeNativeImagePath, canonicalizeStoredPath } from './native-image-path.js';
 import { listRefs } from './refs-library.js';
 import { listCards } from './gallery-index.js';
 import { listFileStores, suspendAllStoresForClean } from './file-store.js';
-import { unprotectUserFile, clearProtectedRegistry, syncProtectedRegistry } from './user-files-storage.js';
+import { unprotectUserFile, clearProtectedRegistry, syncProtectedRegistry, listProtectedUserFiles, deleteStoredServerFile } from './user-files-storage.js';
 
 const REFS_FOLDER = 'URIS_Refs';
 
@@ -23,11 +23,11 @@ async function referencedPaths(deps) {
     const used = new Set();
     for (const ref of refs) {
         for (const p of [ref.imagePath, ref.thumbPath]) {
-            if (p) used.add(canonicalizeNativeImagePath(p) || p);
+            if (p) used.add(canonicalizeStoredPath(p) || p);
         }
     }
     for (const card of cards) {
-        if (card.thumbPath) used.add(canonicalizeNativeImagePath(card.thumbPath) || card.thumbPath);
+        if (card.thumbPath) used.add(canonicalizeStoredPath(card.thumbPath) || card.thumbPath);
     }
     return used;
 }
@@ -45,8 +45,14 @@ export async function findOrphanRefFiles(deps = {}) {
         listFolder(REFS_FOLDER),
         listFolder(THUMBNAIL_FOLDER),
     ]);
-    return [...new Set([...refFiles, ...thumbFiles])]
-        .filter(path => !used.has(canonicalizeNativeImagePath(path) || path))
+    // user/files has no directory listing, but URIS-owned binaries there are
+    // all in the protected registry (phase 3) — the registry IS the listing.
+    // A registry entry no live record references is an orphan.
+    const registryFiles = (deps.protectedFiles ? deps.protectedFiles() : listProtectedUserFiles())
+        .map(e => e?.url)
+        .filter(url => typeof url === 'string' && /^user\/files\/uris_(ref|thumb)_/.test(url));
+    return [...new Set([...refFiles, ...thumbFiles, ...registryFiles])]
+        .filter(path => !used.has(canonicalizeStoredPath(path) || path))
         .sort();
 }
 
@@ -58,15 +64,9 @@ export async function deleteOrphanFiles(paths, { signal } = {}) {
     const ctx = getCtx();
     let deleted = 0;
     for (const path of paths) {
-        try {
-            const res = await fetch('/api/images/delete', {
-                method: 'POST',
-                headers: { ...(ctx?.getRequestHeaders?.() ?? {}), 'Content-Type': 'application/json' },
-                body: JSON.stringify({ path }),
-                ...(signal ? { signal } : {}),
-            });
-            if (res.ok || res.status === 404) deleted++;
-        } catch { /* one missed file must not stop the sweep */ }
+        // deleteStoredServerFile routes by path shape (user/files vs
+        // user/images), unregisters protected files, treats 404 as success.
+        if (await deleteStoredServerFile(path, { signal })) deleted++;
     }
     return deleted;
 }

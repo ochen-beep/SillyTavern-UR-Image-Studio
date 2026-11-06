@@ -23,7 +23,8 @@ import {
     DEFAULT_CHAT_CONFIG_ENVELOPE, deepClone, sanitizeId,
 } from './core.js';
 import { normalizeAliases } from './scene-context.js';
-import { canonicalizeNativeImagePath } from './native-image-path.js';
+import { canonicalizeNativeImagePath, canonicalizeStoredPath } from './native-image-path.js';
+import { deleteStoredServerFile } from './user-files-storage.js';
 import { createShardedFileStore } from './sharded-file-store.js';
 import { recordDiagnosticEvent } from './diagnostic-events.js';
 import { isStudioActive, getStudioBinding, saveStudioBinding } from './studio-scope.js';
@@ -115,15 +116,12 @@ export async function releaseRefImage(oldPath) {
         const pool = await listRefs();
         // Any live record still pointing at the file (this or another reference)
         // forbids the unlink; the merge machinery can bring an old record back.
-        const stillUsed = pool.some(r => canonicalizeNativeImagePath(r.imagePath)
-            === canonicalizeNativeImagePath(oldPath));
+        const stillUsed = pool.some(r => canonicalizeStoredPath(r.imagePath)
+            === canonicalizeStoredPath(oldPath));
         if (stillUsed) return;
-        const ctx = getCtx();
-        await fetch('/api/images/delete', {
-            method: 'POST',
-            headers: { ...(ctx?.getRequestHeaders?.() ?? {}), 'Content-Type': 'application/json' },
-            body: JSON.stringify({ path: oldPath }),
-        });
+        // user/files → /api/files/delete (+ снятие защиты), user/images →
+        // /api/images/delete — роутинг внутри хелпера.
+        await deleteStoredServerFile(oldPath);
     } catch { /* orphaned file, not user data */ }
 }
 
@@ -274,7 +272,7 @@ export function normalizePoolReference(data = {}) {
     if (optimizationVersion) item.optimizationVersion = optimizationVersion;
     // Server-side pool-tile thumbnail (URIS_Thumbs); absent on records from
     // before the ingest thumbnails, which fall back to the full imagePath.
-    const thumbPath = canonicalizeNativeImagePath(data.thumbPath);
+    const thumbPath = canonicalizeStoredPath(data.thumbPath);
     if (thumbPath) item.thumbPath = thumbPath;
     return item;
 }
@@ -360,6 +358,7 @@ export async function updateRef(id, patch) {
     if (patch.description != null) next.description = String(patch.description);
     if (patch.bindingMode != null) next.bindingMode = patch.bindingMode === 'description' ? 'description' : 'image';
     if (patch.imagePath != null) next.imagePath = patch.imagePath;
+    if (patch.thumbPath != null) next.thumbPath = patch.thumbPath;
     for (const key of ['mime', 'width', 'height', 'sourceBytes', 'optimizedBytes', 'optimizationVersion']) {
         if (patch[key] !== undefined) next[key] = patch[key];
     }

@@ -8,6 +8,8 @@ import { canonicalizeNativeImagePath } from './native-image-path.js';
 import { autoFetch } from './proxy.js';
 import { formatForMime, sanitizeUploadFilename } from './st-upload-format.js';
 import { makeThumbnailForPath } from './native-image-storage.js';
+import { uploadNamedUserFile } from './user-files-storage.js';
+import { randomToken } from './random.js';
 import { MAX_REFERENCE_BYTES_PER_IMAGE, MAX_REFERENCE_BYTES_TOTAL } from './reference-limits.js';
 
 export async function imageToDataUrl(url, options = {}) {
@@ -403,28 +405,17 @@ export async function fitReferencesToWireBudget(references, budgetBytes, prompt 
 // ── Server upload ──
 
 export async function uploadReferenceImage(dataUrl, filename, subfolder = 'URIS_Refs') {
-    const ctx = getCtx();
+    // С 2026-11 референсы пишутся в user/files с регистрацией в
+    // character_attachments (user-files-storage.js): Data Maid больше не
+    // предлагает их к удалению как «ничьи». user/files отдаётся статикой,
+    // поэтому <img src="/user/files/..."> работает без blob-слоя. `subfolder`
+    // оставлен в сигнатуре для совместимости вызовов — папок там нет.
+    void subfolder;
     const format = formatForMime(dataUrlMimeType(dataUrl));
     const base64Data = dataUrlToBase64(dataUrl);
-    const safeFilename = sanitizeUploadFilename(filename, 'ref');
-    const r = await fetch('/api/images/upload', {
-        method: 'POST',
-        headers: ctx.getRequestHeaders(),
-        body: JSON.stringify({ image: base64Data, format, ch_name: subfolder, filename: safeFilename }),
-    });
-    if (!r.ok) {
-        const e = await r.json().catch(() => ({}));
-        throw new Error(e.error || `Reference upload failed: ${r.status}`);
-    }
-    const result = await r.json();
-    // ST answers with a raw, unencoded path, so a subfolder like a character name
-    // arrives with its spaces intact. Canonicalize once here: every consumer then
-    // gets a path that is safe to put in markup and encoded exactly one time.
-    const imagePath = canonicalizeNativeImagePath(result?.path);
-    if (!imagePath) {
-        throw new Error(`Reference upload returned an unusable path: ${result?.path || '(none)'}`);
-    }
-    log('Reference uploaded:', imagePath);
+    const base = sanitizeUploadFilename(String(filename || '').replace(/\.[^.]+$/, ''), 'ref');
+    const imagePath = await uploadNamedUserFile(`uris_ref_${base}_${randomToken(6)}.${format}`, base64Data);
+    log('Reference uploaded (Data-Maid-protected):', imagePath);
     return imagePath;
 }
 

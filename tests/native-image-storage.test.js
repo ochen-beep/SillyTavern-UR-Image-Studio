@@ -464,14 +464,13 @@ test('makeThumbnailForPath uploads a small webp variant into the dedicated thumb
         },
     });
 
-    assert.equal(thumbPath, 'user/images/URIS_Thumbs/uris_req_thumb.webp');
+    // С 2026-11 миниатюры — защищённые user/files (Data Maid не видит).
+    assert.match(thumbPath, /^user\/files\/uris_thumb_uris_req_[a-z0-9]+\.webp$/);
     assert.equal(optimizeCalls[0].maxEdge, 512);
     assert.match(optimizeCalls[0].version, /^thumb-v1-/);
-    const upload = calls.find(call => call.url === '/api/images/upload');
+    const upload = calls.find(call => call.url === '/api/files/upload');
     const body = JSON.parse(upload.options.body);
-    assert.equal(body.ch_name, 'URIS_Thumbs', 'миниатюры живут в отдельной папке, которую reconcile никогда не сканирует');
-    assert.equal(body.filename, 'uris_req_thumb');
-    assert.equal(body.format, 'webp');
+    assert.match(body.name, /^uris_thumb_uris_req_[a-z0-9]+\.webp$/);
 });
 
 test('makeThumbnailForPath rejects a broken thumbnail source without uploading', async () => {

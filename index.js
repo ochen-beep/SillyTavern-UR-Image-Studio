@@ -150,6 +150,12 @@ async function init() {
     // network-free; a missing extensionSettings is a no-op inside.
     try { ensureOwnedFilesRegistered(); } catch (e) { warn('registry sync:', e?.message || e); }
 
+    // One-shot: legacy user/images binaries (refs/thumbs) → protected
+    // user/files. Fire-and-forget; idempotent, failure-safe (keeps old paths).
+    void import('./src/binaries-migration.js')
+        .then(m => m.migrateStoredBinaries())
+        .catch(e => warn('binaries migration:', e?.message || e));
+
     // v4: 6 tabs (API / References / Generation / Gallery / Templates / Settings)
     // Lazy render: a tab module loads on first open, not at tavern startup
     // (the first open pays a single dynamic import).

@@ -103,6 +103,30 @@ export function syncProtectedRegistry(names) {
 }
 
 /**
+ * Upload base64 bytes to `user/files/<name>` and register the file in the
+ * protected registry. user/files is flat — the caller owns the name prefix
+ * (uris_ref_/uris_thumb_/...). Returns the canonical stored path.
+ */
+export async function uploadNamedUserFile(name, base64, deps = {}) {
+    const ctx = getCtx();
+    const doFetch = deps.fetch || globalThis.fetch;
+    const response = await doFetch('/api/files/upload', {
+        method: 'POST',
+        headers: { ...(ctx?.getRequestHeaders?.() ?? {}), 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name, data: base64 }),
+        ...(deps.signal ? { signal: deps.signal } : {}),
+    });
+    if (!response?.ok) {
+        const e = await response?.json?.().catch(() => ({})) || {};
+        throw new Error(e?.error || `User file upload failed: ${response?.status}`);
+    }
+    const path = canonicalizeUserFilePath(`user/files/${name}`);
+    if (!path) throw new Error(`Unusable user file name: ${name}`);
+    protectUserFile(path);
+    return path;
+}
+
+/**
  * Delete a stored server file, routing by path shape: user/files →
  * /api/files/delete, user/images → /api/images/delete. Registered files are
  * unregistered afterwards. A 404 counts as success (already in target state).
