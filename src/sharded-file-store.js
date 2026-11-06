@@ -179,6 +179,16 @@ export function createShardedFileStore(config) {
 
     const shardFileName = id => `${shardPrefix}${id}.json`;
 
+    /**
+     * Data Maid shield on the read path: register the manifest and every live
+     * shard, not just files this session wrote — a fresh browser profile starts
+     * with an empty registry while the files already exist on the server.
+     */
+    function registerLiveFiles() {
+        protectUserFile(`user/files/${manifestName}`);
+        for (const row of shards) protectUserFile(`user/files/${shardFileName(row.id)}`);
+    }
+
     // Small satellite arrays (refs folders) that must not ride the manifest:
     // the manifest has to be rebuildable from a shard scan alone, so anything
     // not derivable from the shards lives in its own plain file-store.
@@ -434,6 +444,7 @@ export function createShardedFileStore(config) {
             adoptShard(id, parsed.value);
         }
         rebuildMirrorFromShards();
+        registerLiveFiles();
         if (!shards.length) {
             warn(`sharded-store[${label}]: corrupt manifest and no readable shards — starting empty`);
             return;
@@ -529,6 +540,7 @@ export function createShardedFileStore(config) {
         if (!ok) return mode;
         manifestBaseRows = (parsed.value.shards || []).map(row => ({ ...row }));
         rebuildMirrorFromShards();
+        registerLiveFiles();
         if (metaStore) await hydrateMeta();
         totalBytes = text.length;
         emit('store-mode', { store: label, result: 'file', reason: parsed.reason });
