@@ -13,12 +13,13 @@ import { makeUserFileServer } from './_helpers.js';
 let originalFetch;
 let originalSt;
 let listCalls;
+let testFolderFiles = ['one.png', 'two.png'];
 const fileServer = makeUserFileServer({
     fallback(u, options) {
         if (u === '/api/images/list') {
             listCalls.push(u);
             const body = JSON.parse(options.body);
-            return { ok: true, json: async () => (body.folder === 'Test' ? ['one.png', 'two.png'] : []) };
+            return { ok: true, json: async () => (body.folder === 'Test' ? testFolderFiles : []) };
         }
         return { ok: true, json: async () => ({}) };
     },
@@ -29,9 +30,12 @@ beforeEach(() => {
     originalFetch = globalThis.fetch;
     originalSt = globalThis.SillyTavern;
     listCalls = [];
+    testFolderFiles = ['one.png', 'two.png'];
     globalThis.SillyTavern = {
         getContext: () => ({
             chatId: 'test-chat',
+            characters: [{ name: 'Test' }],
+            characterId: 0,
             extensionSettings: {
                 ur_image_studio: {
                     imageConnections: {
@@ -90,9 +94,10 @@ test('клик по картинке карточки открывает про�
     mod.resetViewerForTests();
 });
 
-// v0.9.4: рендер галереи больше не сканирует ФС сервера — reconcile только
-// по явной кнопке. С v0.9.5 кнопка живёт в «Настройки → Данные и диагностика».
-test('рендер галереи не сканирует сервер; скан — кнопка «Обновить галерею» в настройках', async () => {
+// 2026-11-06 (folder-first): рендер читает папку персонажа напрямую — это и
+// есть скан, больше не нуждающийся в кнопке. Кнопка «Обновить галерею» в
+// настройках осталась для пометок missing/сирот в уходе за данными.
+test('рендер галереи читает папку персонажа (folder-first); кнопка скана — в настройках', async () => {
     const { document, root } = makeFakeDocument();
     globalThis.document = document;
     globalThis.document.body = root;
@@ -100,9 +105,9 @@ test('рендер галереи не сканирует сервер; скан
 
     root.__urisTabId = 'gallery';
     await mod.render(root);
-    assert.equal(root.querySelectorAll('.uris-card').length, 2, 'карточки приходят из индекса без скана');
-    assert.deepEqual(listCalls, [], 'рендер не должен вызывать /api/images/list');
-    assert.equal(root.querySelector('#urisGalleryRefresh'), null, 'кнопки «Обновить» в тулбаре галереи больше нет');
+    assert.equal(root.querySelectorAll('.uris-card').length, 2, 'оба файла папки отрендерены');
+    assert.ok(listCalls.length >= 1, 'folder-first рендер читает /api/images/list');
+    assert.equal(root.querySelector('#urisGalleryRefresh'), null, 'кнопки «Обновить» в тулбаре галереи нет');
 
     // Кнопка переехала на вкладку настроек — скан запускается оттуда.
     const { state } = await import('../src/core.js');
@@ -122,6 +127,7 @@ test('миниатюра показывает модель генерации, �
     // Fresh namespace again: the monolith re-seed below must be the migration
     // source, not be shadowed by the previous test's manifest + shards.
     serverFiles.clear();
+    testFolderFiles = ['m1.png', 'm2.png'];
     serverFiles.set('uris_gallery.json', JSON.stringify({ v: 1, cards: [
         { id: 'm-1', imagePath: 'user/images/Test/m1.png', prompt: 'с моделью', modelId: 'gemini-2.5-flash-image', provenance: { chatId: 'test-chat' }, status: 'ready', createdAt: 1 },
         { id: 'm-2', imagePath: 'user/images/Test/m2.png', prompt: 'без модели', provenance: { chatId: 'test-chat' }, status: 'ready', createdAt: 2 },

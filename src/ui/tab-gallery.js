@@ -4,7 +4,9 @@
  * viewing, regenerating, copying the prompt, saving as a reference, and deleting.
  */
 import { getCtx, escapeHtml, showInputModal, showConfirmModal } from '../core.js';
-import { getGallery } from '../storage.js';
+import { error } from '../core.js';
+import { addCard } from '../gallery-index.js';
+import { getFolderGallery } from '../storage.js';
 import { isStudioActive, resolveActiveChatId } from '../studio-scope.js';
 import {
     createGalleryFolder, deleteGalleryFolder, updateGalleryFolder, listGalleryFolders,
@@ -67,7 +69,7 @@ export async function render(root) {
     const chatId = resolveActiveChatId();
     const studio = isStudioActive();
     const prefs = getGalleryViewPrefs();
-    const allItems = orderGalleryItems(await getGallery(chatId));
+    const allItems = orderGalleryItems(await getFolderGallery({ chatId, scope: prefs.scope }));
     const folders = prefs.view === 'folders' ? await listGalleryFolders() : [];
     const items = filterGalleryByFolder(allItems, prefs.filter);
     if (root.__urisTabId && root.__urisTabId !== 'gallery') return;
@@ -76,6 +78,7 @@ export async function render(root) {
             <div class="uris-gallery-toolbar">
                 ${studio ? '<span class="uris-gallery-scope" title="Генерации без открытого чата">Студия</span>' : ''}
                 <span id="urisGalleryCount">${items.length}</span>
+                ${!studio ? `<button type="button" class="uris-scope-btn${prefs.scope === 'chat' ? ' uris-scope-btn-on' : ''}" id="urisGalleryScopeChat" title="Показывать только генерации, привязанные к этому чату">Этот чат</button>` : ''}
                 <div class="uris-gallery-viewswitch" role="group" aria-label="Режим галереи">
                     <button type="button" class="uris-viewswitch-btn${prefs.view === 'all' ? ' uris-viewswitch-btn-on' : ''}" data-view="all" title="Все картинки одной лентой">Все</button>
                     <button type="button" class="uris-viewswitch-btn${prefs.view === 'folders' ? ' uris-viewswitch-btn-on' : ''}" data-view="folders" title="Разложить по папкам">Папки</button>
@@ -85,6 +88,10 @@ export async function render(root) {
             <div class="uris-gallery-grid" id="urisGalleryGrid"></div>
         </div>`;
     bindViewSwitch(root);
+    root.querySelector('#urisGalleryScopeChat')?.addEventListener('click', async () => {
+        saveGalleryViewPrefs({ scope: prefs.scope === 'chat' ? 'all' : 'chat' });
+        await render(root);
+    });
     if (prefs.view === 'folders') bindFolderBar(root, folders);
     const grid = root.querySelector('#urisGalleryGrid');
     if (!items.length) {
@@ -243,15 +250,21 @@ function card(it, i) {
         ? ` width="${Number(it.width)}" height="${Number(it.height)}"`
         : '';
     const favTitle = favOn ? 'Убрать из избранного' : 'В избранное';
-    return `<div class="uris-card${favOn ? ' uris-card-fav' : ''}" data-id="${escapeHtml(it.id)}" data-idx="${i}">
-        <button type="button" class="uris-card-img" data-act="view" title="Просмотр" aria-label="Просмотр"><img src="${escapeHtml(src)}" alt="" loading="lazy" decoding="async"${dims}>${favBadge}${modelBadge}${badge}</button>
-        <div class="uris-card-actions">
+    // Бескарточный файл (folder-first): промпта и параметров нет — только
+    // просмотр, избранное (создаст карточку) и удаление файла.
+    const cardlessActions = `
+            <button class="uris-card-btn uris-card-btn-fav" data-act="fav" title="В избранное (создаст карточку с метаданными)" aria-label="В избранное"><i class="fa-solid fa-star"></i></button>
+            <button class="uris-card-btn" data-act="del" title="Удалить файл" aria-label="Удалить"><i class="fa-solid fa-trash"></i></button>`;
+    const fullActions = `
             <button class="uris-card-btn uris-card-btn-fav${favOn ? ' uris-card-btn-fav-on' : ''}" data-act="fav" title="${favTitle}" aria-label="${favTitle}"><i class="fa-solid fa-star"></i></button>
             <button class="uris-card-btn" data-act="regen" title="Перегенерировать" aria-label="Перегенерировать"><i class="fa-solid fa-rotate-right"></i></button>
             <button class="uris-card-btn" data-act="copy" title="Копировать текст" aria-label="Копировать текст"><i class="fa-solid fa-copy"></i></button>
             ${gotoBtn}
             <button class="uris-card-btn" data-act="saveRef" title="Сохранить как референс" aria-label="Сохранить как референс"><i class="fa-solid fa-bookmark"></i></button>
-            <button class="uris-card-btn" data-act="del" title="Удалить" aria-label="Удалить"><i class="fa-solid fa-trash"></i></button>
+            <button class="uris-card-btn" data-act="del" title="Удалить" aria-label="Удалить"><i class="fa-solid fa-trash"></i></button>`;
+    return `<div class="uris-card${favOn ? ' uris-card-fav' : ''}" data-id="${escapeHtml(it.id || '')}" data-idx="${i}"${it.cardless ? ' data-cardless="1"' : ''}>
+        <button type="button" class="uris-card-img" data-act="view" title="Просмотр" aria-label="Просмотр"><img src="${escapeHtml(src)}" alt="" loading="lazy" decoding="async"${dims}>${favBadge}${modelBadge}${badge}</button>
+        <div class="uris-card-actions">${it.cardless ? cardlessActions : fullActions}
         </div>
     </div>`;
 }
@@ -375,6 +388,33 @@ function gotoSourcePost(msgId) {
 // Делегирование (2026-10-06, пункт 23): один click/contextmenu-обработчик на
 // контейнер сетки вместо шести на каждую карточку — рендер большой галереи
 // больше не ставит O(n) слушателей (innerHTML-вайп всё равно снимал старые).
+/** Lazy card creation for a folder-first file: metadata starts empty. */
+async function materializeCardless(item, root, patch = {}) {
+    try {
+        await addCard({ imagePath: item.imagePath, prompt: '', ...patch });
+        await render(root);
+    } catch (e) {
+        error('cardless materialize:', e);
+    }
+}
+
+/** Delete a file with no card: plain server delete, the index is not involved. */
+async function deleteCardlessFile(item, root) {
+    if (!(await showConfirmModal('Удалить файл с диска? Отменить это нельзя.'))) return;
+    const ctx = getCtx();
+    try {
+        const r = await fetch('/api/images/delete', {
+            method: 'POST',
+            headers: { ...(ctx?.getRequestHeaders?.() ?? {}), 'Content-Type': 'application/json' },
+            body: JSON.stringify({ path: item.imagePath }),
+        });
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        await render(root);
+    } catch (e) {
+        error('cardless delete:', e);
+    }
+}
+
 async function bindCards(scopeEl, root, items, chatId) {
     const { copyItemText, saveAsReference, regenerate, deleteImage, toggleFavorite, assignGalleryFolders } = await import('./gallery-actions.js');
     if (scopeEl.dataset.delegated === '1') return;   // idempotent per render
@@ -398,9 +438,12 @@ async function bindCards(scopeEl, root, items, chatId) {
             case 'view':
                 _viewer.showLightbox(items, hit.idx, { chatId, root });
                 break;
-            case 'fav':
-                void toggleFavorite(hit.it(), root);
+            case 'fav': {
+                const it = hit.it();
+                if (it?.cardless) void materializeCardless(it, root, { favorite: true });
+                else void toggleFavorite(it, root);
                 break;
+            }
             case 'copy':
                 void copyItemText(hit.it());
                 break;
@@ -411,9 +454,12 @@ async function bindCards(scopeEl, root, items, chatId) {
             case 'goto':
                 gotoSourcePost(hit.it()?.sourceMsgId);
                 break;
-            case 'del':
-                void deleteImage(hit.it(), chatId, root);
+            case 'del': {
+                const it = hit.it();
+                if (it?.cardless) void deleteCardlessFile(it, root);
+                else void deleteImage(it, chatId, root);
                 break;
+            }
             case 'saveRef':
                 void saveAsReference(hit.it());
                 break;

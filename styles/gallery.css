@@ -63,6 +63,14 @@
 .uris-viewswitch-btn + .uris-viewswitch-btn { border-left: 1px solid var(--uris-border-soft); }
 .uris-viewswitch-btn:hover { color: var(--uris-text-strong); }
 .uris-viewswitch-btn-on { color: var(--uris-text-strong); background: var(--uris-accent-soft); }
+/* Чип скоупа «Этот чат» рядом с переключателем вида — тот же визуал. */
+.uris-scope-btn {
+    background: none; border: 1px solid var(--uris-border-soft); border-radius: 8px;
+    cursor: pointer; padding: 4px 12px; margin-right: 6px;
+    color: var(--uris-text-mut); font-size: var(--uris-font-sm);
+}
+.uris-scope-btn:hover { color: var(--uris-text-strong); }
+.uris-scope-btn-on { color: var(--uris-text-strong); background: var(--uris-accent-soft); }
 /* Лента папок режима «Папки»: горизонтальный скролл чипов (скроллбар скрыт). */
 .uris-gf-bar {
     display: flex; gap: 6px; align-items: center;

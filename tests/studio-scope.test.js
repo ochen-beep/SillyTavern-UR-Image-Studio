@@ -234,6 +234,15 @@ test('the gallery tab shows studio-scope cards and the «Студия» badge wi
         }),
     };
     const originalFetch = globalThis.fetch;
+    // folder-first: вкладка читает студийную папку — отдаём её файл a.png
+    const prevFetch = globalThis.fetch;
+    globalThis.fetch = async (url, options) => {
+        if (url === '/api/images/list') {
+            const body = JSON.parse(options.body);
+            return { ok: true, json: async () => (body.folder === 'URIS Studio' ? ['a.png'] : []) };
+        }
+        return prevFetch(url, options);
+    };
     // Карты студии живут в файловом сторе: сидим файл до рендера вкладки
     // (fetchStub из beforeEach обслуживает и чтение файла).
     serverFiles.set('uris_gallery.json', JSON.stringify({ v: 1, cards: [
