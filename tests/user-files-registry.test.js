@@ -145,6 +145,44 @@ test('sharded store registers manifest+shards on upload and lifts registration o
     }
 }));
 
+test('sharded store registers manifest+shards on READ too (fresh browser profile)', withSt(async () => {
+    stubST({});
+    // Pre-seed the server: manifest + one shard, written by "another machine".
+    const fileServer = makeUserFileServer();
+    fileServer.serverFiles.set('uris_seed_manifest.json', JSON.stringify({
+        v: 1, kind: 'manifest', store: 'seed',
+        shards: [{ id: 's0000', count: 2, min: 1, max: 2 }],
+    }));
+    fileServer.serverFiles.set('uris_seed_shard_s0000.json', JSON.stringify({
+        v: 1, kind: 'shard', store: 'seed', id: 's0000',
+        records: [{ id: 'a', createdAt: 1 }, { id: 'b', createdAt: 2 }],
+    }));
+    globalThis.fetch = fileServer.fetch;
+    const { createShardedFileStore } = await import('../src/sharded-file-store.js');
+    const { resetFileStoresForTests } = await import('../src/file-store.js');
+    const { listProtectedUserFiles } = await import('../src/user-files-storage.js');
+    try {
+        const store = createShardedFileStore({
+            label: 'shield-seed',
+            manifestName: 'uris_seed_manifest.json',
+            shardPrefix: 'uris_seed_shard_',
+            monolithName: 'uris_seed_old.json',
+            monolithKey: 'records',
+            shardTarget: 4,
+            empty: () => [],
+            probeRetryMs: 10,
+        });
+        assert.equal(await store.ready(), 'file');
+        // No write happened (uploads журнал пуст), но реестр уже знает файлы.
+        assert.equal(fileServer.uploads.length, 0);
+        const urls = listProtectedUserFiles().map(e => e.url);
+        assert.ok(urls.includes('user/files/uris_seed_manifest.json'), urls.join(','));
+        assert.ok(urls.includes('user/files/uris_seed_shard_s0000.json'), urls.join(','));
+    } finally {
+        resetFileStoresForTests();
+    }
+}));
+
 test('ensureOwnedFilesRegistered covers every owned store file name', withSt(async () => {
     stubST({});
     const { ensureOwnedFilesRegistered } = await import('../src/data-care.js');
