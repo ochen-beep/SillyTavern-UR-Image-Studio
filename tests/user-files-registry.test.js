@@ -117,7 +117,15 @@ test('sharded store registers manifest+shards on upload and lifts registration o
     const extensionSettings = {};
     stubST(extensionSettings);
     const fileServer = makeUserFileServer({
-        fallback: (url) => url === '/api/files/delete' ? { ok: true, status: 200, text: async () => '' } : undefined,
+        fallback: (url, options) => {
+            if (url === '/api/files/delete' && options.method === 'POST') {
+                // Фейковый сервер обязан реально удалить файл (см. shard-delete.test.js).
+                const body = JSON.parse(options.body);
+                fileServer.serverFiles.delete(String(body.path).replace(/^user\/files\//, ''));
+                return { ok: true, status: 200, text: async () => '' };
+            }
+            return undefined;
+        },
     });
     globalThis.fetch = fileServer.fetch;
     const { createShardedFileStore } = await import('../src/sharded-file-store.js');
@@ -140,6 +148,15 @@ test('sharded store registers manifest+shards on upload and lifts registration o
         const urls = listProtectedUserFiles().map(e => e.url);
         assert.ok(urls.includes('user/files/uris_shield_manifest.json'), urls.join(','));
         assert.ok(urls.some(u => u.startsWith('user/files/uris_shield_shard_s')), urls.join(','));
+
+        // Шард-GC: все записи удалены → пустые шарды стираются с сервера и
+        // снимаются с защиты (иначе реестр копит мёртвые имена).
+        await store.mutate(records => { records.length = 0; });
+        await store.flush();
+        assert.ok(![...fileServer.serverFiles.keys()].some(n => n.startsWith('uris_shield_shard_')),
+            [...fileServer.serverFiles.keys()].join(','));
+        assert.ok(!listProtectedUserFiles().some(e => e.url.startsWith('user/files/uris_shield_shard_')),
+            listProtectedUserFiles().map(e => e.url).join(','));
     } finally {
         resetFileStoresForTests();
     }
