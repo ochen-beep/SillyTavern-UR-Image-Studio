@@ -6,9 +6,9 @@
  */
 import { uid, log, getCtx } from './core.js';
 import { recordDiagnosticEvent, hashDiagnosticId } from './diagnostic-events.js';
-import { addCard, countCardsByImagePath, listCards, removeCard, updateCard } from './gallery-index.js';
+import { addCard, countCardsByImagePath, listCards, mergeFolderWithCards, removeCard, updateCard } from './gallery-index.js';
 import { listRefs } from './refs-library.js';
-import { materializeImageResult, uploadGeneratedImage } from './native-image-storage.js';
+import { materializeImageResult, uploadGeneratedImage, listNativeImages, getCharacterImageFolder } from './native-image-storage.js';
 import { canonicalizeNativeImagePath } from './native-image-path.js';
 
 function isNativeGalleryPath(value) {
@@ -35,6 +35,27 @@ export async function getGallery(chatId, { reconcile = false } = {}) {
     return cards
         .filter(card => belongsToChat(card, chatId) && card.hidden !== true)
         .map(cardForGallery);
+}
+
+/**
+ * Folder-first gallery: every file in the active character's folder renders;
+ * card metadata joins by imagePath. The card index is a sidecar — losing it
+ * degrades to a metadata-less view, not an empty gallery. scope='chat' narrows
+ * to cards bound to this chat (cardless files carry no chat binding and drop
+ * out). Broken previews are impossible: no file → no item.
+ * @param {{chatId?: string, scope?: 'all'|'chat'}} [opts]
+ */
+export async function getFolderGallery({ chatId, scope = 'all' } = {}) {
+    const folder = getCharacterImageFolder();
+    let paths = [];
+    let cards = [];
+    try { paths = await listNativeImages({ folder }); }
+    catch (e) { log('Folder listing failed:', e.message); }
+    try { cards = await listCards({ reconcile: false }); }
+    catch (e) { log('Card index unavailable:', e.message); }
+    const items = mergeFolderWithCards(paths, cards).map(cardForGallery);
+    if (scope === 'chat') return items.filter(it => it.provenance?.chatId === chatId);
+    return items;
 }
 
 /**

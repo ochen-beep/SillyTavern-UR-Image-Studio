@@ -129,6 +129,7 @@ export function normalizeGalleryViewPrefs(data = {}) {
     return {
         view: data.view === 'folders' ? 'folders' : 'all',
         filter: typeof data.filter === 'string' && data.filter ? data.filter : 'all',
+        scope: data.scope === 'chat' ? 'chat' : 'all',
         sort: GALLERY_FOLDER_SORT_MODES.includes(data.sort) ? data.sort : 'manual',
     };
 }

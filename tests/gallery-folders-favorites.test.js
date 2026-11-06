@@ -9,7 +9,14 @@ import { makeUserFileServer } from './_helpers.js';
 
 let originalFetch;
 let originalSt;
-const fileServer = makeUserFileServer();
+const fileServer = makeUserFileServer({
+    fallback(u, options) {
+        if (u === '/api/images/list') {
+            const body = JSON.parse(options.body);
+            return { ok: true, json: async () => (body.folder === 'Test' ? ['one.png', 'two.png', 'three.png'] : []) };
+        }
+    },
+});
 
 // Три карточки одного чата: monolith-порядок старые→новые (индекс отдаёт
 // новые сверху). card-fav помечена избранным прямо в файле.
@@ -29,6 +36,9 @@ function installContext() {
     // extensionSettings и должны переживать следующий getContext().
     const shared = {
         chatId: 'test-chat',
+        // folder-first: галерея читает папку персонажа напрямую
+        characters: [{ name: 'Test' }],
+        characterId: 0,
         extensionSettings: { ur_image_studio: {} },
         saveSettingsDebounced: () => {},
         saveMetadata: () => {},
