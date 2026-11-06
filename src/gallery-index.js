@@ -293,6 +293,44 @@ export async function listCards({ reconcile = true } = {}) {
     return cards();
 }
 
+// ── Folder-first view join ──
+
+/**
+ * Folder-first gallery view model: every file of the folder renders, card
+ * metadata joins by imagePath when a card exists. Files never indexed get a
+ * `cardless` stub (reduced action set in the view). A card marked `hidden`
+ * suppresses its file — "hide" must keep hiding in a folder-first world.
+ * Cards pointing at files outside the folder (or nowhere) simply do not join.
+ * Pure; tested in node.
+ * @param {string[]} paths - folder file paths (any spelling; canonicalized here)
+ * @param {object[]} cards - gallery index cards
+ * @returns {object[]} view items, one per file, in the folder's listing order
+ */
+export function mergeFolderWithCards(paths, cards) {
+    const byPath = new Map();
+    for (const card of Array.isArray(cards) ? cards : []) {
+        const path = canonicalizeNativeImagePath(card?.imagePath);
+        if (path && !byPath.has(path)) byPath.set(path, card);
+    }
+    const items = [];
+    const seen = new Set();
+    for (const raw of Array.isArray(paths) ? paths : []) {
+        const path = canonicalizeNativeImagePath(raw);
+        if (!path || seen.has(path)) continue;
+        seen.add(path);
+        const card = byPath.get(path);
+        if (card?.hidden === true) continue;
+        items.push(card
+            ? { ...card, imagePath: path }
+            : {
+                id: null, imagePath: path, prompt: '', negativePrompt: '',
+                status: 'ready', hidden: false, favorite: false, folders: [],
+                referenceIds: [], createdAt: null, cardless: true,
+            });
+    }
+    return items;
+}
+
 // ── Test-only surface ──
 
 export function resetGalleryStoreForTests() {
