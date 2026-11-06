@@ -11,6 +11,7 @@ import { formatForMime, formatForMimeOrDefault, sanitizeUploadFilename } from '.
 import { optimizeReferenceImage } from './references.js';
 import { isStudioActive, STUDIO_IMAGE_FOLDER } from './studio-scope.js';
 import { uploadNamedUserFile } from './user-files-storage.js';
+import { embedUrisSidecar } from './png-sidecar.js';
 import { randomToken } from './random.js';
 
 export { NATIVE_GALLERY_FOLDER };
@@ -138,6 +139,11 @@ async function blobMetadata(blob) {
 }
 
 async function materializedUpload(blob, options) {
+    // PNG tEXt-сайдкар (фаза 4): метаданные генерации внутрь самого файла.
+    // Best-effort — сбой сайдкара не имеет права ломать оплаченный результат.
+    if (options?.sidecar) {
+        try { blob = await embedUrisSidecar(blob, options.sidecar); } catch { /* no-op */ }
+    }
     const metadata = await blobMetadata(blob);
     const imagePath = await uploadPayload(await blobPayload(blob), options);
     return options.withMetadata ? { imagePath, output: metadata } : imagePath;
@@ -184,12 +190,12 @@ export async function materializeImageResult(result, options = {}) {
     }
     if (result?.kind === 'bytes' && result.value != null) {
         const blob = new Blob([result.value], { type: result.mimeType || 'image/png' });
-        return materializedUpload(blob, { filename: options.filename, ch_name, signal: options.signal, timeoutMs: options.timeoutMs, diagnostic: options.diagnostic, withMetadata: options.withMetadata });
+        return materializedUpload(blob, { filename: options.filename, ch_name, signal: options.signal, timeoutMs: options.timeoutMs, diagnostic: options.diagnostic, withMetadata: options.withMetadata, sidecar: options.sidecar });
     }
     if (result?.kind !== 'url' || typeof result.value !== 'string') {
         throw new Error('Expected a data URL, byte result, or downloadable image URL');
     }
     const response = await downloadResult(result.value, { signal: options.signal, __urisDiagnostic: options.diagnostic }, options.timeoutMs);
     if (!response.ok) throw new Error(`Image result download failed (${response.status})`);
-    return materializedUpload(await response.blob(), { filename: options.filename, ch_name, signal: options.signal, timeoutMs: options.timeoutMs, diagnostic: options.diagnostic, withMetadata: options.withMetadata });
+    return materializedUpload(await response.blob(), { filename: options.filename, ch_name, signal: options.signal, timeoutMs: options.timeoutMs, diagnostic: options.diagnostic, withMetadata: options.withMetadata, sidecar: options.sidecar });
 }
