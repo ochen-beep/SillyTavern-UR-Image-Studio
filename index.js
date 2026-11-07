@@ -335,7 +335,7 @@ async function init() {
         (await import('./src/ui/tab-media.js')).applyInlineRuntime();
     }
 
-    log('Initialized v2 · catalog-v3 · nanogpt-image-catalog · no-model-toggle.');
+    log('Initialized.');
     performance.measure('uris:init', 'uris:init');
     // External bridge opens for business only after a fully successful init.
     markBridgeReady();
