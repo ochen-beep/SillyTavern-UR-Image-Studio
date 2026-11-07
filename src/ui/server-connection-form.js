@@ -235,6 +235,7 @@ export function renderServerConnectionForm(draft = {}, options = {}) {
                 <div class="uris-row"><label>Референсы</label><select class="text_pole uris-server-refs-mode"><option value="auto"${selected('auto', refsMode)}>Авто</option><option value="always"${selected('always', refsMode)}>Всегда отправлять</option><option value="never"${selected('never', refsMode)}>Никогда не отправлять</option></select></div>
                 <div class="uris-row"><label>Лимит референсов</label><input class="text_pole uris-server-refs-max" type="number" min="0" step="1" value="${overrides.maxRefs ?? ''}" placeholder="авто"></div>
                 <div class="uris-row"><label>Таймаут (сек)</label><input class="text_pole uris-server-timeout" type="number" min="15" max="600" step="1" value="${escapeHtml(timeoutSeconds)}"></div>
+                <div class="uris-hint">Моделям gpt-image таймаут не ниже 300 с применяется автоматически (их генерация может занимать до ~5 минут), даже если здесь указано меньше. Сохранённое значение не меняется.</div>
                 <div class="uris-row"><label>Доп. параметры body (JSON)</label><textarea class="text_pole uris-server-extra-body" rows="3" placeholder='{"temperature": 0.7}' spellcheck="false">${escapeHtml(extraBodyText)}</textarea></div>
                 <div class="uris-row"><button class="uris-btn uris-btn-ghost uris-server-forget" type="button" title="Забыть результаты проверки и факт-записи о генерациях на этом шлюзе">Сбросить знания о шлюзе</button></div>
             </details>

@@ -5,6 +5,7 @@ import assert from 'node:assert/strict';
 const {
     MODEL_FAMILIES,
     detectModelFamily,
+    timeoutFloorMsForFamily,
     maxReferencesFor,
     inferApiShape,
     dialectOrder,
@@ -319,4 +320,13 @@ test('comfyui shape: диалект-цепочка и эвристика пор�
     assert.deepEqual(dialectOrder('comfyui', 'unknown'), ['comfyui']);
     assert.equal(inferApiShape('http://127.0.0.1:8188'), 'comfyui');
     assert.equal(inferApiShape('https://api.example.com/v1'), 'openai');
+});
+
+test('timeoutFloorMsForFamily: gpt-image floors long runs, other families untouched', () => {
+    assert.equal(timeoutFloorMsForFamily('gpt-image'), 300000);
+    assert.equal(timeoutFloorMsForFamily('gemini-image'), 0);
+    assert.equal(timeoutFloorMsForFamily('dall-e'), 0);
+    assert.equal(timeoutFloorMsForFamily('flux-kontext'), 0);
+    assert.equal(timeoutFloorMsForFamily('grok-imagine'), 0);
+    assert.equal(timeoutFloorMsForFamily('unknown'), 0);
 });

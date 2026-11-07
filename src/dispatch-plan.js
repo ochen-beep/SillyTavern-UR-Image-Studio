@@ -90,6 +90,26 @@ export function maxReferencesFor(modelId) {
     }
 }
 
+// ── Generation timeout floor (static prior per family) ──
+//
+// Long-run families need a floor on the effective generation timeout:
+// gpt-image regularly takes 80-280 s, so a connection left at the 120 s
+// default would cancel a PAID request the provider may still complete
+// (money spent, no image). Applied at dispatch as max(connection, floor) —
+// the stored connection value is never rewritten. Only families with
+// documented long runs belong in this table.
+const FAMILY_TIMEOUT_FLOOR_MS = [
+    [MODEL_FAMILIES.GPT_IMAGE, 300 * 1000],
+];
+
+/** Effective-timeout floor for a model family, or 0 when none applies. */
+export function timeoutFloorMsForFamily(family) {
+    for (const [entry, floor] of FAMILY_TIMEOUT_FLOOR_MS) {
+        if (entry === family) return floor;
+    }
+    return 0;
+}
+
 // ── Endpoint shape ──
 
 export const API_SHAPES = Object.freeze({
