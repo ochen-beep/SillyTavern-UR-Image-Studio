@@ -45,7 +45,7 @@ import { imageToDataUrl } from './references.js';
 import { composeReferencePrompt } from './reference-binding.js';
 import { generatePromptText } from './text-api.js';
 import { listRefs } from './refs-library.js';
-import { enqueueAutoLane } from './autolane.js';
+import { enqueueAutoLane, enqueueBridgeTextLane } from './autolane.js';
 import { parseInline } from './inline/grammar.js';
 import { buildAliasIndex, resolveProfile, sanitizeTriggerList, buildInlinePrompt, DEFAULT_TRIGGERS } from './inline/triggers.js';
 import { listCards, removeCard as removeGalleryCard } from './gallery-index.js';
@@ -759,6 +759,8 @@ async function listBridgeRefs() {
  * `expandMacros: false`).
  *
  * This is a PAID text-LLM call (the same one Stage 1 makes).
+ * Calls serialize on the bridge text lane: concurrent external builds never
+ * hit the text-LLM in parallel (and never queue behind image generations).
  *
  * @param {unknown} request - { text, templateId?, useScene? = true, expandMacros? = true }
  * @param {unknown} opts - { caller, signal?, onStatus? }
@@ -787,18 +789,52 @@ async function buildPrompt(request, opts = {}) {
     }
     const onStatus = typeof options.onStatus === 'function' ? /** @type {(status:string) => void} */ (options.onStatus) : () => {};
 
-    _externalRuns.set(requestId, { caller, startedAt: Date.now(), controller, queued: false });
-    state.activeGenerations.set(requestId, controller);
+    _externalRuns.set(requestId, { caller, startedAt: Date.now(), controller, queued: true });
+    emitBridge('prompt:queued', { requestId, caller });
+
+    const run = () => {
+        if (controller.signal.aborted) {
+            _externalRuns.delete(requestId);
+            return Promise.reject(bridgeError('ABORTED', 'Request aborted while queued'));
+        }
+        if (!isGenerationAllowed()) {
+            _externalRuns.delete(requestId);
+            return Promise.reject(bridgeError('EXT_DISABLED', 'URIS was disabled while the request was queued'));
+        }
+        return buildPromptOnce(caller, requestId, { text, useScene, expandMacros, templateId }, controller, onStatus);
+    };
+
+    // Serial, always: buildPrompt is a PAID text-LLM call (the same one Stage 1
+    // makes). Its own lane — separate from the image autolane, so a prompt
+    // build never waits behind minute-long image generations — but N parallel
+    // external calls still hit the text-LLM one at a time.
+    return enqueueBridgeTextLane(run);
+}
+
+/**
+ * Core headless prompt build. Runs only inside the bridge text lane (same
+ * shape as generate/generateOnce: queued registration at enqueue time,
+ * started registration here).
+ * @param {string} caller
+ * @param {string} requestId
+ * @param {{text:string, useScene:boolean, expandMacros:boolean, templateId:string|null}} parsed
+ * @param {AbortController} controller
+ * @param {(status:string) => void} onStatus
+ */
+async function buildPromptOnce(caller, requestId, parsed, controller, onStatus) {
+    const { text, useScene, expandMacros, templateId } = parsed;
+    const startedAt = Date.now();
     // Исход для end-эмита (как в generateOnce): catch знает его раньше finally.
     let endOutcome = 'success';
     let endError = '';
+    _externalRuns.set(requestId, { caller, startedAt, controller, queued: false });
+    state.activeGenerations.set(requestId, controller);
     emitStage2(requestId, caller, 'start');
     emitBridge('prompt:started', { requestId, caller });
     recordDiagnosticEvent({
         event: 'bridge-build-prompt-start', requestId,
         details: { caller, templateId, useScene, expandMacros, textChars: text.length },
     });
-    const startedAt = Date.now();
     try {
         const messageText = expandMacros === false ? text : resolveSTMacros(text);
         let template = null;
