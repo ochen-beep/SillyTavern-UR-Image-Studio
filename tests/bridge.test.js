@@ -106,7 +106,7 @@ test('bridge: invalid params produce coded errors', () => {
     assertBridgeError(() => normalizeBridgeRequest({ prompt: 'x', references: 'no' }), 'INVALID_PARAMS');
     assertBridgeError(() => normalizeBridgeRequest({ prompt: 'x', references: [{ dataUrl: 'javascript:alert(1)' }] }), 'INVALID_PARAMS');
     assertBridgeError(() => normalizeBridgeRequest({ prompt: 'x', references: [{}] }), 'INVALID_PARAMS');
-    assertBridgeError(() => normalizeBridgeRequest({ prompt: 'x', references: new Array(9).fill({ dataUrl: 'data:image/png;base64,AA' }) }), 'INVALID_PARAMS');
+    assertBridgeError(() => normalizeBridgeRequest({ prompt: 'x', references: new Array(15).fill({ dataUrl: 'data:image/png;base64,AA' }) }), 'INVALID_PARAMS');
 });
 
 test('bridge: http(s) reference URLs are accepted', () => {
@@ -549,5 +549,20 @@ test('bridge: requestId fallback works without crypto.randomUUID (plain-HTTP)', 
         if (savedST === undefined) delete globalThis.SillyTavern; else globalThis.SillyTavern = savedST;
         deactivateBridge();
         assert.equal(globalThis.URIS, undefined);
+    }
+});
+
+
+test('bridge: references cap matches the largest provider family limit', () => {
+    const ref = () => ({ dataUrl: 'data:image/png;base64,' + 'A'.repeat(16) });
+    const nine = normalizeBridgeRequest({ prompt: 'x', references: Array.from({ length: 9 }, ref) });
+    assert.equal(nine.references.length, 9);
+    try {
+        normalizeBridgeRequest({ prompt: 'x', references: Array.from({ length: 15 }, ref) });
+        assert.fail('expected INVALID_PARAMS for 15 references');
+    } catch (e) {
+        assert.ok(e instanceof UrisBridgeError, `expected UrisBridgeError, got ${e?.name}`);
+        assert.equal(e.code, 'INVALID_PARAMS');
+        assert.match(e.message, /at most 14/);
     }
 });
