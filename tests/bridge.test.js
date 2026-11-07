@@ -1,5 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { enqueueBridgeTextLane } from '../src/autolane.js';
 import {
     BRIDGE_API_VERSION,
     UrisBridgeError,
@@ -552,7 +553,6 @@ test('bridge: requestId fallback works without crypto.randomUUID (plain-HTTP)', 
     }
 });
 
-
 test('bridge: references cap matches the largest provider family limit', () => {
     const ref = () => ({ dataUrl: 'data:image/png;base64,' + 'A'.repeat(16) });
     const nine = normalizeBridgeRequest({ prompt: 'x', references: Array.from({ length: 9 }, ref) });
@@ -564,5 +564,52 @@ test('bridge: references cap matches the largest provider family limit', () => {
         assert.ok(e instanceof UrisBridgeError, `expected UrisBridgeError, got ${e?.name}`);
         assert.equal(e.code, 'INVALID_PARAMS');
         assert.match(e.message, /at most 14/);
+    }
+});
+
+test('bridge: buildPrompt waits in the text lane before any work', async () => {
+    const { state } = await import('../src/core.js');
+    const savedSettings = state.settings;
+    const bridge = activateBridge();
+    const savedST = globalThis.SillyTavern;
+    globalThis.SillyTavern = { getContext: () => ({ extensionSettings: {} }) };
+    try {
+        state.settings = { enabled: true, bridgeEnabled: true };
+        let release;
+        const blocker = enqueueBridgeTextLane(() => new Promise(resolve => { release = resolve; }));
+        const pending = bridge.buildPrompt({ text: 'scene', useScene: false, expandMacros: false }, { caller: 'lab' });
+        let settled = false;
+        pending.catch(() => { settled = true; });
+        await new Promise(resolve => setTimeout(resolve, 20));
+        assert.equal(settled, false, 'buildPrompt must not run while the text lane is busy');
+        release();
+        // Text-LLM source is unset in the mock — fails after the lane frees.
+        await assert.rejects(() => pending);
+        await blocker;
+    } finally {
+        state.settings = savedSettings;
+        if (savedST === undefined) delete globalThis.SillyTavern; else globalThis.SillyTavern = savedST;
+        deactivateBridge();
+        assert.equal(globalThis.URIS, undefined);
+    }
+});
+
+test('bridge: generateFromScene settles through both lanes (no deadlock)', async () => {
+    const { state } = await import('../src/core.js');
+    const savedSettings = state.settings;
+    const bridge = activateBridge();
+    const savedST = globalThis.SillyTavern;
+    globalThis.SillyTavern = { getContext: () => ({ extensionSettings: {} }) };
+    try {
+        state.settings = { enabled: true, bridgeEnabled: true };
+        // Stage 1 fails fast (text-LLM source unset); a lane deadlock would hang instead.
+        await assert.rejects(
+            () => bridge.generateFromScene({ text: 'scene', useScene: false, expandMacros: false }, { caller: 'lab' }),
+        );
+    } finally {
+        state.settings = savedSettings;
+        if (savedST === undefined) delete globalThis.SillyTavern; else globalThis.SillyTavern = savedST;
+        deactivateBridge();
+        assert.equal(globalThis.URIS, undefined);
     }
 });

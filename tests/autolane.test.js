@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { enqueueAutoLane } from '../src/autolane.js';
+import { enqueueAutoLane, enqueueBridgeTextLane } from '../src/autolane.js';
 
 test('autolane: serializes tasks in enqueue order', async () => {
     const order = [];
@@ -21,4 +21,29 @@ test('autolane: rejection does not poison the lane', async () => {
 test('autolane: sync throw rejects caller, lane survives', async () => {
     await assert.rejects(enqueueAutoLane(() => { throw new Error('sync'); }), /sync/);
     assert.equal(await enqueueAutoLane(() => 'after'), 'after');
+});
+
+test('bridge text lane: serializes concurrent tasks (one paid text-LLM at a time)', async () => {
+    let active = 0;
+    let maxActive = 0;
+    const task = () => enqueueBridgeTextLane(async () => {
+        active += 1;
+        maxActive = Math.max(maxActive, active);
+        await new Promise(resolve => setTimeout(resolve, 5));
+        active -= 1;
+    });
+    await Promise.all([task(), task(), task(), task()]);
+    assert.equal(maxActive, 1);
+});
+
+test('bridge text lane: does not block the image autolane (separate keys)', async () => {
+    let release;
+    const blocker = enqueueBridgeTextLane(() => new Promise(resolve => { release = resolve; }));
+    let autolaneDone = false;
+    const imageTask = enqueueAutoLane(async () => { autolaneDone = true; });
+    await new Promise(resolve => setTimeout(resolve, 5));
+    assert.equal(autolaneDone, true, 'image autolane must run while the text lane is busy');
+    release();
+    await blocker;
+    await imageTask;
 });
