@@ -3,6 +3,15 @@ import assert from 'node:assert/strict';
 import { afterEach, beforeEach, test } from 'node:test';
 import { makeUserFileServer } from './_helpers.js';
 
+// Read lens for the shared card index (the removed dead read export from
+// storage.js): same chat-binding and hidden filters, raw index cards.
+async function visibleCards(chatId) {
+    const { listCards } = await import('../src/gallery-index.js');
+    return (await listCards({ reconcile: false }))
+        .filter(card => card?.provenance?.chatId === chatId && card.hidden !== true);
+}
+
+
 let originalFetch;
 let originalSt;
 
@@ -204,16 +213,16 @@ test('gallery authority is shared index only and clearGallery removes only the a
         },
     };
     globalThis.fetch = async () => ({ ok: true, text: async () => '', json: async () => ['one.png', 'two.png'] });
-    const { addToGallery, clearGallery, getGallery } = await import('../src/storage.js');
+    const { addToGallery, clearGallery } = await import('../src/storage.js');
 
     await addToGallery('chat-a', { id: 'a', imagePath: 'user/images/UR%20Image%20Studio/one.png', prompt: 'one' });
     await addToGallery('chat-b', { id: 'b', imagePath: 'user/images/UR%20Image%20Studio/two.png', prompt: 'two' });
-    const freshBrowserCards = await getGallery('chat-a');
+    const freshBrowserCards = await visibleCards('chat-a');
     await clearGallery('chat-a');
 
     assert.deepEqual(freshBrowserCards.map(card => card.id), ['a']);
-    assert.deepEqual((await getGallery('chat-a')).map(card => card.id), []);
-    assert.deepEqual((await getGallery('chat-b')).map(card => card.id), ['b']);
+    assert.deepEqual((await visibleCards('chat-a')).map(card => card.id), []);
+    assert.deepEqual((await visibleCards('chat-b')).map(card => card.id), ['b']);
     assert.deepEqual(writes, []);
     assert.equal(JSON.stringify(context.extensionSettings).includes('data:image'), false);
 });
@@ -226,7 +235,7 @@ test('gallery mutations cannot cross chat ownership boundaries', async () => {
     };
     globalThis.SillyTavern = { getContext: () => context };
     globalThis.fetch = async () => ({ ok: true, text: async () => '', json: async () => ['one.png'] });
-    const { addToGallery, getGallery, deleteGalleryCard, updateGalleryEntry } = await import('../src/storage.js');
+    const { addToGallery, deleteGalleryCard, updateGalleryEntry } = await import('../src/storage.js');
 
     await addToGallery('chat-a', {
         id: 'owned-by-a', imagePath: 'user/images/UR%20Image%20Studio/one.png', prompt: 'original',
@@ -234,7 +243,7 @@ test('gallery mutations cannot cross chat ownership boundaries', async () => {
 
     assert.equal(await deleteGalleryCard('chat-b', 'owned-by-a'), false, 'чужая карточка не удаляется (guard как у removeFromGallery)');
     assert.equal(await updateGalleryEntry('chat-b', 'owned-by-a', { prompt: 'forged' }), null);
-    assert.deepEqual((await getGallery('chat-a')).map(card => card.prompt), ['original']);
+    assert.deepEqual((await visibleCards('chat-a')).map(card => card.prompt), ['original']);
 });
 
 test('addToGallery keeps passed chat ownership over supplied provenance', async () => {
@@ -245,7 +254,7 @@ test('addToGallery keeps passed chat ownership over supplied provenance', async 
     };
     globalThis.SillyTavern = { getContext: () => context };
     globalThis.fetch = async () => ({ ok: true, text: async () => '', json: async () => ['one.png'] });
-    const { addToGallery, getGallery } = await import('../src/storage.js');
+    const { addToGallery } = await import('../src/storage.js');
 
     const card = await addToGallery('chat-a', {
         id: 'authoritative-owner',
@@ -255,8 +264,8 @@ test('addToGallery keeps passed chat ownership over supplied provenance', async 
     });
 
     assert.deepEqual(card.provenance, { chatId: 'chat-a', sourceMsgId: 42, requestId: 'request-1' });
-    assert.deepEqual((await getGallery('chat-a')).map(item => item.id), ['authoritative-owner']);
-    assert.deepEqual(await getGallery('chat-b'), []);
+    assert.deepEqual((await visibleCards('chat-a')).map(item => item.id), ['authoritative-owner']);
+    assert.deepEqual(await visibleCards('chat-b'), []);
 });
 
 test('addToGallery rejects a foreign chat ID collision before materializing an image', async () => {
@@ -271,7 +280,7 @@ test('addToGallery rejects a foreign chat ID collision before materializing an i
         calls.push(url);
         return { ok: true, text: async () => '', json: async () => ({ path: 'user/images/UR%20Image%20Studio/forbidden.png' }) };
     };
-    const { addToGallery, getGallery } = await import('../src/storage.js');
+    const { addToGallery } = await import('../src/storage.js');
 
     await addToGallery('chat-a', {
         id: 'shared-id',
@@ -289,10 +298,10 @@ test('addToGallery rejects a foreign chat ID collision before materializing an i
     const materializationCalls = calls
         .filter(url => !String(url).startsWith('/api/files/') && !String(url).startsWith('/user/files/'));
     assert.deepEqual(materializationCalls, []);
-    assert.deepEqual((await getGallery('chat-a')).map(card => ({ id: card.id, prompt: card.prompt, imagePath: card.imagePath })), [
+    assert.deepEqual((await visibleCards('chat-a')).map(card => ({ id: card.id, prompt: card.prompt, imagePath: card.imagePath })), [
         { id: 'shared-id', prompt: 'original', imagePath: 'user/images/UR%20Image%20Studio/original.png' },
     ]);
-    assert.deepEqual(await getGallery('chat-b'), []);
+    assert.deepEqual(await visibleCards('chat-b'), []);
 });
 
 test('uploads to a character folder when ch_name is provided', async () => {
@@ -371,17 +380,16 @@ test('getCharacterImageFolder uses the studio folder when no chat is open', asyn
     assert.equal(getCharacterImageFolder(), STUDIO_IMAGE_FOLDER);
 });
 
-test('getGallery excludes hidden cards but keeps them in the shared index', async () => {
+test('hidden cards stay in the shared index while visible reads exclude them', async () => {
     const context = { extensionSettings: {}, getRequestHeaders: () => ({}), saveSettingsDebounced: () => {} };
     globalThis.SillyTavern = { getContext: () => context, libs: { localforage: { getItem: async () => '' } } };
     globalThis.fetch = async () => ({ ok: true, text: async () => '', json: async () => [] });
     const { addCard, listCards } = await import('../src/gallery-index.js');
-    const { getGallery } = await import('../src/storage.js');
 
     await addCard({ id: 'vis', imagePath: 'user/images/Alice/vis.png', prompt: 'visible', provenance: { chatId: 'c1' } });
     await addCard({ id: 'hid', imagePath: 'user/images/Alice/hid.png', prompt: 'hidden', hidden: true, provenance: { chatId: 'c1' } });
 
-    const visible = await getGallery('c1');
+    const visible = await visibleCards('c1');
     assert.deepEqual(visible.map(c => c.id), ['vis']);
     const all = await listCards({ reconcile: false });
     assert.deepEqual(all.map(c => c.id).sort(), ['hid', 'vis']);
@@ -392,13 +400,13 @@ test('deleteGalleryCard hides the card when deleteFile is false', async () => {
     globalThis.SillyTavern = { getContext: () => context, libs: { localforage: { getItem: async () => '' } } };
     globalThis.fetch = async () => ({ ok: true, text: async () => '', json: async () => [] });
     const { addCard, listCards } = await import('../src/gallery-index.js');
-    const { deleteGalleryCard, getGallery } = await import('../src/storage.js');
+    const { deleteGalleryCard } = await import('../src/storage.js');
 
     await addCard({ id: 'd1', imagePath: 'user/images/Alice/x.png', prompt: 'p', provenance: { chatId: 'c1' } });
     const result = await deleteGalleryCard('c1', 'd1', { deleteFile: false });
 
     assert.equal(result, true);
-    assert.deepEqual((await getGallery('c1')).map(c => c.id), []);
+    assert.deepEqual((await visibleCards('c1')).map(c => c.id), []);
     const all = await listCards({ reconcile: false });
     assert.equal(all.find(c => c.id === 'd1').hidden, true);
 });
@@ -412,13 +420,13 @@ test('deleteGalleryCard removes the card and deletes the file when deleteFile is
         return { ok: true, text: async () => '', json: async () => [] };
     };
     const { addCard } = await import('../src/gallery-index.js');
-    const { deleteGalleryCard, getGallery } = await import('../src/storage.js');
+    const { deleteGalleryCard } = await import('../src/storage.js');
 
     await addCard({ id: 'd2', imagePath: 'user/images/Alice/y.png', prompt: 'p', provenance: { chatId: 'c1' } });
     const result = await deleteGalleryCard('c1', 'd2', { deleteFile: true });
 
     assert.equal(result, true);
-    assert.deepEqual((await getGallery('c1')).map(c => c.id), []);
+    assert.deepEqual((await visibleCards('c1')).map(c => c.id), []);
     const deleteCall = calls.find(c => c.url === '/api/images/delete');
     assert.ok(deleteCall, 'called /api/images/delete');
     assert.deepEqual(deleteCall.body, { path: 'user/images/Alice/y.png' });
