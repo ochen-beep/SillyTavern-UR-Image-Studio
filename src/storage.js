@@ -24,20 +24,6 @@ function belongsToChat(card, chatId) {
 }
 
 /**
- * List this chat's shared cards; localforage is migration input only.
- * Reconcile (a server-side scan of every folder) is opt-in — it is a
- * toolbar button in the gallery, not a per-render cost (v0.9.4).
- */
-export async function getGallery(chatId, { reconcile = false } = {}) {
-    let cards = [];
-    try { cards = await listCards({ reconcile }); }
-    catch (error) { log('Native gallery unavailable:', error.message); }
-    return cards
-        .filter(card => belongsToChat(card, chatId) && card.hidden !== true)
-        .map(cardForGallery);
-}
-
-/**
  * Folder-first gallery: every file in the active character's folder renders;
  * card metadata joins by imagePath. The card index is a sidecar — losing it
  * degrades to a metadata-less view, not an empty gallery. scope='chat' narrows

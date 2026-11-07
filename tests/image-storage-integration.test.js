@@ -3,6 +3,15 @@ import assert from 'node:assert/strict';
 import { afterEach, beforeEach, test } from 'node:test';
 import { makeUserFileServer } from './_helpers.js';
 
+// Read lens for the shared card index (the removed dead read export from
+// storage.js): same chat-binding and hidden filters, raw index cards.
+async function visibleCards(chatId) {
+    const { listCards } = await import('../src/gallery-index.js');
+    return (await listCards({ reconcile: false }))
+        .filter(card => card?.provenance?.chatId === chatId && card.hidden !== true);
+}
+
+
 let originalFetch;
 let originalSt;
 let ctx;
@@ -81,14 +90,14 @@ test('generation lands in the character folder and reconcile confirms it', async
 
 test('soft delete hides; hard delete removes card and file', async () => {
     const { addCard, listCards } = await import('../src/gallery-index.js');
-    const { deleteGalleryCard, getGallery } = await import('../src/storage.js');
+    const { deleteGalleryCard } = await import('../src/storage.js');
     await addCard({ id: 'soft', imagePath: 'user/images/Aria/s.png', prompt: 'p', provenance: { chatId: 'c1' } });
     await addCard({ id: 'hard', imagePath: 'user/images/Aria/h.png', prompt: 'p', provenance: { chatId: 'c1' } });
 
     await deleteGalleryCard('c1', 'soft', { deleteFile: false });
     await deleteGalleryCard('c1', 'hard', { deleteFile: true });
 
-    const visible = await getGallery('c1');
+    const visible = await visibleCards('c1');
     assert.deepEqual(visible.map(c => c.id), []);
     const all = await listCards({ reconcile: false });
     assert.equal(all.find(c => c.id === 'soft').hidden, true);
