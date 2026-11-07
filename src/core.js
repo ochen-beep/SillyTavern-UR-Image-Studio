@@ -8,12 +8,13 @@
 import { recordFromFetch, recordFromFetchError } from './netdump.js';
 import { tunnelBypassHeaders } from './tunnel-bypass.js';
 import { serialize } from './serialize.js';
-// error-pool is a leaf module (no imports) — no cycle. Its scrubber is the
-// single secret-redaction point shared with the log buffer below.
-import { redactSecrets } from './error-pool.js';
 // Inline trigger registry: pure module (no core import) — no cycle. Used by
 // loadSettings to normalize settings.inlineTriggers (see defaultSettings).
 import { sanitizeTriggerList, DEFAULT_TRIGGERS } from './inline/triggers.js';
+// Logging lives in logger.js (leaf module); core re-exports it for the ~80
+// consumers and wires the debug gate to settings.debugMode below. No cycle:
+// logger imports only error-pool.
+import { bindDebugGate, clearDebugLog, clearDiagnosticLogs, dumpDebugLog, dumpLog, dumpProblemLog, error, log, trace, warn } from './logger.js';
 
 export const MODULE_NAME = 'ur_image_studio';
 export const DISPLAY_NAME = 'UR Image Studio';
@@ -320,93 +321,14 @@ export const DEFAULT_CHAT_CONFIG_ENVELOPE = Object.freeze({
 // ── ST context ──
 export function getCtx() { return SillyTavern.getContext(); }
 
-// ── Logging ──
-const logBuffer = [];
-const debugBuffer = [];
-const MAX_LOG = 300;
-const MAX_DEBUG_LOG = 300;
-const MAX_LOG_ARG_CHARS = 2000;
-const SECRET_KEY_RE = /(?:api[-_]?key|authorization|token|password|secret|credential)/i;
-
-function serializeLogArg(value) {
-    if (value instanceof Error) {
-        const stack = typeof value.stack === 'string' ? value.stack.slice(0, MAX_LOG_ARG_CHARS) : '';
-        return `${value.name || 'Error'}: ${value.message || ''}${stack ? `\n${stack}` : ''}`;
-    }
-    if (value === null) return 'null';
-    if (value === undefined) return 'undefined';
-    if (typeof value === 'string') return value.length > MAX_LOG_ARG_CHARS
-        ? `${value.slice(0, MAX_LOG_ARG_CHARS)} …(truncated)`
-        : value;
-    if (typeof value !== 'object') return String(value);
-    try {
-        const seen = new WeakSet();
-        const json = JSON.stringify(value, (key, item) => {
-            if (SECRET_KEY_RE.test(key)) return '<redacted>';
-            if (item && typeof item === 'object') {
-                if (seen.has(item)) return '[Circular]';
-                seen.add(item);
-            }
-            return item;
-        });
-        return json.length > MAX_LOG_ARG_CHARS
-            ? `${json.slice(0, MAX_LOG_ARG_CHARS)} …(truncated)`
-            : json;
-    } catch {
-        try { return String(value); } catch { return '[Unserializable]'; }
-    }
-}
-
-function serializeLogArgs(args) {
-    return args.map(value => serializeLogArg(value)).join(' ');
-}
-
-function push(buffer, level, args, limit) {
-    const ts = new Date().toISOString();
-    // The buffer feeds the diagnostic dump — an export meant to leave the
-    // machine — so secrets are scrubbed once here (connection URLs carrying
-    // `?key=…`, Bearer headers, userinfo) instead of at every logging site.
-    buffer.push(`[${ts}] [${level}] ${redactSecrets(serializeLogArgs(args))}`);
-    if (buffer.length > limit) buffer.shift();
-}
-
-export function log(...a)   { push(logBuffer, 'INFO', a, MAX_LOG); console.log('[URIS]', ...a); }
-export function warn(...a)  { push(logBuffer, 'WARN', a, MAX_LOG); console.warn('[URIS]', ...a); }
-export function error(...a) { push(logBuffer, 'ERROR', a, MAX_LOG); console.error('[URIS]', ...a); }
-
-/** Verbose success-path diagnostics. Never writes to console; gated by debugMode. */
-export function trace(...a) {
-    if (state.settings?.debugMode !== true) return;
-    push(debugBuffer, 'DEBUG', a, MAX_DEBUG_LOG);
-}
-
-export function dumpLog() {
-    return logBuffer.length ? logBuffer.join('\n') : '(лог URIS пуст)';
-}
-
-/**
- * WARN/ERROR slice of the log for the diagnostic dump. INFO lines duplicate
- * the structured eventLog (stage transitions, capability observations), so
- * shipping the full log meant paying for every success-path line twice.
- */
-export function dumpProblemLog() {
-    const problems = logBuffer.filter(line => line.includes(' [WARN] ') || line.includes(' [ERROR] '));
-    return problems.length ? problems.join('\n') : '';
-}
-
-export function dumpDebugLog() {
-    if (state.settings?.debugMode !== true) return '(дебаг-лог пуст: Debug-режим выключен)';
-    return debugBuffer.length ? debugBuffer.join('\n') : '(дебаг-лог пуст)';
-}
-
-/** Clear both console-mirror and verbose diagnostic buffers. */
-export function clearDiagnosticLogs() {
-    logBuffer.length = 0;
-    debugBuffer.length = 0;
-}
-
-/** Backward-compatible alias used by the settings UI and older callers. */
-export function clearDebugLog() { clearDiagnosticLogs(); }
+// ── Logging (module: logger.js) ──
+// Re-exported so core stays the single import point for the ~80 consumers;
+// the ring buffers and secret redaction live in logger.js now.
+export { bindDebugGate, clearDebugLog, clearDiagnosticLogs, dumpDebugLog, dumpLog, dumpProblemLog, error, log, trace, warn };
+// The logger is a leaf module and must not know about settings: core wires
+// the debug gate (trace/dumpDebugLog) once at load; re-evaluated per call,
+// so toggling Debug mode applies live.
+bindDebugGate(() => state.settings?.debugMode === true);
 
 // ── Notifications (stage completion sounds) ──
 // Catalog shared by loadSettings validation and the Settings tab select.
