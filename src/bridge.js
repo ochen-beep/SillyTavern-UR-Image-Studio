@@ -59,7 +59,9 @@ export const BRIDGE_API_VERSION = 1;
 
 const CALLER_RE = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/;
 const MAX_PROMPT_CHARS = 100_000;
-const MAX_REFERENCES = 8;
+// Largest provider family limit (Gemini 3.x, dispatch-plan); the wire
+// re-validates the actual route cap anyway (TOO_MANY_REFERENCES).
+const MAX_REFERENCES = 14;
 const VALID_QUALITIES = ['auto', 'high', 'medium', 'low'];
 
 /**
