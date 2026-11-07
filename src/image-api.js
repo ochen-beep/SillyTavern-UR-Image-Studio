@@ -2,7 +2,7 @@
 /** Browser-owned image generation dispatch and native gallery materialization. */
 import { state, fetchWithTimeout } from './core.js';
 import { resolveConnection } from './connections.js';
-import { resolveDispatchPlan } from './dispatch-plan.js';
+import { resolveDispatchPlan, detectModelFamily, timeoutFloorMsForFamily } from './dispatch-plan.js';
 import { invokeImageProvider, validateImageProviderInvocation } from './image-provider-registry.js';
 import { serialize } from './serialize.js';
 import { isCorsProxyAvailable, isCorsOrNetworkError } from './proxy.js';
@@ -152,6 +152,21 @@ export async function generateImageRequest(imageConnId, request, onStatus, signa
     if (!resolved) throw new Error('Image connection was not found');
     const { conn, apiKey } = resolved;
     const route = selectedRoute(conn, opts.route);
+    // Long-run families (gpt-image) get a timeout floor on the PAID call: a
+    // connection left at the default could cancel a request the provider
+    // still completes. Effective = max(connection, family floor); the stored
+    // connection is never rewritten, and the upload/materialize timeout below
+    // keeps the raw connection value (server-local, not generation-bound).
+    const family = detectModelFamily(route.modelId);
+    const floorMs = timeoutFloorMsForFamily(family);
+    const genConn = floorMs > conn.timeoutMs ? { ...conn, timeoutMs: floorMs } : conn;
+    if (genConn !== conn) {
+        recordDiagnosticEvent({
+            event: 'dispatch-timeout-floor', stage: 'stage2', requestId: request.requestId,
+            connId: imageConnId, routeId: route.id, modelId: route.modelId,
+            details: { family, connectionTimeoutMs: conn.timeoutMs, effectiveTimeoutMs: genConn.timeoutMs },
+        });
+    }
     const deliveryRoute = browserDeliveryRoute(route, conn, (request.references || []).length > 0);
     // Stamp the delivery the dispatcher ACTUALLY uses so the capability log
     // line can report it. The observer receives the pre-dispatch route, whose
@@ -190,6 +205,8 @@ export async function generateImageRequest(imageConnId, request, onStatus, signa
         modelId: route.modelId,
         generationContract: route.generationContract,
         contractVersion: route.contractVersion,
+        // The timeout the PAID call actually runs under (family floor applied).
+        timeoutMs: genConn.timeoutMs,
         editProtocol: conn.editProtocol || null,
         delivery: deliveryRoute.transport.initialDelivery,
         operation: (request.references || []).length ? 'edit' : 'generate',
@@ -208,7 +225,7 @@ export async function generateImageRequest(imageConnId, request, onStatus, signa
     const invocation = {
         endpoint: conn.endpoint,
         apiKey,
-        connection: conn,
+        connection: genConn,
         route: deliveryRoute,
         diagnostic,
         request: {

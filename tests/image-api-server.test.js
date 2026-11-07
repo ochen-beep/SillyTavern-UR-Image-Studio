@@ -196,7 +196,7 @@ test('resolution shortfall: провайдер уже предупредил о 
     }
 });
 
-test('browser generation passes the resolved connection timeout to result materialization', async () => {
+test('browser generation: paid leg uses the gpt-image timeout floor, materialization keeps the connection value', async () => {
     const resolved = connection();
     resolved.timeoutMs = 16789;
     const originalSetTimeout = globalThis.setTimeout;
@@ -214,17 +214,20 @@ test('browser generation passes the resolved connection timeout to result materi
     }
 
     // Таймаут дедлайнный: fetchWithTimeout (core.js) планирует таймер на остаток
-    // бюджета (deadlineAt - Date.now()), поэтому ноги получают 16789 или на
-    // несколько миллисекунд меньше — тем меньше, чем сильнее загружена машина
-    // (полный набор идёт параллельными процессами). Точное равенство делало тест
-    // флапающим; проверяем, что каждая нога ушла именно с этим бюджетом.
-    // (Разведка доставки #10 добавляет свой 15с-таймер — в legs он не входит.)
-    const legs = timeouts.filter(delay => delay <= 16789 && delay >= 16789 * 0.9);
-    assert.equal(legs.length, 2, 'ожидались ровно два таймера ног: скачивание и загрузка на сервер');
-    for (const delay of legs) {
+    // бюджета (deadlineAt - Date.now()), поэтому таймер чуть меньше бюджета —
+    // тем сильнее, чем загруженнее машина (полный набор идёт параллельными
+    // процессами). Точное равенство делало тест флапающим.
+    // Платная нога gpt-image живёт под семейным полом (300с), materialization —
+    // с сырым значением подключения (сервер-локальная загрузка, не генерация).
+    // (Разведка доставки добавляет свой 15с-таймер — в оба диапазона не входит.)
+    const paidLegs = timeouts.filter(delay => delay <= 300000 && delay >= 300000 * 0.9);
+    assert.equal(paidLegs.length, 1, 'платная нога уходит с семейным полом 300с');
+    const materializeLegs = timeouts.filter(delay => delay <= 16789 && delay >= 16789 * 0.9);
+    assert.equal(materializeLegs.length, 1, 'materialization уходит с таймаутом подключения');
+    for (const delay of materializeLegs) {
         assert.ok(
             delay <= 16789 && delay >= 16789 * 0.9,
-            `таймаут ${delay} мс должен быть остатком бюджета 16789 мс — иначе нога ушла не с тем таймаутом`,
+            `таймаут ${delay} мс должен быть остатком бюджета 16789 мс — иначе materialization ушла не с тем таймаутом`,
         );
     }
 });
@@ -473,4 +476,41 @@ test('browser dispatch routes a JSON generation through the ST proxy when useCor
         // Restore the file-level fetch mock for subsequent tests.
         globalThis.fetch = standardFetch;
     }
+});
+
+test('dispatch: gpt-image timeout is floored to 300s for the paid call', async () => {
+    const result = await generateImageRequest('browser-image', request({ requestId: 'req_floor_gpt_0001' }));
+    assert.ok(result);
+    const events = await listDiagnosticEvents();
+    const floored = events.find(e => e.event === 'dispatch-timeout-floor' && e.requestId === 'req_floor_gpt_0001');
+    assert.ok(floored, 'floor event recorded for gpt-image below the floor');
+    assert.equal(floored.details.family, 'gpt-image');
+    assert.equal(floored.details.connectionTimeoutMs, 120000);
+    assert.equal(floored.details.effectiveTimeoutMs, 300000);
+});
+
+test('dispatch: explicit timeout above the family floor stays untouched', async () => {
+    await connectionsFacade.saveConnection({ id: 'browser-image', timeoutMs: 600000 });
+    try {
+        const result = await generateImageRequest('browser-image', request({ requestId: 'req_floor_high_0001' }));
+        assert.ok(result);
+        const events = await listDiagnosticEvents();
+        const floored = events.find(e => e.event === 'dispatch-timeout-floor' && e.requestId === 'req_floor_high_0001');
+        assert.equal(floored, undefined, 'no floor event when the connection timeout is already above it');
+    } finally {
+        await connectionsFacade.saveConnection({ id: 'browser-image', timeoutMs: 120000 });
+    }
+});
+
+test('dispatch: non-gpt families get no timeout floor', async () => {
+    const legacy = {
+        id: 'route-dalle', contractVersion: 1, generationContract: 'openai-images', modelId: 'dall-e-3',
+        capabilities: { generate: 'supported', references: 'unknown' },
+        transport: { bodyKind: 'json', proxyEligible: true, directCors: 'preferred' },
+    };
+    const result = await generateImageRequest('browser-image', request({ requestId: 'req_floor_dalle_0001' }), null, null, { route: legacy });
+    assert.ok(result);
+    const events = await listDiagnosticEvents();
+    const floored = events.find(e => e.event === 'dispatch-timeout-floor' && e.requestId === 'req_floor_dalle_0001');
+    assert.equal(floored, undefined, 'dall-e has no documented long runs, no floor');
 });
