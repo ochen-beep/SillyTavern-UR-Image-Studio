@@ -15,6 +15,9 @@ import { sanitizeTriggerList, DEFAULT_TRIGGERS } from './inline/triggers.js';
 // consumers and wires the debug gate to settings.debugMode below. No cycle:
 // logger imports only error-pool.
 import { bindDebugGate, clearDebugLog, clearDiagnosticLogs, dumpDebugLog, dumpLog, dumpProblemLog, error, log, trace, warn } from './logger.js';
+// Timer helpers live in timers.js (leaf); core re-exports for the existing
+// consumers. http.js (extracted below) imports the helper without a cycle.
+import { unrefTimer } from './timers.js';
 
 export const MODULE_NAME = 'ur_image_studio';
 export const DISPLAY_NAME = 'UR Image Studio';
@@ -539,13 +542,10 @@ export function sanitizeId(value) {
 /**
  * Не держать процесс Node живым ради таймера (тесты: без --test-force-exit).
  * В браузере setTimeout возвращает число — guard ничего не делает.
- * @param {ReturnType<typeof setTimeout>} timer
- * @returns {ReturnType<typeof setTimeout>} тот же timer (для цепочек)
+ * Реализация живёт в timers.js (leaf); здесь — реэкспорт для существующих
+ * потребителей (file-store, sharded-file-store, http-транспорт).
  */
-export function unrefTimer(timer) {
-    if (timer && typeof timer === 'object' && typeof timer.unref === 'function') timer.unref();
-    return timer;
-}
+export { unrefTimer } from './timers.js';
 
 /**
  * FNV-1a 32-bit hash — каноническое ядро для новых 32-битных идентификаторов
