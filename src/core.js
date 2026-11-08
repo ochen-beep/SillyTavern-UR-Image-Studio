@@ -3,7 +3,6 @@
  * UR Image Studio — core: state, defaults, persistence, utils.
  */
 
-import { serialize } from './serialize.js';
 // Inline trigger registry: pure module (no core import) — no cycle. Used by
 // loadSettings to normalize settings.inlineTriggers (see defaultSettings).
 import { sanitizeTriggerList, DEFAULT_TRIGGERS } from './inline/triggers.js';
@@ -31,7 +30,7 @@ export const LF_TEXT_PARAMS = 'uris_text_params';          // legacy: text param
 export const LF_TEMPLATES = 'uris_prompt_templates';       // legacy: template array (now: server file)
 export const LF_GALLERY_PREFIX = 'uris_gallery_';          // legacy: + chatId (now: server file)
 export const LF_HISTORY_PREFIX = 'uris_prompt_history_';   // legacy: + chatId
-export const LF_API_KEY = 'uris_custom_apikey';            // API key for the "Custom" source (localforage, NOT in settings JSON)
+// LF_API_KEY moved to api-key-store.js (re-exported there — see the section below).
 export const IMAGE_CONNECTION_SETTINGS_KEY = 'imageConnections';
 export const IMAGE_CONNECTION_KEY_PREFIX = 'uris_api_key:';
 export const defaultImageConnectionSettings = Object.freeze({
@@ -637,35 +636,10 @@ export async function callWithRetry(fn, label, mode = 'network', signal = null) 
     throw lastErr;
 }
 
-// ── Custom-endpoint API key (localforage-backed; NOT in settings JSON — spec §10 like DS Comments) ──
-//
-// Writes go through the shared serialize() mutex. The revision guard stays: it
-// is what makes the ordering meaningful. A read that started before a write
-// resolves only after it, and without the guard it would publish that stale
-// value back over the newer one. A superseded write bails out instead of
-// landing an older value after a newer one.
-const apiKeyState = { revision: 0, value: null };
-const API_KEY_LOCK = 'uris-api-key';
-export async function getApiKey() {
-    const revision = apiKeyState.revision;
-    try {
-        const value = (await SillyTavern.libs.localforage.getItem(LF_API_KEY)) || '';
-        if (revision === apiKeyState.revision) apiKeyState.value = value;
-        return value;
-    } catch { return ''; }
-}
-export function setApiKey(value) {
-    const v = (value || '').trim();
-    const revision = ++apiKeyState.revision;
-    apiKeyState.value = v;
-    return serialize(API_KEY_LOCK, async () => {
-        if (revision !== apiKeyState.revision) return;
-        try {
-            if (v) await SillyTavern.libs.localforage.setItem(LF_API_KEY, v);
-            else await SillyTavern.libs.localforage.removeItem(LF_API_KEY);
-        } catch { /* non-critical */ }
-    });
-}
+// ── Custom-endpoint API key (module: api-key-store.js) ──
+// localforage-backed key store + its key literal live there; core re-exports
+// for existing consumers (text-api, data-port, tests). Leaf module — no cycle.
+export { getApiKey, setApiKey, LF_API_KEY } from './api-key-store.js';
 
 /**
  * Normalize endpoint base URL: strip trailing slash and /v1 suffix
