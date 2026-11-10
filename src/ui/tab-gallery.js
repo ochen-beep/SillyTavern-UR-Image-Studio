@@ -94,6 +94,13 @@ export async function render(root) {
     });
     if (prefs.view === 'folders') bindFolderBar(root, folders);
     const grid = root.querySelector('#urisGalleryGrid');
+    // Thumb 404 → swap to the full image once. Error events don't bubble, so
+    // the listener rides the grid in capture phase and covers appended chunks.
+    grid.addEventListener('error', (e) => {
+        const img = e.target;
+        const full = img?.getAttribute?.('data-full');
+        if (full) { img.removeAttribute('data-full'); img.src = full; }
+    }, true);
     if (!items.length) {
         grid.innerHTML = emptyState(prefs);
     } else {
@@ -246,6 +253,10 @@ function card(it, i) {
     // and let the lightbox animate from this thumbnail. Grid loads the small
     // variant when one exists — the lightbox always opens the full image.
     const src = it.thumbPath || it.src;
+    // Broken thumb → the grid swaps to the full image (capture-phase error
+    // listener on the grid); data-full is cleared after the swap so a failing
+    // full image cannot loop.
+    const thumbFallback = it.thumbPath && it.src ? ` data-full="${escapeHtml(it.src)}"` : '';
     const dims = Number(it.width) > 0 && Number(it.height) > 0
         ? ` width="${Number(it.width)}" height="${Number(it.height)}"`
         : '';
@@ -263,7 +274,7 @@ function card(it, i) {
             <button class="uris-card-btn" data-act="saveRef" title="Сохранить как референс" aria-label="Сохранить как референс"><i class="fa-solid fa-bookmark"></i></button>
             <button class="uris-card-btn" data-act="del" title="Удалить" aria-label="Удалить"><i class="fa-solid fa-trash"></i></button>`;
     return `<div class="uris-card${favOn ? ' uris-card-fav' : ''}" data-id="${escapeHtml(it.id || '')}" data-idx="${i}"${it.cardless ? ' data-cardless="1"' : ''}>
-        <button type="button" class="uris-card-img" data-act="view" title="Просмотр" aria-label="Просмотр"><img src="${escapeHtml(src)}" alt="" loading="lazy" decoding="async"${dims}>${favBadge}${modelBadge}${badge}</button>
+        <button type="button" class="uris-card-img" data-act="view" title="Просмотр" aria-label="Просмотр"><img src="${escapeHtml(src)}" alt="" loading="lazy" decoding="async"${dims}${thumbFallback}>${favBadge}${modelBadge}${badge}</button>
         <div class="uris-card-actions">${it.cardless ? cardlessActions : fullActions}
         </div>
     </div>`;
