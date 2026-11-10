@@ -8,6 +8,7 @@ import { serialize } from './serialize.js';
 import { isCorsProxyAvailable, isCorsOrNetworkError } from './proxy.js';
 import { deliveryHintFor, noteProbe } from './delivery-evidence.js';
 import { materializeImageResult, getCharacterImageFolder, makeThumbnailForPath } from './native-image-storage.js';
+import { protectStoredFile } from './user-files-storage.js';
 import { addCard, updateCard } from './gallery-index.js';
 import { getTemplate } from './prompt-templates.js';
 import { providerError, assertApiKeyForContract } from './providers/image-base.js';
@@ -407,6 +408,12 @@ export async function generateImageRequest(imageConnId, request, onStatus, signa
             sourceMsgId: snapshot.sourceMsgId,
             status: 'ready',
         });
+        // The full image lives in user/images (ST's native gallery reads it
+        // there), a directory the maid's image scan has no message reference
+        // for — register it so the settings-based attachment registry (the
+        // same one #collectFiles honors) keeps it out of the orphan report.
+        // Thumbnails self-register through uploadNamedUserFile.
+        protectStoredFile(galleryEntry.imagePath || imagePath);
         await updatePendingBrowserRequest(request.requestId, { status: 'ready', error: null, cardId: galleryEntry.id, imagePath });
         recordDiagnosticEvent({ event: 'gallery-write', stage: 'stage2', requestId: request.requestId, outcome: 'ready', details: { galleryId: galleryEntry.id } });
         flushDiagnosticEvents();

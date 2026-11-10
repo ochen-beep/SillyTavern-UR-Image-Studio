@@ -218,6 +218,74 @@ test('ensureOwnedFilesRegistered covers every owned store file name', withSt(asy
     assert.equal(ensureOwnedFilesRegistered(), 0); // idempotent
 }));
 
+test('protectStoredFile accepts both path shapes, rejects foreign ones', withSt(async () => {
+    stubST({});
+    const { protectStoredFile, listProtectedUserFiles } = await import('../src/user-files-storage.js');
+    assert.equal(protectStoredFile('user/files/uris_ref_a.png'), true);
+    assert.equal(protectStoredFile('user/images/Seraphina/uris_abc.jpg'), true);
+    assert.equal(protectStoredFile('user/images/Seraphina/uris_abc.jpg'), true); // дубликат
+    assert.equal(protectStoredFile('etc/passwd'), false);
+    assert.equal(protectStoredFile('user/images/a/b/c.png'), false); // вложенность не канонична
+    assert.deepEqual(listProtectedUserFiles().map(e => e.url).sort(), [
+        'user/files/uris_ref_a.png',
+        'user/images/Seraphina/uris_abc.jpg',
+    ]);
+}));
+
+test('ensureStoredBinariesRegistered covers records and adopts uris_* orphans', withSt(async () => {
+    stubST({});
+    const calls = [];
+    const deps = {
+        refs: async () => [{ id: 'r1', imagePath: 'user/files/uris_ref_a.jpeg', thumbPath: null }],
+        cards: async () => [{ id: 'c1', imagePath: 'user/images/Seraphina/uris_abc.jpg', thumbPath: 'user/files/uris_thumb_abc.webp' }],
+        listFolder: async (folder) => {
+            calls.push(folder);
+            if (folder === 'Seraphina') return [
+                'user/images/Seraphina/uris_abc.jpg',
+                'user/images/Seraphina/uris_orphan.jpg',
+                'user/images/Seraphina/manual_upload.jpg',
+            ];
+            return [];
+        },
+    };
+    const { ensureStoredBinariesRegistered } = await import('../src/data-care.js');
+    const { listProtectedUserFiles } = await import('../src/user-files-storage.js');
+    const added = await ensureStoredBinariesRegistered(deps);
+    assert.equal(added, 4);
+    const urls = listProtectedUserFiles().map(e => e.url).sort();
+    assert.deepEqual(urls, [
+        'user/files/uris_ref_a.jpeg',
+        'user/files/uris_thumb_abc.webp',
+        'user/images/Seraphina/uris_abc.jpg',
+        'user/images/Seraphina/uris_orphan.jpg',
+    ]);
+    // Чужие имена (без uris_) не заявляются; свои папки сканируются всегда.
+    assert.ok(calls.includes('UR Image Studio') && calls.includes('URIS_Thumbs') && calls.includes('URIS_Refs'), calls.join(','));
+    assert.equal(await ensureStoredBinariesRegistered(deps), 0); // идемпотентно
+}));
+
+test('ensureStoredBinariesRegistered survives a failing folder list', withSt(async () => {
+    stubST({});
+    const deps = {
+        refs: async () => [],
+        cards: async () => [{ id: 'c1', imagePath: 'user/images/Seraphina/uris_abc.jpg', thumbPath: null }],
+        listFolder: async (folder) => { if (folder === 'URIS_Refs') throw new Error('gone'); return []; },
+    };
+    const { ensureStoredBinariesRegistered } = await import('../src/data-care.js');
+    const { listProtectedUserFiles } = await import('../src/user-files-storage.js');
+    assert.equal(await ensureStoredBinariesRegistered(deps), 1);
+    assert.deepEqual(listProtectedUserFiles().map(e => e.url), ['user/images/Seraphina/uris_abc.jpg']);
+}));
+
+test('deleteStoredServerFile lifts protection for image paths too', withSt(async () => {
+    stubST({});
+    globalThis.fetch = async () => ({ ok: true, status: 200 });
+    const { protectStoredFile, deleteStoredServerFile, listProtectedUserFiles } = await import('../src/user-files-storage.js');
+    protectStoredFile('user/images/Seraphina/uris_abc.jpg');
+    assert.equal(await deleteStoredServerFile('user/images/Seraphina/uris_abc.jpg'), true);
+    assert.deepEqual(listProtectedUserFiles(), []);
+}));
+
 test('cleanAllData clears the shield registry', withSt(async () => {
     stubST({});
     const fileServer = makeUserFileServer({

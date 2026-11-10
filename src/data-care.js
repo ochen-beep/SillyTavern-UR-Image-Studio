@@ -8,13 +8,14 @@
  */
 import { getCtx } from './core.js';
 import { listNativeImages, THUMBNAIL_FOLDER } from './native-image-storage.js';
-import { canonicalizeNativeImagePath, canonicalizeStoredPath } from './native-image-path.js';
+import { canonicalizeNativeImagePath, canonicalizeStoredPath, NATIVE_IMAGE_FOLDER } from './native-image-path.js';
 import { listRefs } from './refs-library.js';
 import { listCards } from './gallery-index.js';
 import { listFileStores, suspendAllStoresForClean } from './file-store.js';
-import { unprotectUserFile, clearProtectedRegistry, syncProtectedRegistry, listProtectedUserFiles, deleteStoredServerFile } from './user-files-storage.js';
+import { unprotectUserFile, clearProtectedRegistry, syncProtectedRegistry, listProtectedUserFiles, deleteStoredServerFile, protectStoredFile } from './user-files-storage.js';
 
 const REFS_FOLDER = 'URIS_Refs';
+const LEGACY_STUDIO_FOLDER = 'UR Image Studio';
 
 /** ST-relative paths that live records still point at. */
 async function referencedPaths(deps) {
@@ -98,6 +99,52 @@ async function deleteUserFile(name) {
  */
 export function ensureOwnedFilesRegistered() {
     return syncProtectedRegistry(ownedFileNames());
+}
+
+/**
+ * Register every URIS-owned binary in the shield registry: the paths live
+ * records point at (gallery images, thumbnails, references) plus uris_*-named
+ * files found in the URIS-managed image folders — orphans are adopted before
+ * any maid scan can see them (the gallery view still shows them cardless and
+ * creates a card lazily on interaction). Foreign files (no uris_ prefix,
+ * manual uploads) are never claimed. Network: one /api/images/list per
+ * scanned folder. Idempotent.
+ * @param {{refs?:Function, cards?:Function, listFolder?:Function}} [deps] - injection for tests
+ * @returns {Promise<number>} how many paths were newly registered
+ */
+export async function ensureStoredBinariesRegistered(deps = {}) {
+    const listFolder = deps.listFolder || ((folder) => listNativeImages({ folder }));
+    const used = await referencedPaths(deps);
+
+    const known = new Set(listProtectedUserFiles().map(e => e.url));
+    let added = 0;
+    // Records are authoritative: protect their paths first, even if every
+    // folder listing below fails.
+    for (const p of used) {
+        if (known.has(p)) continue;
+        if (protectStoredFile(p)) { known.add(p); added++; }
+    }
+
+    // Every folder URIS ever wrote to: the dedicated/legacy folders plus any
+    // character folder a stored path lives in (canonical paths carry the
+    // encoded segment — decode for the list call).
+    const folders = new Set([NATIVE_IMAGE_FOLDER, THUMBNAIL_FOLDER, REFS_FOLDER]);
+    for (const p of used) {
+        const m = /^user\/images\/([^/]+)\//.exec(p);
+        if (m) folders.add(decodeURIComponent(m[1]));
+    }
+
+    for (const folder of folders) {
+        let names;
+        try { names = await listFolder(folder); } catch { continue; }
+        for (const p of names) {
+            if (!/\/uris_[^/]*$/.test(p)) continue;
+            const canonical = canonicalizeStoredPath(p) || p;
+            if (known.has(canonical)) continue;
+            if (protectStoredFile(canonical)) { known.add(canonical); added++; }
+        }
+    }
+    return added;
 }
 
 /** Named stores plus the corrupt side files a repair may have parked. */

@@ -17,7 +17,7 @@
  * else leave a stale entry that only this registry's own readers ever see.
  */
 import { getCtx, saveSettings } from './core.js';
-import { canonicalizeUserFilePath, canonicalizeNativeImagePath } from './native-image-path.js';
+import { canonicalizeUserFilePath, canonicalizeNativeImagePath, canonicalizeStoredPath } from './native-image-path.js';
 
 const PROTECTED_KEY = 'URIS Storage';
 
@@ -45,6 +45,28 @@ function persistRegistry() {
 /** Register a user/files URL as URIS-owned so Data Maid treats it as known. */
 export function protectUserFile(url) {
     const canonical = canonicalizeUserFilePath(url);
+    if (!canonical) return false;
+    const map = attachmentsMap();
+    if (!map) return false;
+    const list = Array.isArray(map[PROTECTED_KEY]) ? map[PROTECTED_KEY] : (map[PROTECTED_KEY] = []);
+    if (!list.some(e => e?.url === canonical)) {
+        list.push({ name: canonical.split('/').pop(), url: canonical });
+        persistRegistry();
+    }
+    return true;
+}
+
+/**
+ * Register any URIS-owned server file by path shape: user/files (store
+ * documents, binaries) or user/images (gallery images, thumbnails under their
+ * legacy folders). Same registry as protectUserFile — the maid's file scan
+ * reads it natively, the images scan after the local/upstream consistency
+ * patch mirrors the same block into #collectImages.
+ * @param {string} path
+ * @returns {boolean} false for foreign/broken shapes
+ */
+export function protectStoredFile(path) {
+    const canonical = canonicalizeStoredPath(path);
     if (!canonical) return false;
     const map = attachmentsMap();
     if (!map) return false;
@@ -146,11 +168,27 @@ export async function deleteStoredServerFile(path, deps = {}) {
             ...(deps.signal ? { signal: deps.signal } : {}),
         });
         if (response.ok || response.status === 404) {
-            if (filePath) unprotectUserFile(filePath);
+            // Both shapes lift protection: a stale entry pointing at a deleted
+            // file would otherwise accumulate forever in the registry.
+            unprotectStoredFile(filePath || imagePath);
             return true;
         }
         return false;
     } catch {
         return false;
     }
+}
+
+/** Drop any registered URIS-owned path (either shape) from the registry. */
+export function unprotectStoredFile(path) {
+    const canonical = canonicalizeStoredPath(path);
+    if (!canonical) return false;
+    const map = attachmentsMap();
+    const list = Array.isArray(map?.[PROTECTED_KEY]) ? map[PROTECTED_KEY] : null;
+    if (!list) return false;
+    const next = list.filter(e => e?.url !== canonical);
+    if (next.length === list.length) return false;
+    map[PROTECTED_KEY] = next;
+    persistRegistry();
+    return true;
 }
