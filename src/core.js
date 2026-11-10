@@ -232,6 +232,8 @@ export const defaultSettings = Object.freeze({
                                // пока юзер явно не включит тумблер, чужие расширения генерировать не могут
                                // (старые сейвы без поля остаются включёнными — семантика !== false).
     bridgeTab: false,          // show the experimental "Мост" lab tab in the floating window
+    bridgeAutoRefs: true,      // bridge lab prompt→refs auto-resolver on by default, global for all chats;
+                               // off stays off once the user disables it (strict boolean, !== false)
     experimentalTemplateFromDescription: false,
     followLastPost: true,      // Generation tab navigator follows the last post
     maxRetries: 0,
@@ -453,6 +455,9 @@ export function loadSettings() {
     s.notifyStage1 = s.notifyStage1 === true;
     s.notifyStage2 = s.notifyStage2 !== false;
     s.notifyOnlyUnfocused = s.notifyOnlyUnfocused !== false;
+    // Bridge lab auto-resolver defaults to enabled (saves without the key get
+    // it on) and keeps the user's explicit off.
+    s.bridgeAutoRefs = s.bridgeAutoRefs !== false;
     if (!Object.hasOwn(NOTIFY_SOUNDS, s.notifyStage1Sound)) s.notifyStage1Sound = NOTIFY_DEFAULTS.stage1Sound;
     if (!Object.hasOwn(NOTIFY_SOUNDS, s.notifyStage2Sound)) s.notifyStage2Sound = NOTIFY_DEFAULTS.stage2Sound;
     const notifyVolume = normalizeNotifyVolume(s.notifyVolume);
