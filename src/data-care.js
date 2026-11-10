@@ -12,7 +12,7 @@ import { canonicalizeNativeImagePath, canonicalizeStoredPath, NATIVE_IMAGE_FOLDE
 import { listRefs } from './refs-library.js';
 import { listCards } from './gallery-index.js';
 import { listFileStores, suspendAllStoresForClean } from './file-store.js';
-import { unprotectUserFile, clearProtectedRegistry, syncProtectedRegistry, listProtectedUserFiles, deleteStoredServerFile, protectStoredFile } from './user-files-storage.js';
+import { unprotectUserFile, clearProtectedRegistry, syncProtectedRegistry, listProtectedUserFiles, deleteStoredServerFile, protectStoredFile, purgeStoredFileRegistry } from './user-files-storage.js';
 
 const REFS_FOLDER = 'URIS_Refs';
 const LEGACY_STUDIO_FOLDER = 'UR Image Studio';
@@ -114,6 +114,10 @@ export function ensureOwnedFilesRegistered() {
  */
 export async function ensureStoredBinariesRegistered(deps = {}) {
     const listFolder = deps.listFolder || ((folder) => listNativeImages({ folder }));
+    // The registry briefly shipped with percent-encoded user/images entries
+    // the maid can never match against real file-system names — drop them;
+    // the decoded forms are re-registered below.
+    purgeStoredFileRegistry(url => url.startsWith('user/images/') && /%[0-9a-f]{2}/i.test(url));
     const used = await referencedPaths(deps);
 
     const known = new Set(listProtectedUserFiles().map(e => e.url));

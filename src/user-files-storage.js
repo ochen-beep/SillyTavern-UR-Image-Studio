@@ -57,6 +57,17 @@ export function protectUserFile(url) {
 }
 
 /**
+ * The maid compares registry urls against real file-system names: canonical
+ * paths are percent-encoded, so user/images entries are stored decoded
+ * (`user/images/Stas Roehr/…`, not `Stas%20Roehr`). user/files names are
+ * upload-validated ASCII — decode is a no-op there.
+ */
+function fsShapedUrl(canonical) {
+    if (!canonical.startsWith('user/images/')) return canonical;
+    try { return decodeURIComponent(canonical); } catch { return canonical; }
+}
+
+/**
  * Register any URIS-owned server file by path shape: user/files (store
  * documents, binaries) or user/images (gallery images, thumbnails under their
  * legacy folders). Same registry as protectUserFile — the maid's file scan
@@ -68,11 +79,12 @@ export function protectUserFile(url) {
 export function protectStoredFile(path) {
     const canonical = canonicalizeStoredPath(path);
     if (!canonical) return false;
+    const url = fsShapedUrl(canonical);
     const map = attachmentsMap();
     if (!map) return false;
     const list = Array.isArray(map[PROTECTED_KEY]) ? map[PROTECTED_KEY] : (map[PROTECTED_KEY] = []);
-    if (!list.some(e => e?.url === canonical)) {
-        list.push({ name: canonical.split('/').pop(), url: canonical });
+    if (!list.some(e => e?.url === url)) {
+        list.push({ name: url.split('/').pop(), url });
         persistRegistry();
     }
     return true;
@@ -181,7 +193,7 @@ export async function deleteStoredServerFile(path, deps = {}) {
 
 /** Drop any registered URIS-owned path (either shape) from the registry. */
 export function unprotectStoredFile(path) {
-    const canonical = canonicalizeStoredPath(path);
+    const canonical = fsShapedUrl(canonicalizeStoredPath(path) || '');
     if (!canonical) return false;
     const map = attachmentsMap();
     const list = Array.isArray(map?.[PROTECTED_KEY]) ? map[PROTECTED_KEY] : null;
@@ -191,4 +203,22 @@ export function unprotectStoredFile(path) {
     map[PROTECTED_KEY] = next;
     persistRegistry();
     return true;
+}
+
+/**
+ * Remove every registry entry whose url matches the predicate (one pass, one
+ * persist). Used to rebuild derived sections — e.g. the first decoded-images
+ * sweep dropping the percent-encoded batch the registry shipped with.
+ * @param {(url: string) => boolean} predicate
+ * @returns {number} removed count
+ */
+export function purgeStoredFileRegistry(predicate) {
+    const map = attachmentsMap();
+    const list = Array.isArray(map?.[PROTECTED_KEY]) ? map[PROTECTED_KEY] : null;
+    if (!list || typeof predicate !== 'function') return 0;
+    const next = list.filter(e => !predicate(String(e?.url || '')));
+    if (next.length === list.length) return 0;
+    map[PROTECTED_KEY] = next;
+    persistRegistry();
+    return list.length - next.length;
 }
