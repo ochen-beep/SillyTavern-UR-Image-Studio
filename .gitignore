@@ -5,6 +5,7 @@ node_modules/
 
 # AI agent workspace data
 .zcode/
+.zcodeignore
 
 # project docs (kept local, not part of the extension)
 docs/
