@@ -537,6 +537,50 @@ export async function sweepStaleRunningDrafts({ now = Date.now, ttlMs = DRAFT_TT
 }
 
 /**
+ * Adopt the parent chat's drafts into a freshly created branch/checkpoint.
+ *
+ * ST merges the parent's chatMetadata into the new chat file (uris_binding /
+ * uris_inline inherit), but drafts live in localforage keyed by
+ * (chatId, msgId) — a branch would otherwise open with no prompts, statuses
+ * or per-post settings. A draft is copied only when the branch does not own
+ * that key yet (branch edits always win) and only when the branch's message
+ * at the same msgId still matches the parent's messageHash (posts that
+ * diverged after the branch point self-discard through the same hash guard
+ * at read time anyway — the pre-check just avoids writing garbage).
+ *
+ * Best-effort: individual read/write failures skip that key. Returns the
+ * number of adopted drafts.
+ *
+ * @param {{parentChatId:string|null, chatId:string, chat?:Array<{mes?:string}>}} input
+ * @returns {Promise<number>}
+ */
+export async function adoptParentDrafts({ parentChatId, chatId, chat }) {
+    if (!parentChatId || !chatId || parentChatId === chatId) return 0;
+    const lf = SillyTavern.libs.localforage;
+    if (!lf?.keys) return 0;
+    let all;
+    try { all = await lf.keys(); } catch { return 0; }
+    const parentPrefix = `${LF_GENERATION_DRAFT_PREFIX}${encodeURIComponent(parentChatId)}:`;
+    const branchPrefix = `${LF_GENERATION_DRAFT_PREFIX}${encodeURIComponent(chatId)}:`;
+    const branchKeys = new Set(all.filter(k => typeof k === 'string' && k.startsWith(branchPrefix)));
+    let adopted = 0;
+    for (const key of all) {
+        if (typeof key !== 'string' || !key.startsWith(parentPrefix)) continue;
+        const msgId = Number(key.slice(parentPrefix.length));
+        if (!Number.isInteger(msgId) || msgId < 0) continue;
+        if (branchKeys.has(`${branchPrefix}${msgId}`)) continue;
+        let draft;
+        try { draft = await lf.getItem(key); } catch { continue; }
+        if (!draft || typeof draft !== 'object') continue;
+        const messageText = chat?.[msgId]?.mes;
+        if (typeof messageText !== 'string') continue;
+        if (draft.messageHash !== hashMessage(messageText)) continue;
+        try { await saveGenerationDraft({ ...draft, chatId }); adopted++; } catch { /* skip */ }
+    }
+    return adopted;
+}
+
+/**
  * Serialize the ordinary persisted draft without retaining reference payloads.
  * The in-flight Stage 2 snapshot passed to the server is never modified.
  *

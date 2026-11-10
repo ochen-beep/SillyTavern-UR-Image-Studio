@@ -358,3 +358,54 @@ test('live params overlay: успешная запись стирает совп
     const after = await drafts.getGenerationDraft('chat-live', 3, TEXT);
     assert.equal(after.aspectRatio, '16:9', 'диск догнал UI — источник правды черновик');
 });
+
+// ── Branch/checkpoint draft adoption ──
+
+test('adoptParentDrafts copies matching drafts and rewrites chatId', async () => {
+    const parent = 'chat-parent', branch = 'chat-parent - Branch #1';
+    const draft = drafts.createGenerationDraft(parent, 3, 'hello scene');
+    await lfMock.setItem(drafts.generationDraftKey(parent, 3), draft);
+    const chat = [{ mes: 'a' }, { mes: 'b' }, { mes: 'c' }, { mes: 'hello scene' }];
+    const adopted = await drafts.adoptParentDrafts({ parentChatId: parent, chatId: branch, chat });
+    assert.equal(adopted, 1);
+    const copied = await lfMock.getItem(drafts.generationDraftKey(branch, 3));
+    assert.equal(copied.chatId, branch);
+    assert.equal(copied.msgId, 3);
+    assert.equal(copied.messageHash, draft.messageHash);
+    // The parent's own draft is untouched.
+    const original = await lfMock.getItem(drafts.generationDraftKey(parent, 3));
+    assert.equal(original.chatId, parent);
+});
+
+test('adoptParentDrafts skips posts that diverged after the branch point', async () => {
+    const parent = 'chat-parent', branch = 'chat-parent - Branch #1';
+    await lfMock.setItem(drafts.generationDraftKey(parent, 1), drafts.createGenerationDraft(parent, 1, 'old text'));
+    const adopted = await drafts.adoptParentDrafts({ parentChatId: parent, chatId: branch, chat: [{ mes: 'x' }, { mes: 'new text' }] });
+    assert.equal(adopted, 0);
+    assert.equal(await lfMock.getItem(drafts.generationDraftKey(branch, 1)), null);
+});
+
+test('adoptParentDrafts skips msgIds the branch chat does not have', async () => {
+    const parent = 'chat-parent', branch = 'chat-parent - Branch #1';
+    await lfMock.setItem(drafts.generationDraftKey(parent, 5), drafts.createGenerationDraft(parent, 5, 'post five'));
+    const adopted = await drafts.adoptParentDrafts({ parentChatId: parent, chatId: branch, chat: [{ mes: 'post five' }] });
+    assert.equal(adopted, 0);
+});
+
+test('adoptParentDrafts never overwrites a draft the branch already owns', async () => {
+    const parent = 'chat-parent', branch = 'chat-parent - Branch #1';
+    const TEXT = 'same post';
+    const parentDraft = { ...drafts.createGenerationDraft(parent, 0, TEXT), prompt: 'parent prompt' };
+    const branchDraft = { ...drafts.createGenerationDraft(branch, 0, TEXT), prompt: 'branch prompt' };
+    await lfMock.setItem(drafts.generationDraftKey(parent, 0), parentDraft);
+    await lfMock.setItem(drafts.generationDraftKey(branch, 0), branchDraft);
+    const adopted = await drafts.adoptParentDrafts({ parentChatId: parent, chatId: branch, chat: [{ mes: TEXT }] });
+    assert.equal(adopted, 0);
+    assert.equal((await lfMock.getItem(drafts.generationDraftKey(branch, 0))).prompt, 'branch prompt');
+});
+
+test('adoptParentDrafts is a no-op without a distinct parent', async () => {
+    assert.equal(await drafts.adoptParentDrafts({ parentChatId: null, chatId: 'c', chat: [] }), 0);
+    assert.equal(await drafts.adoptParentDrafts({ parentChatId: 'c', chatId: 'c', chat: [] }), 0);
+    assert.equal(lfMock._calls.length, 0);
+});

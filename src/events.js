@@ -11,6 +11,7 @@ import { state, getCtx, log, warn, error } from './core.js';
 import { recordDiagnosticEvent, hashDiagnosticId } from './diagnostic-events.js';
 import { loadChatConfig, applyChatConfigToState } from './chat-binding.js';
 import { cancelForeignQueueItems } from './pipeline-queue.js';
+import { adoptParentDrafts } from './generation-drafts.js';
 // Same graph pipeline-queue already pulls in (no new startup modules): the
 // config snapshot is captured at trigger time, before the automation handler
 // pays a cold import — a chat switch inside that window must not rebrand the
@@ -44,6 +45,9 @@ let _autoParked = null;
 // pressed Stop ("Stop stops everything"). The next real trigger clears it —
 // new events keep working, the queue does not resume on its own.
 let _stopHold = false;
+// Session-scope set: chats where the inherited-automation notice was already
+// shown (branch/checkpoint opening with the parent's automationMode).
+const _branchNoticeShown = new Set();
 
 export function bindEvents(handlers) {
     const ctx = getCtx();
@@ -227,8 +231,33 @@ export function bindEvents(handlers) {
                     log('CHAT_CHANGED: stale chat config load ignored', token);
                     return;
                 }
+                const chatId = state.currentChatId;
+                // Branch/checkpoint: ST merges the parent's chatMetadata into the
+                // new chat file (uris_binding/uris_inline inherit), but drafts
+                // live in localforage keyed by chatId — adopt the parent's once
+                // so the branch opens with prompts and post statuses intact.
+                // The marker lives outside the binding: normalizeChatBinding
+                // drops unknown fields, so a flag inside uris_binding would be
+                // wiped by the next config save.
+                const md = getCtx().chatMetadata;
+                const parentChatId = (md && typeof md === 'object' && typeof md.main_chat === 'string') ? md.main_chat : null;
+                if (parentChatId && !md.uris_branch && chatId) {
+                    let adopted = 0;
+                    try { adopted = await adoptParentDrafts({ parentChatId, chatId, chat: getCtx().chat }); } catch { /* best-effort */ }
+                    if (token === _chatLoadToken) {
+                        md.uris_branch = { adoptedFrom: parentChatId, adoptedDrafts: adopted };
+                        try { getCtx().saveMetadata?.(); } catch { /* non-critical */ }
+                    }
+                }
                 applyChatConfigToState(cfg);
                 _chatConfigReady = true;
+                // Money automation must not follow into a branch silently: the
+                // mode was inherited from the parent, not chosen for this chat.
+                if (parentChatId && chatId && state.chatAutomationMode && state.chatAutomationMode !== 'manual'
+                    && !_branchNoticeShown.has(chatId)) {
+                    _branchNoticeShown.add(chatId);
+                    toastr?.info(`Ветка унаследовала автоматику «${state.chatAutomationMode}» от родительского чата.`);
+                }
                 window.dispatchEvent(new CustomEvent('uris:chat-changed'));
             } catch (e) {
                 error('CHAT_CHANGED: load/apply config:', e.message);
