@@ -7,7 +7,7 @@
  * (The headless Stage-1 lab was removed — buildPrompt stays available through
  * the bridge API and its tests.)
  */
-import { state, escapeHtml, DISPLAY_NAME, error } from '../core.js';
+import { state, escapeHtml, DISPLAY_NAME, error, saveSettings } from '../core.js';
 import { getBridge } from '../bridge.js';
 import { VALID_ASPECT_RATIOS } from '../core.js';
 import { reportFailure, URIS_SCOPES } from '../error-pool.js';
@@ -16,9 +16,9 @@ import { reportFailure, URIS_SCOPES } from '../error-pool.js';
 const _lab = {
     caller: 'bridge-test',
     statusText: 'Статус: неизвестен.',
-    // Generation lab
+    // Generation lab (autoRefs lives in state.settings.bridgeAutoRefs —
+    // persisted, global for all chats)
     prompt: '',
-    autoRefs: false,
     refIds: new Set(),
     aspect: '1:1',
     connectionId: '',
@@ -64,7 +64,8 @@ export function render(root) {
                     <label for="urisLabPrompt">Промпт для картинки</label>
                     <textarea class="text_pole" id="urisLabPrompt" rows="3">${escapeHtml(_lab.prompt)}</textarea>
                 </div>
-                <label class="checkbox_label"><input type="checkbox" id="urisLabAutoRefs" ${_lab.autoRefs ? 'checked' : ''}><span>Авто-подбор референсов по промпту (резолвер Stage 2)</span></label>
+                <label class="checkbox_label"><input type="checkbox" id="urisLabAutoRefs" ${state.settings.bridgeAutoRefs !== false ? 'checked' : ''}><span>Авто-подбор референсов по промпту (резолвер Stage 2)</span></label>
+                <small class="uris-hint">Включён по умолчанию во всех чатах и сохраняется между сессиями; вручную отмеченные референсы пула имеют приоритет над авто-подбором.</small>
                 <div class="uris-field">
                     <label>Референсы из пула URIS</label>
                     <div id="urisLabRefs" class="uris-lab-box uris-lab-refs">
@@ -197,7 +198,10 @@ function bindLab(root) {
     wireBridgeEventsOnce();
     root.querySelector('#urisLabRefresh')?.addEventListener('click', () => refreshLabData(root));
     root.querySelector('#urisLabPrompt')?.addEventListener('input', e => { _lab.prompt = e.target.value; });
-    root.querySelector('#urisLabAutoRefs')?.addEventListener('change', e => { _lab.autoRefs = e.target.checked === true; });
+    root.querySelector('#urisLabAutoRefs')?.addEventListener('change', e => {
+        state.settings.bridgeAutoRefs = e.target.checked === true;
+        saveSettings();
+    });
     root.querySelector('#urisLabAspect')?.addEventListener('change', e => { _lab.aspect = e.target.value; });
     root.querySelector('#urisLabConn')?.addEventListener('change', e => { _lab.connectionId = e.target.value; });
     root.querySelector('#urisLabCaller')?.addEventListener('input', e => { _lab.caller = e.target.value; });
@@ -265,7 +269,7 @@ function bindLab(root) {
                     aspectRatio: _lab.aspect,
                     connectionId: _lab.connectionId || undefined,
                     references,
-                    useSceneRefs: _lab.autoRefs,
+                    useSceneRefs: state.settings.bridgeAutoRefs !== false,
                 },
                 { caller: _lab.caller.trim() || 'bridge-test', signal: ctl.signal, onStatus: s => labOut(root, s) },
             );
