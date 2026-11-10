@@ -150,6 +150,14 @@ async function init() {
     // network-free; a missing extensionSettings is a no-op inside.
     try { ensureOwnedFilesRegistered(); } catch (e) { warn('registry sync:', e?.message || e); }
 
+    // Data Maid shield for binaries: register every URIS-owned image/thumbnail/
+    // reference path (records + uris_* orphans) BEFORE the legacy migration so
+    // even not-yet-copied files are out of the maid report from the first load.
+    void import('./src/data-care.js')
+        .then(m => m.ensureStoredBinariesRegistered())
+        .then(added => { if (added > 0) log(`shield: registered ${added} stored binaries`); })
+        .catch(e => warn('shield reconcile:', e?.message || e));
+
     // One-shot: legacy user/images binaries (refs/thumbs) → protected
     // user/files. Fire-and-forget; idempotent, failure-safe (keeps old paths).
     void import('./src/binaries-migration.js')
