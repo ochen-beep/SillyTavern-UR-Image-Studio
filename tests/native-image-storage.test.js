@@ -89,6 +89,19 @@ test('lists only safe native image paths from ST filenames', async () => {
     ]);
 });
 
+test('gallery listing requests newest-first order (server default is asc)', async () => {
+    const calls = [];
+    globalThis.fetch = async (url, options) => {
+        calls.push({ url, body: JSON.parse(options.body) });
+        return { ok: true, json: async () => [] };
+    };
+    const { listNativeImages } = await import('../src/native-image-storage.js');
+    await listNativeImages({ folder: 'Seraphina' });
+    assert.equal(calls[0].body.folder, 'Seraphina');
+    assert.equal(calls[0].body.sortField, 'date');
+    assert.equal(calls[0].body.sortOrder, 'desc');
+});
+
 test('materializes a URL result through downloadResult before native upload', async () => {
     const calls = [];
     globalThis.fetch = async (url, options) => {
