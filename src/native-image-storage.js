@@ -107,7 +107,10 @@ export async function listNativeImages({ signal, folder } = {}) {
     let response;
     try {
         response = await fetch('/api/images/list', {
-            method: 'POST', headers: headers(), body: JSON.stringify({ folder: targetFolder }),
+            method: 'POST', headers: headers(),
+            // Server default is mtime ASC (oldest first) and the gallery grid
+            // renders the listing order as-is — ask for newest first explicitly.
+            body: JSON.stringify({ folder: targetFolder, sortField: 'date', sortOrder: 'desc' }),
             ...(signal === undefined ? {} : { signal }),
         });
     } catch (cause) {
