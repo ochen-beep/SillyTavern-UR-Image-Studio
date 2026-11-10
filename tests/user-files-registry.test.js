@@ -232,6 +232,22 @@ test('protectStoredFile accepts both path shapes, rejects foreign ones', withSt(
     ]);
 }));
 
+test('protectStoredFile stores FS-shaped urls for encoded folders (maid matches real names)', withSt(async () => {
+    stubST({});
+    const { protectStoredFile, unprotectStoredFile, listProtectedUserFiles } = await import('../src/user-files-storage.js');
+    // Каноническая форма процент-энкодит пробелы и не-ASCII: реестр хранит
+    // декодированное написание — ровно то, с чем сервер сверяет readdir.
+    assert.equal(protectStoredFile('user/images/Stas%20Roehr/uris_x.jpg'), true);
+    assert.equal(protectStoredFile('user/images/Mads%20S%C3%B8rensen/uris_y.jpg'), true);
+    assert.deepEqual(listProtectedUserFiles().map(e => e.url).sort(), [
+        'user/images/Mads Sørensen/uris_y.jpg',
+        'user/images/Stas Roehr/uris_x.jpg',
+    ]);
+    // Снятие по канонической форме находит декодированную запись.
+    assert.equal(unprotectStoredFile('user/images/Stas%20Roehr/uris_x.jpg'), true);
+    assert.deepEqual(listProtectedUserFiles().map(e => e.url), ['user/images/Mads Sørensen/uris_y.jpg']);
+}));
+
 test('ensureStoredBinariesRegistered covers records and adopts uris_* orphans', withSt(async () => {
     stubST({});
     const calls = [];
@@ -262,6 +278,27 @@ test('ensureStoredBinariesRegistered covers records and adopts uris_* orphans', 
     // Чужие имена (без uris_) не заявляются; свои папки сканируются всегда.
     assert.ok(calls.includes('UR Image Studio') && calls.includes('URIS_Thumbs') && calls.includes('URIS_Refs'), calls.join(','));
     assert.equal(await ensureStoredBinariesRegistered(deps), 0); // идемпотентно
+}));
+
+test('ensureStoredBinariesRegistered purges the encoded batch and re-registers decoded', withSt(async () => {
+    const extensionSettings = {};
+    stubST(extensionSettings);
+    const deps = {
+        refs: async () => [],
+        cards: async () => [{ id: 'c1', imagePath: 'user/images/Stas%20Roehr/uris_new.jpg', thumbPath: null }],
+        listFolder: async () => [],
+    };
+    const { ensureStoredBinariesRegistered } = await import('../src/data-care.js');
+    const { listProtectedUserFiles } = await import('../src/user-files-storage.js');
+    // Устаревшая энкодед-запись первого релиза щита — сеется руками: новый
+    // protectStoredFile декодирует сразу.
+    extensionSettings.character_attachments = {
+        'URIS Storage': [{ name: 'uris_old.jpg', url: 'user/images/Stas%20Roehr/uris_old.jpg' }],
+    };
+    const added = await ensureStoredBinariesRegistered(deps);
+    assert.equal(added, 1);
+    const urls = listProtectedUserFiles().map(e => e.url);
+    assert.deepEqual(urls, ['user/images/Stas Roehr/uris_new.jpg']); // энкодед вычищен, декодированная на месте
 }));
 
 test('ensureStoredBinariesRegistered survives a failing folder list', withSt(async () => {
