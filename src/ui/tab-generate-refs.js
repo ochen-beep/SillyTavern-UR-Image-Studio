@@ -14,7 +14,7 @@ import { getConnection, isServerOwnedConnection, saveConnection } from '../conne
 import { effectiveReferenceCap } from '../reference-limits.js';
 import { resolveDispatchPlan, referenceEncoding } from '../dispatch-plan.js';
 import { reportFailure, URIS_SCOPES } from '../error-pool.js';
-import { getChatRefs, saveChatRefs, listFolders, listRefs, getRefSync } from '../refs-library.js';
+import { getChatRefs, saveChatRefs, setChatPinnedRef, withPinnedRefs, listFolders, listRefs, getRefSync } from '../refs-library.js';
 import { showPoolPicker } from './tab-references.js';
 import { openFolderSheet } from './folder-picker.js';
 import { openCardActionMenu, bindCardContextMenu } from './card-action-menu.js';
@@ -116,11 +116,16 @@ export function resolveConnectionReferencePolicy(conn) {
  * @param {Array<{id:string,name:string,imagePath:string}>} refs
  * @returns {string}
  */
-export function renderReferencePreviewMarkup(refs) {
+export function renderReferencePreviewMarkup(refs, pinnedIds = []) {
     if (!refs.length) return '';
+    const pinned = new Set(pinnedIds);
     return refs.map(ref => {
+        const pinBadge = pinned.has(ref.id)
+            ? '<i class="fa-solid fa-thumbtack uris-ref-pin-badge" title="Всегда отправляется в генерацию"></i>'
+            : '';
         return `<div class="uris-ref-chip-preview" data-ref-id="${escapeHtml(ref.id)}" title="${escapeHtml(ref.name || '')}">` +
             `<img src="${escapeHtml(ref.imagePath || '')}" alt="${escapeHtml(ref.name || '')}">` +
+            pinBadge +
             `<button class="uris-effective-ref-remove" title="Убрать из генерации" aria-label="Убрать из генерации"><i class="fa-solid fa-xmark"></i></button>` +
             `</div>`;
     }).join('');
@@ -177,7 +182,7 @@ export async function resolveDraftPromptReferences(chatId, draft) {
     return await resolvePromptReferenceContext({
         prompt: draft.prompt,
         candidates,
-        corrections: draft.references || { includedIds: [], excludedIds: [], revision: 0 },
+        corrections: withPinnedRefs(draft.references || { includedIds: [], excludedIds: [], revision: 0 }),
     });
 }
 
@@ -303,14 +308,19 @@ async function renderWhitelistChips(root, chatRefs) {
     const byId = new Map(refs.map(ref => [ref.id, ref]));
     const selectedFolderIds = chatRefs.folderIds || [];
     const displayedIds = new Set();
+    const pinnedIds = new Set(chatRefs.pinnedIds || []);
     const renderChip = (ref, direct = false) => {
         if (!ref) return '';
         const aliasTitle = ref.aliases?.length ? ref.aliases.join(', ') : 'Без aliases: только ручное добавление';
+        const pinBadge = pinnedIds.has(ref.id)
+            ? '<i class="fa-solid fa-thumbtack uris-ref-pin-badge" title="Всегда отправляется в генерацию"></i>'
+            : '';
         const remove = direct
             ? '<button class="uris-extra-del" title="Убрать карточку из whitelist" aria-label="Убрать"><i class="fa-solid fa-xmark"></i></button>'
             : '';
         return `<span class="uris-extra-chip" data-ref-id="${escapeHtml(ref.id)}" title="${escapeHtml(aliasTitle)}">
             <img src="${escapeHtml(ref.imagePath)}" alt="${escapeHtml(ref.name)}">
+            ${pinBadge}
             <span class="uris-extra-name">${escapeHtml(ref.name)}</span>
             ${remove}
         </span>`;
@@ -367,6 +377,9 @@ async function renderWhitelistChips(root, chatRefs) {
             if (!refId) return;
             const current = getChatRefs().referenceIds;
             saveChatRefs({ referenceIds: current.filter(id => id !== refId) });
+            // Unpin with the whitelist removal, or a later re-add would
+            // silently resurrect the always-attach behavior.
+            setChatPinnedRef(refId, false);
             await refreshReferencePanel(root, await resolveCurrentRootReferences(root));
         });
     });
@@ -389,6 +402,7 @@ async function renderWhitelistChips(root, chatRefs) {
         if (!refId) return;
         bindCardContextMenu(chip, ({ x, y }) => {
             const ref = getRefSync(refId);
+            const isPinned = getChatRefs().pinnedIds.includes(refId);
             openCardActionMenu({
                 title: ref?.name || chip.title || '',
                 x, y,
@@ -397,6 +411,17 @@ async function renderWhitelistChips(root, chatRefs) {
                         onSelect: () => { void applyReferenceCorrection(root, refId, true); } },
                     { id: 'exclude', icon: 'fa-ban', label: 'Исключить', danger: true,
                         onSelect: () => { void applyReferenceCorrection(root, refId, false); } },
+                    isPinned
+                        ? { id: 'unpin', icon: 'fa-thumbtack', label: 'Открепить',
+                            onSelect: async () => {
+                                setChatPinnedRef(refId, false);
+                                await refreshReferencePanel(root, await resolveCurrentRootReferences(root));
+                            } }
+                        : { id: 'pin', icon: 'fa-thumbtack', label: 'Всегда отправлять в генерацию',
+                            onSelect: async () => {
+                                setChatPinnedRef(refId, true);
+                                await refreshReferencePanel(root, await resolveCurrentRootReferences(root));
+                            } },
                 ],
             });
         });
@@ -540,7 +565,7 @@ export async function renderLivePreview(root, referenceResolution) {
     const policy = await safeReferencePolicy();
     const panelState = buildReferencePanelState(refs, policy);
     const capLabel = `<div class="uris-refs-stage2-cap">Выбрано для генерации  ·  ${panelState.unsupported ? escapeHtml(panelState.message) : `${panelState.count}/${panelState.max === null ? 'без заявленного лимита' : panelState.max}${policy.encoding ? ` · ${escapeHtml(policy.encoding)}` : ''}`}</div>`;
-    const chips = renderReferencePreviewMarkup(refs);
+    const chips = renderReferencePreviewMarkup(refs, getChatRefs().pinnedIds);
     const promptText = root.querySelector('#urisPrompt')?.value?.trim() || '';
     const isEmpty = refs.length === 0 && panelState.canAdd && promptText.length > 0;
     const addTitle = isEmpty ? 'Добавить референс (промпт никого не упомянул)' : 'Добавить референс в генерацию';

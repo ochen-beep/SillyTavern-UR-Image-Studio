@@ -38,6 +38,7 @@ const DEFAULT_SCHEMA_V5 = Object.freeze({
     refs: Object.freeze({
         referenceIds: [],
         folderIds: [],
+        pinnedIds: [],
     }),
 });
 

@@ -306,6 +306,9 @@ export const DEFAULT_CHAT_CONFIG_ENVELOPE = Object.freeze({
     refs: Object.freeze({
         referenceIds: [],
         folderIds: [],
+        // Pinned refs ride every generation of this chat without a prompt
+        // mention (see withPinnedRefs in refs-library.js).
+        pinnedIds: [],
     }),
 });
 

@@ -89,7 +89,7 @@ test('loadChatConfig on the welcome screen returns the default v5 envelope', asy
     const cfg = await loadChatConfig();
     assert.equal(cfg.schemaVersion, 5);
     assert.equal(cfg.config.templateId, null);
-    assert.deepEqual(cfg.refs, { referenceIds: [], folderIds: [] });
+    assert.deepEqual(cfg.refs, { referenceIds: [], folderIds: [], pinnedIds: [] });
 });
 
 test('patchChatConfig on the welcome screen persists into uris_studio.json and survives a reload', async () => {
@@ -136,7 +136,7 @@ test('saveChatRefs/getChatRefs on the welcome screen roundtrip through the studi
     resetStudioStoreForTests();
     await ensureStudioStoreReady();
     await chatBinding.loadChatConfig(); // probe-and-read entry point used by the UI
-    assert.deepEqual(refs.getChatRefs(), { referenceIds: ['r2', 'r1'], folderIds: ['f1'] });
+    assert.deepEqual(refs.getChatRefs(), { referenceIds: ['r2', 'r1'], folderIds: ['f1'], pinnedIds: [] });
 });
 
 test('studio refs binding preserves the surrounding config envelope', async () => {

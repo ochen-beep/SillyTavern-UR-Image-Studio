@@ -709,9 +709,11 @@ export function getChatRefs() {
     }
     const referenceIds = binding.refs.referenceIds;
     const folderIds = binding.refs.folderIds;
+    const pinnedIds = binding.refs.pinnedIds;
     return {
         referenceIds: Array.isArray(referenceIds) ? uniqueStrings(referenceIds.map(String)) : [],
         folderIds: Array.isArray(folderIds) ? uniqueStrings(folderIds.map(String)) : [],
+        pinnedIds: Array.isArray(pinnedIds) ? uniqueStrings(pinnedIds.map(String)) : [],
     };
 }
 
@@ -743,6 +745,7 @@ export function saveChatRefs(patch) {
     binding.refs = {
         referenceIds: uniqueStrings(Array.isArray(merged.referenceIds) ? merged.referenceIds.map(String) : []),
         folderIds: uniqueStrings(Array.isArray(merged.folderIds) ? merged.folderIds.map(String) : []),
+        pinnedIds: uniqueStrings(Array.isArray(merged.pinnedIds) ? merged.pinnedIds.map(String) : []),
     };
     try { ctx.saveMetadata?.(); } catch { /* non-critical */ }
     log('Chat refs updated', binding.refs);
@@ -765,10 +768,38 @@ function saveStudioChatRefs(patch) {
     binding.refs = {
         referenceIds: uniqueStrings(Array.isArray(merged.referenceIds) ? merged.referenceIds.map(String) : []),
         folderIds: uniqueStrings(Array.isArray(merged.folderIds) ? merged.folderIds.map(String) : []),
+        pinnedIds: uniqueStrings(Array.isArray(merged.pinnedIds) ? merged.pinnedIds.map(String) : []),
     };
     saveStudioBinding(binding);
     log('Chat refs updated (studio)', binding.refs);
     return binding.refs;
+}
+
+/** Toggle one pinned ref in the chat binding. Pinned refs are attached to
+ *  every generation of this chat without a prompt mention. */
+export function setChatPinnedRef(refId, pinned) {
+    const current = getChatRefs().pinnedIds;
+    const next = pinned === true
+        ? [...current.filter(id => id !== refId), refId]
+        : current.filter(id => id !== refId);
+    saveChatRefs({ pinnedIds: next });
+    return next;
+}
+
+/**
+ * Merge the chat's pinned refs into Stage 2 resolver corrections: they are
+ * force-included without a prompt mention. An explicit exclude still wins —
+ * the resolver checks excludedIds before includedIds.
+ * @param {{includedIds?:string[],excludedIds?:string[],revision?:number}} [corrections]
+ * @returns {{includedIds:string[],excludedIds?:string[],revision?:number}}
+ */
+export function withPinnedRefs(corrections = {}) {
+    const pinnedIds = getChatRefs().pinnedIds;
+    if (!pinnedIds.length) return corrections || {};
+    return {
+        ...corrections,
+        includedIds: [...new Set([...(corrections?.includedIds || []), ...pinnedIds])],
+    };
 }
 
 // ── Pool cache (§2.6) ──

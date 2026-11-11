@@ -29,6 +29,7 @@ import { randomToken } from '../random.js';
 import { resolveChatConfigSnapshot, buildCandidates } from '../pipeline-config.js';
 import { resolvePromptReferenceContext } from '../scene-context.js';
 import { imageToDataUrl } from '../references.js';
+import { withPinnedRefs } from '../refs-library.js';
 import { composeReferencePrompt } from '../reference-binding.js';
 import { generateImageRequest } from '../image-api.js';
 import { recordDiagnosticEvent } from '../diagnostic-events.js';
@@ -207,7 +208,7 @@ export async function processJob({ msgId, idx, type, desc }, operation = null) {
             const candidates = await buildCandidates(state.currentChatId || 'current');
             const resolution = await resolvePromptReferenceContext({
                 prompt: plan.prompt, candidates,
-                corrections: { includedIds: [], excludedIds: [], revision: 0 },
+                corrections: withPinnedRefs({ includedIds: [], excludedIds: [], revision: 0 }),
             });
             for (const r of resolution.stage2Refs || []) {
                 if (r.bindingMode === 'description') {

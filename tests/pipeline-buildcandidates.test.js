@@ -137,6 +137,35 @@ test('buildCandidates: missing referenceIds are ignored', async () => {
     assert.deepEqual(await buildCandidates('test-chat'), []);
 });
 
+test('pinned refs attach without a prompt mention; an explicit exclude wins', async () => {
+    const { createRef, saveChatRefs, withPinnedRefs } = await import('../src/refs-library.js');
+    const { buildCandidates } = await import('../src/pipeline.js');
+    const { resolvePromptReferenceContext } = await import('../src/scene-context.js');
+    const pinned = await createRef({ name: 'Пин', aliases: [], imagePath: '/x/pin.png' });
+    const other = await createRef({ name: 'Маша', aliases: [], imagePath: '/x/masha.png' });
+    await saveChatRefs({ referenceIds: [pinned.id, other.id], pinnedIds: [pinned.id] });
+
+    const candidates = await buildCandidates('test-chat');
+    // The prompt mentions only Маша; the pinned ref rides along unmentioned.
+    const resolution = await resolvePromptReferenceContext({
+        prompt: 'Маша на пляже',
+        candidates,
+        corrections: withPinnedRefs({ includedIds: [], excludedIds: [], revision: 0 }),
+    });
+    assert.deepEqual(resolution.stage2Refs.map(ref => ref.id), [pinned.id, other.id]);
+
+    // An explicit exclude beats the pin (✕ in the preview wins over «всегда»).
+    const excluded = await resolvePromptReferenceContext({
+        prompt: 'Маша на пляже',
+        candidates,
+        corrections: withPinnedRefs({ includedIds: [], excludedIds: [pinned.id], revision: 1 }),
+    });
+    assert.deepEqual(excluded.stage2Refs.map(ref => ref.id), [other.id]);
+
+    // Cleanup: later whitelist patches merge, a stale pin would leak into them.
+    await saveChatRefs({ pinnedIds: [] });
+});
+
 test('buildCandidates expands {{char}}/{{user}} macros in name and aliases', async () => {
     const { createRef, saveChatRefs } = await import('../src/refs-library.js');
     const { buildCandidates } = await import('../src/pipeline.js');

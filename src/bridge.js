@@ -44,7 +44,7 @@ import { buildSceneContextSnapshot, resolvePromptReferenceContext } from './scen
 import { imageToDataUrl } from './references.js';
 import { composeReferencePrompt } from './reference-binding.js';
 import { generatePromptText } from './text-api.js';
-import { listRefs } from './refs-library.js';
+import { listRefs, withPinnedRefs } from './refs-library.js';
 import { enqueueAutoLane, enqueueBridgeTextLane } from './autolane.js';
 import { parseInline } from './inline/grammar.js';
 import { buildAliasIndex, resolveProfile, sanitizeTriggerList, buildInlinePrompt, DEFAULT_TRIGGERS } from './inline/triggers.js';
@@ -517,7 +517,7 @@ async function generateOnce(caller, requestId, norm, controller, onStatus) {
             const resolution = await resolvePromptReferenceContext({
                 prompt: basePrompt,
                 candidates,
-                corrections: { includedIds: [], excludedIds: [], revision: 0 },
+                corrections: withPinnedRefs({ includedIds: [], excludedIds: [], revision: 0 }),
             });
             for (const r of resolution.stage2Refs || []) {
                 if (r.bindingMode === 'description') {

@@ -22,6 +22,7 @@ import {
 } from './generation-drafts.js';
 import { resolvePromptReferenceContext } from './scene-context.js';
 import { materializeStage2References, summarizeReference } from './references.js';
+import { withPinnedRefs } from './refs-library.js';
 import { resolveChatConfigSnapshot, resolveActivePresets, buildCandidates } from './pipeline-config.js';
 import { resolveConnection } from './connections.js';
 import { recordReferenceEvidence } from './connection-evidence.js';
@@ -240,7 +241,7 @@ export async function runStage2ForDraft(input, onStatus = () => {}, signal, opts
         const referenceResolution = await resolvePromptReferenceContext({
             prompt: draft.prompt,
             candidates,
-            corrections: submission.references || { includedIds: [], excludedIds: [], revision: 0 },
+            corrections: withPinnedRefs(submission.references || { includedIds: [], excludedIds: [], revision: 0 }),
         });
 
         const { imageConnId: resolvedImageConnId } = await resolveActivePresets(snapshot);

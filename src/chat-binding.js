@@ -109,6 +109,7 @@ export function normalizeChatBinding(binding) {
         refs: {
             referenceIds: normalizeStringArray(refs.referenceIds),
             folderIds: normalizeStringArray(refs.folderIds),
+            pinnedIds: normalizeStringArray(refs.pinnedIds),
         },
     };
 }
