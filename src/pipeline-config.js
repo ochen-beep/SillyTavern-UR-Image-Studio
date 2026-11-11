@@ -149,7 +149,10 @@ export async function buildCandidates(chatId) {
     for (const ref of [...directRefs, ...folderRefs]) {
         if (!ref || seen.has(ref.id)) continue;
         seen.add(ref.id);
-        candidates.push(expandMacros(normalizeSceneEntity(ref)));
+        candidates.push(expandMacros(normalizeSceneEntity({
+            ...ref,
+            aliases: [ref.name, ...(Array.isArray(ref.aliases) ? ref.aliases : [])],
+        })));
     }
     return candidates;
 }

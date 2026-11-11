@@ -59,6 +59,10 @@ test('bridge: request normalization applies defaults', () => {
         useSceneRefs: false,
         expandMacros: true,
     });
+    // Explicit useSceneRefs always wins over the caller-supplied default.
+    assert.equal(normalizeBridgeRequest({ prompt: 'p' }, true).useSceneRefs, true);
+    assert.equal(normalizeBridgeRequest({ prompt: 'p', useSceneRefs: false }, true).useSceneRefs, false);
+    assert.equal(normalizeBridgeRequest({ prompt: 'p', useSceneRefs: true }, false).useSceneRefs, true);
 });
 
 test('bridge: pool references carry refId without a payload', () => {
@@ -261,6 +265,92 @@ test('bridge: unknown connectionId → coded NO_CONNECTION (never a bare Error)'
     } finally {
         state.settings = savedSettings;
         if (savedST === undefined) delete globalThis.SillyTavern; else globalThis.SillyTavern = savedST;
+        deactivateBridge();
+    }
+});
+
+test('bridge: implicit chat connection dispatches the chat model override', async () => {
+    const { state } = await import('../src/core.js');
+    const { mockFetch, installStGlobals } = await import('./_helpers.js');
+    const savedSettings = state.settings;
+    const savedST = globalThis.SillyTavern;
+    const savedWindow = globalThis.window;
+    const savedCustomEvent = globalThis.CustomEvent;
+
+    const lfStore = new Map();
+    const extensionSettings = { ur_image_studio: { imageConnections: { schemaVersion: 1, connections: [], catalogs: {}, galleryIndex: [], templates: [], presets: [], refs: [], folders: [], selectedRouteId: null } } };
+    const chatMetadata = {};
+    installStGlobals();
+    globalThis.SillyTavern.libs.localforage = {
+        getItem: async (k) => (lfStore.has(k) ? lfStore.get(k) : null),
+        setItem: async (k, v) => { lfStore.set(k, v); },
+        removeItem: async (k) => { lfStore.delete(k); },
+    };
+    globalThis.SillyTavern.getContext = () => ({
+        extensionSettings,
+        saveSettingsDebounced: () => {},
+        saveMetadata: () => {},
+        getRequestHeaders: () => ({}),
+        chat: [],
+        chatId: 'bridge-route-chat',
+        get chatMetadata() { return chatMetadata; },
+    });
+    globalThis.CustomEvent = class CustomEvent extends Event {
+        constructor(type, init) {
+            super(type, init);
+            this.detail = init?.detail;
+        }
+    };
+
+    const baseRoute = {
+        source: 'openai-models',
+        modelId: 'gpt-image-1',
+        generationContract: 'openai-images',
+        contractVersion: 1,
+        capabilities: { generate: 'supported', references: 'supported', edit: 'unknown', maxReferences: 5 },
+        transport: { bodyKind: 'json', proxyEligible: true, directCors: 'preferred' },
+    };
+    const bodies = [];
+    let restoreFetch = () => {};
+    const bridge = activateBridge();
+    try {
+        state.settings = { enabled: true, bridgeEnabled: true, bridgeAutoRefs: false };
+        const { createConnection } = await import('../src/connection-store.js');
+        await createConnection({
+            id: 'conn-route', kind: 'image', name: 'Route test',
+            endpoint: 'https://api.openai.test/v1', selectedRoute: baseRoute,
+        });
+        await lfStore.set('uris_api_key:conn-route', 'test-key');
+        // Chat binding: implicit connection + generationDefaults.modelId override.
+        const chatBinding = await import('../src/chat-binding.js');
+        const binding = await chatBinding.loadChatConfig();
+        await chatBinding.saveChatConfig({
+            ...binding,
+            config: {
+                ...binding.config,
+                imageProfileId: 'conn-route',
+                generationDefaults: { ...binding.config.generationDefaults, modelId: 'gpt-image-2' },
+            },
+        });
+
+        // Capture the paid request body, then stop — no provider round-trip needed.
+        restoreFetch = mockFetch((url, options) => {
+            if (String(url).endsWith('/images/generations')) {
+                bodies.push(JSON.parse(String(options?.body || '{}')));
+                return { ok: false, status: 400, json: async () => ({ error: { message: 'captured' } }) };
+            }
+            throw new Error(`unexpected ${url}`);
+        });
+        await assert.rejects(() => bridge.generate({ prompt: 'x' }, { caller: 'lab' }));
+        assert.equal(bodies.length, 1);
+        assert.equal(bodies[0].model, 'gpt-image-2',
+            'bridge must dispatch the chat generationDefaults.modelId, not the connection base model');
+    } finally {
+        restoreFetch();
+        state.settings = savedSettings;
+        if (savedST === undefined) delete globalThis.SillyTavern; else globalThis.SillyTavern = savedST;
+        if (savedWindow === undefined) delete globalThis.window; else globalThis.window = savedWindow;
+        if (savedCustomEvent === undefined) delete globalThis.CustomEvent; else globalThis.CustomEvent = savedCustomEvent;
         deactivateBridge();
     }
 });

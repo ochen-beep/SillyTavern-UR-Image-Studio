@@ -103,9 +103,10 @@ export function validateBridgeCaller(caller) {
 /**
  * Validate and normalize a bridge generate() request. Pure — unit-tested in node.
  * @param {unknown} request
+ * @param {boolean} [defaultUseSceneRefs=false]
  * @returns {{prompt:string, aspectRatio:string, imageSize:string, quality:string, references:Array<{id:string,name:string,dataUrl:string}>, connectionId:string|null, modelId:string|null, trigger:string|null}}
  */
-export function normalizeBridgeRequest(request) {
+export function normalizeBridgeRequest(request, defaultUseSceneRefs = false) {
     if (!request || typeof request !== 'object' || Array.isArray(request)) {
         throw bridgeError('INVALID_PARAMS', 'generate(request): request object is required');
     }
@@ -149,7 +150,7 @@ export function normalizeBridgeRequest(request) {
     const connectionId = typeof req.connectionId === 'string' && req.connectionId.trim() ? req.connectionId.trim() : null;
     const modelId = typeof req.modelId === 'string' && req.modelId.trim() ? req.modelId.trim() : null;
     const trigger = typeof req.trigger === 'string' && req.trigger.trim() ? req.trigger.trim() : null;
-    const useSceneRefs = req.useSceneRefs === true;
+    const useSceneRefs = req.useSceneRefs == null ? defaultUseSceneRefs : req.useSceneRefs === true;
     const expandMacros = req.expandMacros !== false;
     return { prompt, aspectRatio, imageSize, quality, references, connectionId, modelId, trigger, useSceneRefs, expandMacros };
 }
@@ -445,11 +446,11 @@ async function generateOnce(caller, requestId, norm, controller, onStatus) {
         },
     });
     try {
+        let snapshot = null;
         let connId = norm.connectionId;
         if (!connId) {
             // Default: whatever the current RP chat has configured (same source
             // the Generate tab uses). No chat binding → explicit error.
-            let snapshot = null;
             try { snapshot = await resolveChatConfigSnapshot(); } catch { snapshot = null; }
             connId = snapshot?.imageProfileId || null;
         }
@@ -487,6 +488,8 @@ async function generateOnce(caller, requestId, norm, controller, onStatus) {
                 throw bridgeError('NO_ROUTE', `Model "${norm.modelId}" has no dispatchable route on connection ${connId}`);
             }
             dispatchOpts.route = plan.route;
+        } else if (snapshot?.imageRoute) {
+            dispatchOpts.route = snapshot.imageRoute;
         }
 
         // Reference pipeline: pool refs by id, then the Stage 2 scene resolver
@@ -600,7 +603,7 @@ async function generateOnce(caller, requestId, norm, controller, onStatus) {
  */
 async function generate(request, opts = {}) {
     const caller = validateBridgeCaller(opts && typeof opts === 'object' ? /** @type {Record<string, unknown>} */ (opts).caller : undefined);
-    const norm = normalizeBridgeRequest(request);
+    const norm = normalizeBridgeRequest(request, state.settings?.bridgeAutoRefs !== false);
     if (!isGenerationAllowed()) {
         throw bridgeError(isBridgeActive() ? 'EXT_DISABLED' : 'NOT_READY', 'URIS bridge is not accepting generations (extension disabled or not initialized)');
     }

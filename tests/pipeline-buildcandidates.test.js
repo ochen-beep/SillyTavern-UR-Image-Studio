@@ -74,10 +74,37 @@ test('buildCandidates: returns only pool records from referenceIds with stable i
     assert.deepEqual(candidates, [{
         id: rada.id,
         name: 'Пипа',
-        aliases: ['Rada', 'Рада'],
+        aliases: ['Пипа', 'Rada', 'Рада'],
         description: '',
         imagePath: '/x/rada.png',
     }]);
+});
+
+test('buildCandidates makes the exact pool name matchable, never a prefix', async () => {
+    const { createRef, saveChatRefs } = await import('../src/refs-library.js');
+    const { buildCandidates } = await import('../src/pipeline.js');
+    const { resolvePromptReferenceContext } = await import('../src/scene-context.js');
+    const kate = await createRef({ name: '[Kate]', aliases: [], imagePath: '/x/kate.png' });
+    await saveChatRefs({ referenceIds: [kate.id] });
+
+    const candidates = await buildCandidates('test-chat');
+    const corrections = { includedIds: [], excludedIds: [], revision: 0 };
+
+    // Bracketed display name matches the bracketed prompt token.
+    const byName = await resolvePromptReferenceContext({
+        prompt: 'reference subject [Kate] walking',
+        candidates,
+        corrections,
+    });
+    assert.deepEqual(byName.stage2Refs.map(ref => ref.id), [kate.id]);
+
+    // A different word sharing the prefix must not match (Katherine ≠ Kate).
+    const byPrefix = await resolvePromptReferenceContext({
+        prompt: 'reference subject [Katherine] walking',
+        candidates,
+        corrections,
+    });
+    assert.deepEqual(byPrefix.stage2Refs, []);
 });
 
 test('buildCandidates expands selected folders, preserves direct order, and deduplicates records', async () => {
