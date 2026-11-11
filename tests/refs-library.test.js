@@ -485,10 +485,10 @@ test('renameFolder preserves custom color', async () => {
     assert.equal(renamed.color, '#abcdef');
 });
 
-import { getChatRefs, saveChatRefs, defaultChatRefs, filterRefsByFolders } from '../src/refs-library.js';
+import { getChatRefs, saveChatRefs, defaultChatRefs, filterRefsByFolders, setChatPinnedRef, withPinnedRefs } from '../src/refs-library.js';
 
 test('defaultChatRefs contains unified pool whitelist', () => {
-    assert.deepEqual(defaultChatRefs(), { referenceIds: [], folderIds: [] });
+    assert.deepEqual(defaultChatRefs(), { referenceIds: [], folderIds: [], pinnedIds: [] });
 });
 
 test('getChatRefs returns default for chat without binding', () => {
@@ -503,7 +503,7 @@ test('saveChatRefs persists normalized referenceIds and preserves schema-v4 conf
     };
     await saveChatRefs({ referenceIds: [123, 'abc', '123'] });
     const meta = SillyTavern.getContext().chatMetadata[META_KEY];
-    assert.deepEqual(meta.refs, { referenceIds: ['123', 'abc'], folderIds: [] });
+    assert.deepEqual(meta.refs, { referenceIds: ['123', 'abc'], folderIds: [], pinnedIds: [] });
     assert.equal(meta.config.imageProfileId, 'x');
 });
 
@@ -525,7 +525,7 @@ test('saveChatRefs initializes schema-v5 binding with default config when absent
     const meta = _chatMetadata[META_KEY];
     assert.equal(meta.schemaVersion, 5);
     assert.deepEqual(meta.config, DEFAULT_CONFIG);
-    assert.deepEqual(meta.refs, { referenceIds: ['ref-1'], folderIds: [] });
+    assert.deepEqual(meta.refs, { referenceIds: ['ref-1'], folderIds: [], pinnedIds: [] });
 });
 
 test('saveChatRefs preserves existing schema-v5 config and schemaVersion', async () => {
@@ -547,7 +547,7 @@ test('saveChatRefs preserves existing schema-v5 config and schemaVersion', async
     assert.equal(meta.config.automationMode, 'build-prompt');
     assert.equal(meta.config.generationFlow, 'user-only');
     assert.equal(Object.hasOwn(meta.config, 'characterIds'), false);
-    assert.deepEqual(meta.refs, { referenceIds: ['ref-2'], folderIds: [] });
+    assert.deepEqual(meta.refs, { referenceIds: ['ref-2'], folderIds: [], pinnedIds: [] });
 });
 
 test('getChatRefs reads refs from a schema-v4 binding without config interference', () => {
@@ -561,6 +561,7 @@ test('getChatRefs reads refs from a schema-v4 binding without config interferenc
     assert.deepEqual(getChatRefs(), {
         referenceIds: ['ref-1'],
         folderIds: [],
+        pinnedIds: [],
     });
 });
 
@@ -578,6 +579,32 @@ test('saveChatRefs ignores a non-schema-v4 binding without writing metadata', ()
 
     assert.deepEqual(saveChatRefs({ referenceIds: ['current-ref'] }), defaultChatRefs());
     assert.strictEqual(_chatMetadata[META_KEY], legacyBinding);
+});
+
+test('setChatPinnedRef toggles pinnedIds and withPinnedRefs merges them into corrections', async () => {
+    _chatMetadata[META_KEY] = {
+        schemaVersion: 5,
+        config: DEFAULT_CONFIG,
+        refs: {},
+    };
+
+    // No pins: the caller's corrections pass through untouched.
+    const corrections = { includedIds: ['r1'], excludedIds: ['r2'], revision: 1 };
+    assert.strictEqual(withPinnedRefs(corrections), corrections);
+
+    assert.deepEqual(setChatPinnedRef('r1', true), ['r1']);
+    assert.deepEqual(getChatRefs().pinnedIds, ['r1']);
+    setChatPinnedRef('r1', true);
+    assert.deepEqual(getChatRefs().pinnedIds, ['r1'], 're-pin is idempotent');
+    setChatPinnedRef('r1', false);
+    assert.deepEqual(getChatRefs().pinnedIds, []);
+
+    setChatPinnedRef('r2', true);
+    assert.deepEqual(withPinnedRefs().includedIds, ['r2']);
+    assert.deepEqual(
+        withPinnedRefs({ includedIds: ['r1'], revision: 3 }).includedIds,
+        ['r1', 'r2'],
+    );
 });
 
 test('filterRefsByFolders returns the union of selected folders', () => {

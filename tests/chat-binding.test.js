@@ -54,6 +54,7 @@ const DEFAULT_SCHEMA_V5 = Object.freeze({
     refs: Object.freeze({
         referenceIds: [],
         folderIds: [],
+        pinnedIds: [],
     }),
 });
 
@@ -100,7 +101,7 @@ test('normalizeChatBinding drops retired fields while preserving valid config an
     assert.equal(Object.hasOwn(normalized.config, 'characterIds'), false);
     assert.equal(Object.hasOwn(normalized.config, 'galleryMode'), false);
     assert.equal(Object.hasOwn(normalized.config, 'copyToStGallery'), false);
-    assert.deepEqual(normalized.refs, { ...input.refs, folderIds: [] });
+    assert.deepEqual(normalized.refs, { ...input.refs, folderIds: [], pinnedIds: [] });
 });
 
 test('loadChatConfig creates schema-v5 defaults for a new chat and persists to chat only', async () => {
@@ -179,6 +180,7 @@ test('patchChatConfig merges only requested config fields and preserves refs', a
     assert.deepEqual(meta.refs, {
         referenceIds: ['ref-1'],
         folderIds: [],
+        pinnedIds: [],
     });
 });
 
