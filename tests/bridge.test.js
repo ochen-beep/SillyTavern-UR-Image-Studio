@@ -355,6 +355,123 @@ test('bridge: implicit chat connection dispatches the chat model override', asyn
     }
 });
 
+test('bridge: gallery card stores the exact wire model and composed prompt', async () => {
+    const { state } = await import('../src/core.js');
+    const { mockFetch, installStGlobals } = await import('./_helpers.js');
+    const savedSettings = state.settings;
+    const savedST = globalThis.SillyTavern;
+    const savedWindow = globalThis.window;
+    const savedCustomEvent = globalThis.CustomEvent;
+
+    const lfStore = new Map();
+    const extensionSettings = { ur_image_studio: { imageConnections: { schemaVersion: 1, connections: [], catalogs: {}, galleryIndex: [], templates: [], presets: [], refs: [], folders: [], selectedRouteId: null } } };
+    const chatMetadata = {};
+    installStGlobals();
+    globalThis.SillyTavern.libs.localforage = {
+        getItem: async (k) => (lfStore.has(k) ? lfStore.get(k) : null),
+        setItem: async (k, v) => { lfStore.set(k, v); },
+        removeItem: async (k) => { lfStore.delete(k); },
+    };
+    globalThis.SillyTavern.getContext = () => ({
+        extensionSettings,
+        saveSettingsDebounced: () => {},
+        saveMetadata: () => {},
+        getRequestHeaders: () => ({}),
+        chat: [],
+        chatId: 'bridge-card-chat',
+        get chatMetadata() { return chatMetadata; },
+    });
+    globalThis.CustomEvent = class CustomEvent extends Event {
+        constructor(type, init) {
+            super(type, init);
+            this.detail = init?.detail;
+        }
+    };
+
+    const baseRoute = {
+        source: 'openai-models',
+        modelId: 'gpt-image-1',
+        generationContract: 'openai-images',
+        contractVersion: 1,
+        capabilities: { generate: 'supported', references: 'supported', edit: 'unknown', maxReferences: 5 },
+        transport: { bodyKind: 'json', proxyEligible: true, directCors: 'preferred' },
+    };
+    // Real 1x1 PNG so the materialization/dimension parsing runs the prod path.
+    const PNG_1PX = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==';
+    const bodies = [];
+    let uploads = 0;
+    let restoreFetch = () => {};
+    const bridge = activateBridge();
+    try {
+        state.settings = { enabled: true, bridgeEnabled: true };
+        const { createConnection } = await import('../src/connection-store.js');
+        await createConnection({
+            id: 'conn-card', kind: 'image', name: 'Card test',
+            endpoint: 'https://api.openai.test/v1', selectedRoute: baseRoute,
+        });
+        await lfStore.set('uris_api_key:conn-card', 'test-key');
+        const chatBinding = await import('../src/chat-binding.js');
+        const binding = await chatBinding.loadChatConfig();
+        await chatBinding.saveChatConfig({
+            ...binding,
+            config: {
+                ...binding.config,
+                imageProfileId: 'conn-card',
+                generationDefaults: { ...binding.config.generationDefaults, modelId: 'gpt-image-2' },
+            },
+        });
+        restoreFetch = mockFetch((url, options) => {
+            const u = String(url);
+            if (u.endsWith('/images/generations')) {
+                bodies.push(JSON.parse(String(options?.body || '{}')));
+                return { ok: true, json: async () => ({ data: [{ b64_json: PNG_1PX }] }) };
+            }
+            if (u.endsWith('/api/images/upload')) {
+                uploads += 1;
+                return { ok: true, json: async () => ({ path: `/user/images/URIS/uris_card_${uploads}.png` }) };
+            }
+            if (u.endsWith('/models')) return { ok: true, json: async () => ({ data: [] }) };
+            return { ok: true, json: async () => ({}) };
+        });
+
+        // 1. Implicit chat route: the card must name the chat model override,
+        // not the connection base model, and store the exact wire prompt.
+        const first = await bridge.generate({ prompt: 'a red cat' }, { caller: 'lab' });
+        assert.ok(first.cardId, 'generation produced a gallery card');
+        const { listCards } = await import('../src/gallery-index.js');
+        const card1 = (await listCards({ reconcile: false })).find(c => c.id === first.cardId);
+        assert.ok(card1, 'card is readable from the gallery index');
+        assert.equal(card1.modelId, 'gpt-image-2');
+        assert.equal(card1.prompt, 'a red cat');
+        assert.equal(bodies[0].model, card1.modelId, 'card model == wire model');
+        assert.equal(bodies[0].prompt, card1.prompt, 'card prompt == wire prompt');
+
+        // 2. Explicit modelId + a pinned description ref: the card prompt is
+        // the composed effective prompt, and the model is the requested one.
+        const { createRef, saveChatRefs } = await import('../src/refs-library.js');
+        const ref = await createRef({
+            name: 'Кот', aliases: [],
+            description: 'рыжий полосатый кот', bindingMode: 'description',
+            imagePath: '/x/cat.png',
+        });
+        await saveChatRefs({ referenceIds: [ref.id], pinnedIds: [ref.id] });
+        const second = await bridge.generate({ prompt: 'Кот сидит на окне', modelId: 'gpt-image-explicit' }, { caller: 'lab' });
+        const card2 = (await listCards({ reconcile: false })).find(c => c.id === second.cardId);
+        assert.ok(card2, 'second card is readable');
+        assert.equal(card2.modelId, 'gpt-image-explicit');
+        assert.ok(card2.prompt.includes('рыжий полосатый кот'), 'description ref composed into the card prompt');
+        assert.equal(bodies[1].model, card2.modelId, 'card model == wire model (explicit)');
+        assert.equal(bodies[1].prompt, card2.prompt, 'card prompt == composed wire prompt');
+    } finally {
+        restoreFetch();
+        state.settings = savedSettings;
+        if (savedST === undefined) delete globalThis.SillyTavern; else globalThis.SillyTavern = savedST;
+        if (savedWindow === undefined) delete globalThis.window; else globalThis.window = savedWindow;
+        if (savedCustomEvent === undefined) delete globalThis.CustomEvent; else globalThis.CustomEvent = savedCustomEvent;
+        deactivateBridge();
+    }
+});
+
 test('bridge: failed init rejects URIS.ready instead of hanging', async () => {
     const bridge = activateBridge();
     // Слушатель вешается ДО отказа: потребители из брифа делают await URIS.ready.
