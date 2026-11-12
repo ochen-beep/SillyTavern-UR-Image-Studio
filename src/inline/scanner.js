@@ -8,7 +8,7 @@ import { hashMessage } from '../generation-drafts.js';
 import { recordDiagnosticEvent } from '../diagnostic-events.js';
 import { parseInline } from './grammar.js';
 import { buildAliasIndex, sanitizeTriggerList, findAliasMatch } from './triggers.js';
-import { getSlot, upsertItem, getConfig, reconcileMessageSlots } from './store.js';
+import { getSlot, upsertItem, getConfig } from './store.js';
 import { planScan, queueInlineJob, cancelInlineJobs } from './runner.js';
 
 let _handlers = null;
@@ -81,7 +81,9 @@ export function bindScanner() {
         // cancel остаётся на CHAT_CHANGED и выгрузку расширения.
         swiped: (i) => { cancelInlineJobs(typeof i === 'number' ? i : null); return scanMessage(typeof i === 'number' ? i : getCtx().chat?.length - 1, { auto: false }); },
         edited: (i) => { cancelInlineJobs(typeof i === 'number' ? i : null); return scanMessage(typeof i === 'number' ? i : null, { auto: false }); },
-        deleted: () => reconcileMessageSlots(),
+        // Состояние item'ов живёт на объекте сообщения (extra.uris) — удаляется
+        // вместе с постом; rebind не нужен. Пишем диагностику для трейса.
+        deleted: (payload) => recordDiagnosticEvent({ event: 'inline-message-deleted', details: { payload: payload ?? null } }),
         chatChanged: () => { cancelInlineJobs(); try { window.dispatchEvent(new CustomEvent('uris:inline-update', {})); } catch { /* node */ } },
         userSent: (i) => {
             if (!inlineActive() || !getConfig().listenUser) return;
