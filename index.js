@@ -346,22 +346,27 @@ async function init() {
 
     // Launcher story-shells (manual inline items) render even with the inline
     // triggers off: reconcileVisible itself narrows to manual items then. The
-    // chat DOM may render after extension init, so poll until messages exist
-    // (capped) before the first pass; the render layer's own observer keeps
-    // shells alive afterwards.
+    // chat DOM may render after extension init (and chatMetadata fills right
+    // behind it), so reconcile runs on every poll tick for the first seconds;
+    // the render layer's own observer keeps shells alive afterwards. A failed
+    // module fetch here used to kill the layer silently for the whole page —
+    // the import retries instead of a single swallowed rejection.
     if (lockState !== 'busy') {
-        void import('./src/inline/render.js').then((m) => {
-            try { m.reconcileVisible(); } catch { /* первая проводка не критична */ }
-            let tries = 0;
+        void (async () => {
+            let m = null;
+            for (let attempt = 0; attempt < 3 && !m; attempt++) {
+                m = await import('./src/inline/render.js').catch(() => null);
+                if (!m && attempt < 2) await new Promise(res => setTimeout(res, 1000));
+            }
+            if (!m) return;
+            let ticks = 0;
             const iv = setInterval(() => {
-                tries += 1;
-                const ready = document.querySelector('.mes');
-                if (ready || tries >= 30) {
-                    clearInterval(iv);
-                    try { m.reconcileVisible(); } catch { /* не критично */ }
-                }
+                ticks += 1;
+                try { m.reconcileVisible(); } catch { /* проводка не критична */ }
+                if (ticks >= 30) clearInterval(iv);
             }, 500);
-        }).catch(() => {});
+            try { m.reconcileVisible(); } catch { /* первая проводка не критична */ }
+        })();
     }
 
     log('Initialized.');
