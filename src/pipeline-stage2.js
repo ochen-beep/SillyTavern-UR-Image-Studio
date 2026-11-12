@@ -28,6 +28,7 @@ import { resolveConnection } from './connections.js';
 import { recordReferenceEvidence } from './connection-evidence.js';
 import { playStageSound } from './notify.js';
 import { composeReferencePrompt } from './reference-binding.js';
+import { attachCard } from './inline/store.js';
 
 /**
  * Fire a Stage 2 lifecycle event for the UI (per-request Stop button toggle,
@@ -389,6 +390,7 @@ export async function runStage2ForDraft(input, onStatus = () => {}, signal, opts
             entry.warnings = result.warnings;
             entry.generationContext = genContext;
         }
+        attachEntryToCarousel(entry, input);
         return entry;
     } catch (e) {
         failure = e;
@@ -500,4 +502,67 @@ export async function runStage2(msgId, instruction, onStatus, signal, opts = {})
         signal,
         { ...opts, submission: instruction },
     );
+}
+
+// ── Attach-хук карусели (2026-11-13, spec §4.4) ──
+//
+// Единая воронка встроенных картинок: платная карточка с provenance текущего
+// чата приклеивается к uris-состоянию поста (cardIds). Через хук проходят
+// «Сгенерировать ещё»/«Перегенерировать» лайтбокса, пачечная очередь и
+// launcher-пайплайн (идемпотентно — launcher сам пишет ready-item).
+// Мост и инлайн-processJob сюда не попадают (свои пути, sourceMsgId null /
+// собственная запись). Посты без uris-состояния остаются чистыми: автоматика
+// не создаёт оболочек.
+
+/** Есть ли у поста uris-состояние (live или любой снапшот). */
+function hasUrisItems(msg) {
+    if (!msg || typeof msg !== 'object') return false;
+    if (Array.isArray(msg.extra?.uris?.items) && msg.extra.uris.items.length) return true;
+    if (!Array.isArray(msg.swipe_info)) return false;
+    return msg.swipe_info.some(snap => Array.isArray(snap?.extra?.uris?.items) && snap.extra.uris.items.length);
+}
+
+/** Текст варианта i по правилам ST (swipes[i] ?? mes текущего). */
+function variantTextAt(msg, i) {
+    const swipes = Array.isArray(msg.swipes) ? msg.swipes : null;
+    if (swipes && swipes[i] !== undefined) return String(swipes[i] ?? '');
+    const current = Number(msg.swipe_id ?? 0);
+    if (i === current) return String(msg.mes ?? '');
+    return null;
+}
+
+/**
+ * Приклеить результат Stage 2 к карусели поста. Ошибки хука не влияют на
+ * основной результат генерации.
+ * @param {object|null} entry галерейная карточка {id, imagePath, provenance}
+ * @param {{chatId?:string, msgId?:number, messageText?:string}} input вход Stage 2
+ */
+export function attachEntryToCarousel(entry, input = {}) {
+    try {
+        const id = entry?.id;
+        const prov = entry?.provenance || {};
+        if (!id || !Number.isInteger(prov.sourceMsgId)) return;
+        if (prov.chatId && prov.chatId !== getCtx()?.chatId) return;
+        if (input.chatId && input.chatId !== getCtx()?.chatId) return;
+        const msg = getCtx()?.chat?.[prov.sourceMsgId];
+        if (!msg || !hasUrisItems(msg)) return;
+        const digest = hashMessage(String(input.messageText ?? ''));
+        attachCard(prov.sourceMsgId, digest, id, String(entry.imagePath || ''));
+        reconcileVisibleSoon();
+    } catch { /* карусель не важнее результата генерации */ }
+}
+
+/** Реконсиляция после attach: lazy-import с ретраем (паттерн init-полла). */
+function reconcileVisibleSoon() {
+    void (async () => {
+        for (let attempt = 0; attempt < 2; attempt++) {
+            try {
+                const m = await import('./inline/render.js');
+                m.reconcileVisible();
+                return;
+            } catch {
+                if (attempt === 0) await new Promise(resolve => setTimeout(resolve, 1000));
+            }
+        }
+    })();
 }
