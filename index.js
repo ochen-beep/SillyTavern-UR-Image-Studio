@@ -344,6 +344,26 @@ async function init() {
         (await import('./src/ui/tab-media.js')).applyInlineRuntime();
     }
 
+    // Launcher story-shells (manual inline items) render even with the inline
+    // triggers off: reconcileVisible itself narrows to manual items then. The
+    // chat DOM may render after extension init, so poll until messages exist
+    // (capped) before the first pass; the render layer's own observer keeps
+    // shells alive afterwards.
+    if (lockState !== 'busy') {
+        void import('./src/inline/render.js').then((m) => {
+            try { m.reconcileVisible(); } catch { /* первая проводка не критична */ }
+            let tries = 0;
+            const iv = setInterval(() => {
+                tries += 1;
+                const ready = document.querySelector('.mes');
+                if (ready || tries >= 30) {
+                    clearInterval(iv);
+                    try { m.reconcileVisible(); } catch { /* не критично */ }
+                }
+            }, 500);
+        }).catch(() => {});
+    }
+
     log('Initialized.');
     performance.measure('uris:init', 'uris:init');
     // External bridge opens for business only after a fully successful init.
