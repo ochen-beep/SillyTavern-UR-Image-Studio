@@ -1,9 +1,9 @@
 // @ts-check
 /**
  * DOM-слой инлайна: оболочки в сообщениях (реконсиляция по data-uris-inl),
- * ручная 📷-кнопка в .mes_buttons, клик по готовой картинке → общий лайтбокс
- * по всем картинкам сообщения (showLightbox, с рабочими галерейными
- * действиями), реролл = замена (старая остаётся в галерее).
+ * клик по готовой картинке → общий лайтбокс по всем картинкам сообщения
+ * (showLightbox, с рабочими галерейными действиями), реролл = замена
+ * (старая остаётся в галерее).
  *
  * Позиция оболочки — сразу после абзаца, содержащего маркер (фото держится
  * у своей прозы); не нашли блок (plain-текст, markdown расщепил raw) — в
@@ -31,7 +31,6 @@ const DEBOUNCE_MS = 250;
 
 let _observer = null;
 let _onInlineEvent = null;
-let _onManual = null;
 let _reroll = null;
 let _debounceId = null;
 
@@ -63,10 +62,9 @@ export function resetCardLookupForTests() { _loadCards = null; }
 
 /** Подписка MutationObserver на #chat (debounce 250мс) + события uris:inline-*;
  * reroll сохраняется в модульную переменную (по умолчанию — автолейн). */
-export function initRender({ reroll, onManual } = {}) {
+export function initRender({ reroll } = {}) {
     if (typeof reroll === 'function') _reroll = reroll;
-    if (typeof onManual === 'function') _onManual = onManual;
-    if (_onInlineEvent) return; // слушатели уже стоят; reroll/onManual обновлены выше
+    if (_onInlineEvent) return; // слушатели уже стоят; reroll обновлён выше
     _onInlineEvent = () => { try { reconcileVisible(); } catch { /* рендер не роняет обработчик */ } };
     if (typeof window !== 'undefined' && typeof window.addEventListener === 'function') {
         window.addEventListener('uris:inline-update', _onInlineEvent);
@@ -76,10 +74,7 @@ export function initRender({ reroll, onManual } = {}) {
     try { reconcileVisible(); } catch { /* первая проводка не критична */ }
 }
 
-/** Отписка (выгрузка расширения) и выключение инлайна (applyInlineRuntime).
- * Обязана снимать и ручные 📷-кнопки: reconcile, который их ставит, при
- * выключенной функции не работает — без явной уборки кнопка оставалась бы
- * в чате мёртвым следом. */
+/** Отписка (выгрузка расширения) и выключение инлайна (applyInlineRuntime). */
 export function shutdownRender() {
     if (_observer) { try { _observer.disconnect(); } catch { /* уже снят */ } _observer = null; }
     if (_debounceId) { clearTimeout(_debounceId); _debounceId = null; }
@@ -89,19 +84,7 @@ export function shutdownRender() {
     }
     _onInlineEvent = null;
     _reroll = null;
-    _onManual = null;
     _expanded.clear();
-    removeManualButtons();
-}
-
-/** Снять все 📷-кнопки из чата. */
-function removeManualButtons() {
-    if (typeof document === 'undefined') return;
-    let scope = document;
-    try { scope = (typeof document.getElementById === 'function' && document.getElementById('chat')) || document; } catch { /* fake без getElementById */ }
-    let btns = [];
-    try { btns = Array.from(scope.querySelectorAll('[data-uris-manual]')); } catch { return; }
-    for (const btn of btns) removeNode(btn);
 }
 
 function ensureObserver() {
@@ -174,15 +157,12 @@ export function reconcileVisible({ only = null } = {}) {
         const markers = typeof mes === 'string' ? parseInline(mes) : [];
         let shellEls = [];
         try { shellEls = Array.from(mesEl.querySelectorAll(`[${SHELL_ATTR}]`)); } catch { shellEls = []; }
-        // 📷-кнопка нужна каждому AI-сообщению — до fast-path (chat передан,
-        // getCtx() на сообщение не зовётся; getSlot ниже не затрагивается).
-        ensureManualButton(mesEl, msgId, chat);
-        // Fast-path ДО getSlot: без маркеров и оболочек store не читаем — иначе
-        // каждый проход материализует uris_inline-скелет в chatMetadata чатов,
-        // где инлайн не использовался. Ручные оболочки несут data-uris-inl, так
-        // что shellEls покрывает все сообщения, которым нужны данные слота.
-        if (!markers.length && !shellEls.length) continue;
+        // getSlot — чистое чтение in-memory chatMetadata: материалы скелета
+        // здесь не материализуются. Фаст-путь пропускает пост, которому нечего
+        // показывать: ни маркеров, ни оболочек, ни ручных items (ляунчер-пайплайн
+        // пишет результат в store без маркеров в тексте).
         const items = getSlot(msgId).items;
+        if (!markers.length && !shellEls.length && !items.length) continue;
         const textEl = mesEl.querySelector('.mes_text');
         if (!textEl) continue;
         const existingKeys = new Set(shellEls.map(el => el.getAttribute(SHELL_ATTR)).filter(Boolean));
@@ -625,22 +605,26 @@ function removeNode(el) {
     } catch { /* узел уже снят */ }
 }
 
-/** Ручные оболочки (data-manual): pending → ready/error из store (аменда 1).
- * Осиротевший pending (requestId вне inFlight, грейс истёк) → error: ручная
- * генерация, убитая перезагрузкой, не должна крутить спиннер вечно.
- * Гард сходимости — как в marker-пути: тот же ключ и статус → узел уже
- * актуален, безгардовая replaceWith() создавала бы новый DOM-узел каждый
- * проход (чурн ~4 Гц через MutationObserver на error-оболочках). */
+/** Ручные оболочки (idx < 0 в store): монтирование новых и pending → ready/error
+ * из store. Источник ручных задач — лаунчер-действия (по посту без маркеров):
+ * pending пишется в store, оболочку ставит реконсиляция. Осиротевший pending
+ * (requestId вне inFlight, грейс истёк) → error: ручная генерация, убитая
+ * перезагрузкой, не должна крутить спиннер вечно. Гард сходимости — как в
+ * marker-пути: тот же ключ и статус → узел не пересоздаётся (чурн ~4 Гц через
+ * MutationObserver на error-оболочках). */
 function reconcileManualShells(mesEl, textEl, items, { inFlight = null, now = Date.now, grace = DEFAULT_GRACE } = {}) {
     if (!textEl) return;
-    let manualEls = [];
-    try { manualEls = Array.from(mesEl.querySelectorAll('[data-manual="1"]')); } catch { return; }
     const msgId = Number(mesEl.getAttribute('mesid'));
-    for (const el of manualEls) {
-        const key = el.getAttribute(SHELL_ATTR);
-        if (!key) continue;
-        const item = (items || []).find(i => itemKey(i) === key) || null;
-        if (!item) continue;
+    const byKey = new Map();
+    try {
+        for (const el of mesEl.querySelectorAll('[data-manual="1"]')) {
+            byKey.set(el.getAttribute(SHELL_ATTR), el);
+        }
+    } catch { return; }
+    for (const item of (items || [])) {
+        if (!item || Number(item.idx) >= 0 || !item.descHash) continue; // маркерные — не ручные
+        const key = itemKey(item);
+        const el = byKey.get(key) || null;
         let computedStatus = (item.status === 'ready' && !item.imagePath) ? 'error' : item.status;
         let orphaned = false;
         if (computedStatus === 'pending') {
@@ -648,22 +632,28 @@ function reconcileManualShells(mesEl, textEl, items, { inFlight = null, now = Da
             const fresh = (now() - (item.createdAt || 0)) < grace;
             if (!live && !fresh) { computedStatus = 'error'; orphaned = true; }
         }
-        if (computedStatus !== 'ready' && computedStatus !== 'error') continue; // живой/свежий pending — оболочка уже показана
-        if (el.getAttribute(SHELL_ATTR) === key && el.getAttribute(STATUS_ATTR) === computedStatus
+        // Живой/свежий pending: существующую оболочку не пересоздаём.
+        if (el && computedStatus === 'pending') continue;
+        if (computedStatus !== 'pending' && computedStatus !== 'ready' && computedStatus !== 'error') continue;
+        if (el && el.getAttribute(SHELL_ATTR) === key && el.getAttribute(STATUS_ATTR) === computedStatus
             && el.getAttribute(FORM_ATTR) === formFor(computedStatus, key)) continue;
-        const desc = el.getAttribute('data-uris-desc') || '';
+        const desc = el?.getAttribute('data-uris-desc') || item.desc || '';
         const entry = {
             msgId, idx: item.idx, type: item.type, desc, descHash: item.descHash,
             key, item, status: computedStatus, orphaned,
             marker: { raw: null },
         };
         const shell = shellFor(msgId, entry);
-        if (computedStatus !== 'ready') {
-            // error остаётся ручной оболочкой (retry кликом)
-            shell.setAttribute('data-manual', '1');
-            shell.setAttribute('data-uris-desc', desc);
+        shell.setAttribute('data-manual', '1');
+        shell.setAttribute('data-uris-desc', desc);
+        // Прямая замена/добавление: mountShell строит свой узел внутри, атрибуты
+        // data-manual/data-uris-desc на нём не удержать.
+        if (el && el.parentNode) {
+            try { el.replaceWith(shell); } catch { removeNode(el); textEl.appendChild(shell); }
+        } else {
+            textEl.appendChild(shell);
         }
-        try { el.replaceWith(shell); } catch { removeNode(el); }
+        byKey.set(key, shell);
     }
 }
 
@@ -705,82 +695,3 @@ function cancelPending(entry) {
     reconcileVisible();
 }
 
-// ── Ручная 📷-кнопка (меню дополнительных действий сообщения) ──
-
-/** Для каждого .mes[mesid] AI-сообщения с .mes_buttons, где ещё нет кнопки.
- * chat можно передать (реконсиляция уже зовёт getContext один раз на проход). */
-export function ensureManualButtons(rootEl, chat = null) {
-    if (typeof document === 'undefined') return;
-    const scope = rootEl || (typeof document.getElementById === 'function' && document.getElementById('chat')) || document;
-    let mesEls = [];
-    try { mesEls = Array.from(scope.querySelectorAll('.mes')); } catch { return; }
-    if (chat == null) {
-        try { chat = getCtx()?.chat || null; } catch { chat = null; }
-    }
-    for (const mesEl of mesEls) {
-        const msgId = mesEl.getAttribute('mesid');
-        if (msgId == null || msgId === '') continue;
-        ensureManualButton(mesEl, Number(msgId), chat);
-    }
-}
-
-function ensureManualButton(mesEl, msgId, chat) {
-    try {
-        let isUser = false;
-        try { isUser = !!chat?.[Number(msgId)]?.is_user; } catch { /* ST недоступен */ }
-        if (isUser) return;
-        const buttons = mesEl.querySelector('.mes_buttons');
-        if (!buttons || buttons.querySelector('[data-uris-manual]')) return;
-        const btn = document.createElement('div');
-        btn.classList.add('mes_button');
-        btn.classList.add('fa-solid');
-        btn.classList.add('fa-camera');
-        btn.setAttribute('data-uris-manual', String(msgId));
-        btn.setAttribute('title', 'URIS: нарисовать по сообщению');
-        btn.addEventListener('click', (ev) => {
-            try { ev?.stopPropagation?.(); } catch { /* fake-dom */ }
-            onManualClick(msgId, mesEl);
-        });
-        // Место кнопки — меню дополнительных действий ST (.extraMesButtons, как
-        // translate/REGULATE); на старых шаблонах без него — фолбэк в .mes_buttons.
-        const extra = buttons.querySelector('.extraMesButtons');
-        (extra || buttons).appendChild(btn);
-    } catch { /* кнопка не критична */ }
-}
-
-/** M1: reroll({msgId, idx:-1, type:'img', desc: первые 4000 символов}) +
- * ручная pending-оболочка (data-manual="1") в конец .mes_text. */
-function onManualClick(msgId, mesEl) {
-    let text = '';
-    try { text = String(getCtx()?.chat?.[Number(msgId)]?.mes || ''); } catch { /* ST недоступен */ }
-    const desc = text.slice(0, 4000);
-    if (typeof _onManual === 'function') {
-        try { _onManual({ msgId: Number(msgId), idx: -1, type: 'img', desc }); } catch (e) { startRerollErrorToast(e); }
-        return;
-    }
-    try {
-        const textEl = mesEl?.querySelector('.mes_text');
-        if (textEl) {
-            const entry = {
-                msgId: Number(msgId), idx: -1, type: 'img', desc,
-                descHash: stableHash(`img|${desc}`),
-                key: `-1|img|${stableHash(`img|${desc}`)}`,
-                status: 'pending', item: { requestId: null }, marker: { raw: null },
-            };
-            const shell = shellFor(entry.msgId, entry);
-            shell.setAttribute('data-manual', '1');
-            shell.setAttribute('data-uris-desc', desc);
-            const cur = textEl.querySelector(`[${SHELL_ATTR}="${entry.key}"]`);
-            if (cur && cur.parentNode) {
-                try { cur.replaceWith(shell); } catch { textEl.appendChild(shell); }
-            } else {
-                textEl.appendChild(shell);
-            }
-        }
-    } catch { /* DOM недоступен — job всё равно уйдёт */ }
-    startReroll({ msgId: Number(msgId), idx: -1, type: 'img', desc });
-}
-
-function startRerollErrorToast(e) {
-    try { toastr?.error(e?.message || e, 'URIS'); } catch { /* node */ }
-}
