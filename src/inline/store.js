@@ -47,7 +47,7 @@ export function getSlot(msgId) {
 }
 
 /** Белый список полей item'а — мусор из сырых данных не попадает в chatMetadata. */
-const FIELDS = new Set(['idx', 'type', 'descHash', 'desc', 'status', 'imagePath', 'cardId', 'requestId', 'error', 'createdAt', 'anchorHash']);
+const FIELDS = new Set(['idx', 'type', 'descHash', 'desc', 'status', 'imagePath', 'cardId', 'requestId', 'error', 'createdAt', 'anchorText']);
 
 /**
  * Вставить/обновить item по ключу (idx,type,descHash); опционально обновить

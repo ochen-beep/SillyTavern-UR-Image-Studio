@@ -62,9 +62,9 @@ export function resolveLastAiPostId(chat) {
 /**
  * Pipeline card → inline store item (idx -1 = manual shell, keyed by desc).
  * Same key shape the old 📷 button used, so pending → ready upgrades in place.
- * @param {{card: {id?: string, imagePath?: string, prompt?: string}, desc: string, anchorHash?: string|null}} input
+ * @param {{card: {id?: string, imagePath?: string, prompt?: string}, desc: string, anchorText?: string|null}} input
  */
-export function buildEmbedItem({ card, desc, anchorHash = null }) {
+export function buildEmbedItem({ card, desc, anchorText = null }) {
     return {
         idx: -1,
         type: 'img',
@@ -73,7 +73,7 @@ export function buildEmbedItem({ card, desc, anchorHash = null }) {
         status: 'ready',
         imagePath: String(card?.imagePath || ''),
         cardId: card?.id || null,
-        anchorHash: anchorHash || undefined,
+        anchorText: anchorText || undefined,
     };
 }
 
@@ -106,10 +106,12 @@ export function extractAnchorQuote(prompt) {
  * Best post paragraph for an anchor quote: token overlap (same language —
  * the base template asks for a Russian quote while the post is Russian).
  * Ties → the FIRST paragraph; below the threshold → null (caller falls back
- * to append-at-end). Pure, unit-tested.
+ * to append-at-end). Returns the paragraph's normalized text (not a hash):
+ * the DOM side matches by containment, because ST regroups markdown lines
+ * into its own <p> blocks when rendering. Pure, unit-tested.
  * @param {string} postText
  * @param {string|null} quote
- * @returns {{index: number, anchorHash: string}|null}
+ * @returns {{index: number, anchorText: string}|null}
  */
 export function pickAnchorParagraph(postText, quote) {
     const normalizedQuote = normalizeAnchorText(quote);
@@ -134,7 +136,7 @@ export function pickAnchorParagraph(postText, quote) {
         if (!best || hits > best.hits) best = { index, hits, norm };
     }
     if (!best) return null;
-    return { index: best.index, anchorHash: stableHash(best.norm) };
+    return { index: best.index, anchorText: best.norm.slice(0, 160) };
 }
 
 /** Anchor for a finished story pipeline (null when the end-placement toggle
@@ -212,7 +214,7 @@ function launcherDeps() {
                     throw new Error('Картинка для этого текста уже сгенерирована');
                 }
                 const anchor = resolveStoryAnchor(input.messageText, card?.prompt);
-                upsertItem(input.msgId, buildEmbedItem({ card, desc, anchorHash: anchor?.anchorHash || null }));
+                upsertItem(input.msgId, buildEmbedItem({ card, desc, anchorText: anchor?.anchorText || null }));
                 reconcileVisible();
                 return card;
             } catch (e) {
@@ -227,7 +229,7 @@ function launcherDeps() {
         },
         embedCard: (card, msgId, desc, messageText = '') => {
             const anchor = resolveStoryAnchor(messageText, card?.prompt);
-            upsertItem(msgId, buildEmbedItem({ card, desc, anchorHash: anchor?.anchorHash || null }));
+            upsertItem(msgId, buildEmbedItem({ card, desc, anchorText: anchor?.anchorText || null }));
             reconcileVisible();
         },
         openGalleryTab: async () => {

@@ -188,7 +188,7 @@ test('reconcileVisible: pending → компактная плашка без а�
     assert.ok(plate.querySelector('[data-uris-cancel]'), '✕ (платный гвард) на месте');
 });
 
-test('reconcileVisible: ручная оболочка с anchorHash встаёт после своего абзаца', () => {
+test('reconcileVisible: ручная оболочка с anchorText встаёт после своего абзаца', () => {
     chatArr[0].mes = 'история без маркеров';
     const { textEl } = buildChatDOM();
     // Markdown-рендер: три абзаца, второй — момент из поста (сырой текст
@@ -200,9 +200,10 @@ test('reconcileVisible: ручная оболочка с anchorHash встаёт
         textEl.appendChild(p);
     }
     const DESC = 'история';
-    const anchorHash = stableHash(normalizeAnchorText('**22 октября.** Замок входной двери поддался с тихим щелчком.'));
+    // Якорь — нормализованный текст абзаца; markdown и регистр не важны.
+    const anchorText = normalizeAnchorText('**22 октября.** Замок входной двери поддался с тихим щелчком.');
     const key = `-1|img|${stableHash(`img|${DESC}`)}`;
-    upsertItem(0, { idx: -1, type: 'img', desc: DESC, descHash: stableHash(`img|${DESC}`), status: 'ready', imagePath: 'story.png', anchorHash });
+    upsertItem(0, { idx: -1, type: 'img', desc: DESC, descHash: stableHash(`img|${DESC}`), status: 'ready', imagePath: 'story.png', anchorText });
     reconcileVisible();
     const shell = textEl.querySelector(`[data-uris-inl="${key}"]`);
     assert.ok(shell, 'оболочка смонтирована');
@@ -212,12 +213,12 @@ test('reconcileVisible: ручная оболочка с anchorHash встаёт
         'оболочка стоит сразу после якорного абзаца');
 });
 
-test('reconcileVisible: anchorHash без совпадения → оболочка в конце (fallback)', () => {
+test('reconcileVisible: anchorText без совпадения → оболочка в конце (fallback)', () => {
     chatArr[0].mes = 'история без маркеров';
     const { textEl } = buildChatDOM();
     const DESC = 'история';
     const key = `-1|img|${stableHash(`img|${DESC}`)}`;
-    upsertItem(0, { idx: -1, type: 'img', desc: DESC, descHash: stableHash(`img|${DESC}`), status: 'ready', imagePath: 'story.png', anchorHash: 'no-such-hash' });
+    upsertItem(0, { idx: -1, type: 'img', desc: DESC, descHash: stableHash(`img|${DESC}`), status: 'ready', imagePath: 'story.png', anchorText: 'совсем другой текст про море' });
     reconcileVisible();
     const shell = textEl.querySelector(`[data-uris-inl="${key}"]`);
     assert.ok(shell, 'оболочка смонтирована');

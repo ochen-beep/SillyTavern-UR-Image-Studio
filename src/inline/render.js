@@ -664,7 +664,7 @@ function reconcileManualShells(mesEl, textEl, items, { inFlight = null, now = Da
         // data-manual/data-uris-desc на нём не удержать. Якорь абзаца перекрывает
         // обе ветки: оболочка переносится к своему тексту, пока якорь находит
         // абзац (текст поста мог отредактировать — тогда прежнее место/конец).
-        const anchor = item.anchorHash ? findAnchorBlock(textEl, item.anchorHash) : null;
+        const anchor = item.anchorText ? findAnchorBlock(textEl, item.anchorText) : null;
         if (anchor) {
             removeNode(el);
             if (!insertAfter(anchor, shell)) textEl.appendChild(shell);
@@ -677,10 +677,12 @@ function reconcileManualShells(mesEl, textEl, items, { inFlight = null, now = Da
     }
 }
 
-/** Блок .mes_text с якорным текстом (normalizeAnchorText-хэш): прямой ребёнок
- * (p/div/значимый текстовый узел), не оболочка. null — не найден. */
-function findAnchorBlock(textEl, anchorHash) {
-    if (!textEl || !anchorHash) return null;
+/** Блок .mes_text, содержащий якорный текст: match по вхождению в
+ * normalizeAnchorText (ST перегруппировывает абзацы при рендере — мягкие
+ * переносы сливаются в один <p>, хэш целого блока был бы хрупким). Прямой
+ * ребёнок (p/div/значимый текстовый узел), не оболочка. null — не найден. */
+function findAnchorBlock(textEl, anchorText) {
+    if (!textEl || !anchorText) return null;
     let children = [];
     try { children = Array.from(textEl.childNodes); } catch { return null; }
     for (const node of children) {
@@ -689,7 +691,7 @@ function findAnchorBlock(textEl, anchorHash) {
         if (!isElement && !isText) continue;
         if (isElement && isShellEl(node)) continue;
         const norm = normalizeAnchorText(node.textContent);
-        if (norm && stableHash(norm) === anchorHash) return node;
+        if (norm && norm.includes(anchorText)) return node;
     }
     return null;
 }
