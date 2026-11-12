@@ -412,7 +412,7 @@ function ensureLauncher() {
         btn.className = 'qr--button menu_button interactable uris_launcher';
         btn.tabIndex = 0; btn.setAttribute('role', 'button');
         btn.setAttribute('aria-label', DISPLAY_NAME);
-        btn.title = `${DISPLAY_NAME} — клик: открыть/закрыть, удержание: действия`;
+        btn.title = `${DISPLAY_NAME} — клик: открыть/закрыть, ПКМ/удержание: действия`;
         btn.innerHTML = '<span aria-hidden="true">🎨</span>';
         // attachHold owns the click too (a fired hold suppresses the trailing
         // click); no separate click listener here.

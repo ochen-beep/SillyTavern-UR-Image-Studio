@@ -192,9 +192,12 @@ export function showLauncherMenu(anchorEl) {
 }
 
 /**
- * Pointer hold binding for the bar launcher button. Owns the full click too:
- * the caller must NOT add a separate click listener (a fired menu suppresses
- * the trailing click through this binding, not through the caller's).
+ * Pointer hold binding for the bar launcher button. Menu gesture: hold (touch,
+ * pen and mouse-left alike) OR plain right-click on the desktop — the same
+ * pairing the pool chips use via bindCardContextMenu. Owns the full left
+ * click too: the caller must NOT add a separate click listener (a fired menu
+ * suppresses the trailing click through this binding, not through the
+ * caller's).
  * @param {HTMLElement} el
  * @param {{onClick?: Function, onMenu?: Function, holdMs?: number, dragThresholdPx?: number}} opts
  */
@@ -202,6 +205,7 @@ export function attachHold(el, { onClick, onMenu, holdMs = HOLD_MS, dragThreshol
     let active = false;
     let menuShown = false;
     let downAt = 0;
+    let downType = '';
     let startX = 0;
     let startY = 0;
     let maxMove = 0;
@@ -214,6 +218,7 @@ export function attachHold(el, { onClick, onMenu, holdMs = HOLD_MS, dragThreshol
         if (e.pointerType === 'mouse' && e.button !== 0) return;
         active = true;
         menuShown = false;
+        downType = e.pointerType || '';
         downAt = Date.now();
         startX = e.clientX;
         startY = e.clientY;
@@ -231,6 +236,19 @@ export function attachHold(el, { onClick, onMenu, holdMs = HOLD_MS, dragThreshol
         if (!active) return;
         maxMove = Math.max(maxMove, Math.hypot(e.clientX - startX, e.clientY - startY));
         if (maxMove > dragThresholdPx) clearTimer();
+    });
+
+    // contextmenu is a MouseEvent (no pointerType): right-click on the desktop
+    // opens the menu directly; a touch/pen long-press also synthesizes it —
+    // there the hold timer owns the opening, so the event is only silenced
+    // (Android fires it ~500ms, just before our holdMs threshold).
+    el.addEventListener('contextmenu', (e) => {
+        e.preventDefault();
+        const holdOwnsIt = active || menuShown || (downType && downType !== 'mouse');
+        if (holdOwnsIt) return;
+        menuShown = true;
+        setTimeout(() => { menuShown = false; }, 400);
+        onMenu?.(el);
     });
 
     el.addEventListener('pointerup', (e) => {
@@ -254,10 +272,5 @@ export function attachHold(el, { onClick, onMenu, holdMs = HOLD_MS, dragThreshol
         active = false;
         menuShown = false;
         clearTimer();
-    });
-
-    // A fired hold must not pop the browser context menu (mobile long-press).
-    el.addEventListener('contextmenu', (e) => {
-        if (active || menuShown) e.preventDefault();
     });
 }
