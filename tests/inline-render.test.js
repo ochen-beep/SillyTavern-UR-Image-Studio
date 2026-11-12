@@ -464,14 +464,37 @@ test('render: маркерные оболочки тоже сходятся (ide
     assert.equal(textEl.querySelectorAll('[data-uris-inl]').length, 1);
 });
 
+test('reconcileVisible: инлайн выключен — ручные оболочки лаунчера рендерятся, маркерные нет', () => {
+    state.settings.inlineEnabled = false;
+    const { textEl } = buildChatDOM();
+    // Ручная запись лаунчер-пайплайна (idx<0, без маркера в тексте).
+    const DESC = 'пост без маркеров';
+    upsertItem(0, { idx: -1, type: 'img', desc: DESC, descHash: stableHash(`img|${DESC}`), status: 'pending', createdAt: Date.now() });
+    // Маркерная запись инлайна (idx>=0) — при выключенном тумблере не монтируется.
+    upsertItem(0, { idx: 0, type: 'img', descHash: HASH_A, status: 'ready', imagePath: 'old.png' });
+    reconcileVisible();
+    assert.ok(
+        textEl.querySelector(`[data-uris-inl="-1|img|${stableHash(`img|${DESC}`)}"]`),
+        'ручная оболочка лаунчера смонтирована при выключенном инлайне',
+    );
+    assert.equal(textEl.querySelectorAll('[data-uris-inl]').length, 1, 'маркерная оболочка не смонтирована');
+    // Готовая ручная карточка → картинка на месте.
+    upsertItem(0, { idx: -1, type: 'img', descHash: stableHash(`img|${DESC}`), status: 'ready', imagePath: 'story.png' });
+    reconcileVisible();
+    const shell = textEl.querySelector(`[data-uris-inl="-1|img|${stableHash(`img|${DESC}`)}"]`);
+    assert.equal(shell.getAttribute('data-uris-status'), 'ready');
+    assert.equal(shell.querySelector('img').getAttribute('src'), '/story.png');
+    // Существующая маркерная картинка не удалена из DOM (история не исчезает).
+    reconcileVisible();
+    assert.ok(shell.isConnected, 'ручная оболочка стабильна между проходами');
+});
+
 test('render: осиротевшая ручная pending-оболочка → error, спиннер не живёт вечно', () => {
     const { textEl } = buildChatDOM();
     const DESC = 'смотри [[img: a]] вот';
     const descHash = stableHash(`img|${DESC}`);
     upsertItem(0, { idx: -1, type: 'img', desc: DESC, descHash, status: 'pending', createdAt: Date.now() });
     reconcileVisible();
-    // Генерация убита перезагрузкой: item pending с мёртвым requestId, грейс истёк.
-    upsertItem(0, { idx: -1, type: 'img', descHash, status: 'pending', requestId: 'dead', createdAt: 0 });
     // Генерация убита перезагрузкой: item pending с мёртвым requestId, грейс истёк.
     upsertItem(0, { idx: -1, type: 'img', descHash, status: 'pending', requestId: 'dead', createdAt: 0 });
     reconcileVisible();

@@ -139,7 +139,7 @@ function collectAffectedMes(mutations) {
  */
 export function reconcileVisible({ only = null } = {}) {
     if (typeof document === 'undefined') return;
-    if (state.settings?.inlineEnabled !== true) return;
+    const inlineOn = state.settings?.inlineEnabled === true;
     ensureObserver();
     let ctx = null;
     try { ctx = getCtx(); } catch { /* ST недоступен (тесты/ранняя инициализация) */ }
@@ -148,6 +148,24 @@ export function reconcileVisible({ only = null } = {}) {
     try { scope = (typeof document.getElementById === 'function' && document.getElementById('chat')) || document; } catch { /* fake без getElementById */ }
     let mesEls = [];
     try { mesEls = Array.from(scope.querySelectorAll('.mes')); } catch { return; }
+    const inFlight = state.activeGenerations instanceof Map ? new Set(state.activeGenerations.keys()) : null;
+    if (!inlineOn) {
+        // Лаунчер-действия («Нарисовать по истории») пишут ручные оболочки в
+        // store независимо от тумблера инлайна: выключенный инлайн глушит
+        // только маркерные триггеры. Маркерные оболочки при этом не трогаем —
+        // существующие картинки истории не исчезают.
+        for (const mesEl of mesEls) {
+            const msgIdRaw = mesEl.getAttribute('mesid');
+            if (msgIdRaw == null || msgIdRaw === '') continue;
+            if (only && !only.has(Number(msgIdRaw))) continue;
+            const items = getSlot(Number(msgIdRaw)).items;
+            if (!items.some(item => item && Number(item.idx) < 0)) continue;
+            const textEl = mesEl.querySelector('.mes_text');
+            if (!textEl) continue;
+            reconcileManualShells(mesEl, textEl, items, { inFlight });
+        }
+        return;
+    }
     for (const mesEl of mesEls) {
         const msgIdRaw = mesEl.getAttribute('mesid');
         if (msgIdRaw == null || msgIdRaw === '') continue;
@@ -166,7 +184,6 @@ export function reconcileVisible({ only = null } = {}) {
         const textEl = mesEl.querySelector('.mes_text');
         if (!textEl) continue;
         const existingKeys = new Set(shellEls.map(el => el.getAttribute(SHELL_ATTR)).filter(Boolean));
-        const inFlight = state.activeGenerations instanceof Map ? new Set(state.activeGenerations.keys()) : null;
         const plan = computeShellPlan({ msgId, markers, items, hashFn: stableHash, existingKeys, inFlight });
         for (const entry of plan) {
             const cur = shellEls.find(el => el.getAttribute(SHELL_ATTR) === entry.key) || null;
