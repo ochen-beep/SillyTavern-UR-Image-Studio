@@ -253,20 +253,31 @@ export async function runStage1ForDraft(input, onStatus = () => {}, signal, opts
 /**
  * Run the full scene-first pipeline (Stage 1 + Stage 2) for an explicit message.
  *
+ * `opts.force` (2026-11-13): explicit user actions (launcher) always draw a new
+ * picture — both done-fingerprint gates and the Stage 1 autoPromptFp skip are
+ * bypassed, while autoDoneFp is still written on success so automation never
+ * double-pays for what the user has already drawn.
+ *
  * @param {{chatId:string,msgId:number,messageText:string,templateId:string|null,chatConfig?:object}} input
  * @param {(status:string) => void} [onStatus]
  * @param {AbortSignal} [signal]
+ * @param {{force?:boolean}} [opts]
  * @returns {Promise<object|null>}
  */
-export async function runFullPipelineForDraft(input, onStatus = () => {}, signal) {
+export async function runFullPipelineForDraft(input, onStatus = () => {}, signal, opts = {}) {
     const chatConfig = input.chatConfig || createChatConfigSnapshot();
     const runInput = { ...input, chatConfig };
+    const force = opts.force === true;
+    const isAuto = !force;
     const flightKey = `${input.chatId}:${input.msgId}:${fnv1aHex(input.messageText)}`;
     const existing = autoFlights.get(flightKey);
     if (existing) return await raceFlightWithSignal(existing, signal);
     const flight = (async () => {
         // Auto fingerprint: identical content+settings that already produced a
         // card are free; a built-but-unimaged prompt jumps straight to Stage 2.
+        // force skips these gates entirely — an explicit rerun always pays for
+        // a fresh picture. The fp itself is always computed: the success
+        // bookkeeping write below keeps it meaningful for automation.
         const fpDraft = await getGenerationDraft(input.chatId, input.msgId, input.messageText);
         const autoFp = computeAutoFp({
             messageText: input.messageText,
@@ -275,22 +286,22 @@ export async function runFullPipelineForDraft(input, onStatus = () => {}, signal
                 : resolveDraftTemplateId(fpDraft, chatConfig.templateId ?? state.activeTemplateId),
             configSnapshot: chatConfig,
         });
-        if (fpDraft.autoDoneFp === autoFp) {
+        if (isAuto && fpDraft.autoDoneFp === autoFp) {
             return { applied: false, reason: 'auto-fingerprint-match', result: null, snapshot: null, draft: fpDraft };
         }
-        const run = await runStage1ForDraft(runInput, onStatus, signal, { isAuto: true });
+        const run = await runStage1ForDraft(runInput, onStatus, signal, { isAuto });
         // Re-read the done-fingerprint between the paid stages: a parallel
         // trigger can complete the same run while this Stage 1 was in flight —
         // its Stage 2 already paid, this one must not run again.
         const settled = await getGenerationDraft(input.chatId, input.msgId, input.messageText);
-        if (settled.autoDoneFp === autoFp) {
+        if (isAuto && settled.autoDoneFp === autoFp) {
             return { applied: false, reason: 'auto-fingerprint-match', result: null, snapshot: null, draft: settled };
         }
         const promptReady = run.reason === 'auto-fingerprint-match'
             ? String(run.draft?.prompt || '').trim()
-            : run.applied;
+            : (run.applied || (force && String(run.draft?.prompt || '').trim()));
         if (!promptReady) return null;
-        const card = await runStage2ForDraft(runInput, onStatus, signal, { isAuto: true });
+        const card = await runStage2ForDraft(runInput, onStatus, signal, { isAuto });
         if (card) {
             try {
                 await updateGenerationDraft(input.chatId, input.msgId, input.messageText, d => ({ ...d, autoDoneFp: autoFp }));
