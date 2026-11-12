@@ -24,6 +24,7 @@ import {
     mountPanel, syncPanelVisibility, initViewportSync, removeViewportSync, removePanel, isPanelVisible,
 } from './src/ui/window.js';
 import { ensureFloatingLauncher, removeFloatingLauncher, bindStage2Pulse } from './src/ui/floating-launcher.js';
+import { attachHold, showLauncherMenu, initLauncherActions } from './src/ui/launcher-actions.js';
 import { registerTab, setActiveTab, renderTabs, getActiveTab, refreshActive, resolveInitialTab } from './src/ui/tabs.js';
 // Keep the startup module graph minimal: tabs, pipeline and the rare settings
 // panel handlers load dynamically on first use (see lazyTabRender below).
@@ -375,10 +376,11 @@ function ensureLauncher() {
     // раньше слушатели вешались только в FAB-ветке, и в дефолтном
     // launcherMode 'bar' пульс не работал вовсе (idempotent по guard'у).
     bindStage2Pulse();
+    initLauncherActions({ togglePanel: toggleLauncherPanel });
     // FAB mounts independently of the QR bar, so the panel stays reachable
     // even with the Quick Replies extension disabled (как у DS Comments).
     const mode = state.settings.launcherMode || 'bar';
-    if (mode === 'floating' || mode === 'both') ensureFloatingLauncher({ onToggle: toggleLauncherPanel });
+    if (mode === 'floating' || mode === 'both') ensureFloatingLauncher({ onToggle: toggleLauncherPanel, onHoldMenu: showLauncherMenu });
     else removeFloatingLauncher();
     if (mode === 'floating') { existing?.remove(); return null; }
     const host = getLauncherHost();
@@ -390,8 +392,11 @@ function ensureLauncher() {
         btn.className = 'qr--button menu_button interactable uris_launcher';
         btn.tabIndex = 0; btn.setAttribute('role', 'button');
         btn.setAttribute('aria-label', DISPLAY_NAME);
+        btn.title = `${DISPLAY_NAME} — клик: открыть/закрыть, удержание: действия`;
         btn.innerHTML = '<span aria-hidden="true">🎨</span>';
-        btn.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); toggleLauncherPanel(); });
+        // attachHold owns the click too (a fired hold suppresses the trailing
+        // click); no separate click listener here.
+        attachHold(btn, { onClick: () => { toggleLauncherPanel(); }, onMenu: showLauncherMenu });
     }
     if (btn.parentElement !== host) host.appendChild(btn);
     btn.classList.toggle('uris_launcher_active', isPanelVisible());

@@ -28,6 +28,9 @@ const POSITION_KEY = 'uris_fab_position';
 const FAB_SIZE = 36;
 // Pointer travel (px) that separates a click from a drag.
 const DRAG_THRESHOLD_PX = 6;
+// Hold duration for the action menu — same gesture as the bar button
+// (decision semantics in launcher-actions.js, evaluateGesture).
+const HOLD_MS = 550;
 // Default anchor offsets from the bottom-right corner; mobile clears #send_form.
 const DEFAULT_RIGHT = 20;
 const DEFAULT_BOTTOM = 80;
@@ -37,6 +40,8 @@ const DEFAULT_BOTTOM_MOBILE = 120;
 // Toggle handler wired by index.js (toggleLauncherPanel). Stored at module level
 // so re-mounts keep the same behaviour without re-passing it.
 let _onToggle = null;
+// Hold-menu handler wired by index.js (showLauncherMenu).
+let _onHoldMenu = null;
 let _resizeBound = false;
 let _stage2Bound = false;
 
@@ -139,10 +144,16 @@ function makeDraggable(icon) {
     // а мышей на 1000 Гц это тысячи reflow в секунду.
     let dragViewport = null;
     let dragTopInset = 0;
+    // Hold-menu: таймер гасится стартом драга или ранним отпусканием;
+    // сработавшее меню подавляет тоггл на pointerup.
+    let holdTimer = null;
+    let menuShown = false;
+    const clearHold = () => { if (holdTimer) { clearTimeout(holdTimer); holdTimer = null; } };
 
     icon.addEventListener('pointerdown', (e) => {
         if (e.pointerType === 'mouse' && e.button !== 0) return;
         dragging = false;
+        menuShown = false;
         const r = icon.getBoundingClientRect();
         offsetX = e.clientX - r.left;
         offsetY = e.clientY - r.top;
@@ -150,6 +161,13 @@ function makeDraggable(icon) {
         startY = r.top;
         dragViewport = getViewport();
         dragTopInset = getStTopInsetPx();
+        clearHold();
+        holdTimer = setTimeout(() => {
+            holdTimer = null;
+            menuShown = true;
+            try { navigator?.vibrate?.(30); } catch { /* unsupported */ }
+            _onHoldMenu?.(icon);
+        }, HOLD_MS);
         icon.setPointerCapture(e.pointerId);
         e.preventDefault();
     });
@@ -160,6 +178,7 @@ function makeDraggable(icon) {
         const rawY = e.clientY - offsetY;
         if (!dragging && Math.hypot(rawX - startX, rawY - startY) > DRAG_THRESHOLD_PX) {
             dragging = true;
+            clearHold();
         }
         const pos = clampFabPosition({ left: rawX, top: rawY }, dragViewport, FAB_SIZE, dragTopInset);
         icon.style.left = `${pos.left}px`;
@@ -168,15 +187,26 @@ function makeDraggable(icon) {
 
     icon.addEventListener('pointerup', (e) => {
         if (icon.hasPointerCapture(e.pointerId)) icon.releasePointerCapture(e.pointerId);
+        clearHold();
         const wasDragging = dragging;
+        const wasMenu = menuShown;
         dragging = false;
+        menuShown = false;
         if (wasDragging) persistPosition(icon);
+        else if (wasMenu) { /* hold menu opened — suppress the toggle */ }
         else if (_onToggle) _onToggle();
     });
 
     icon.addEventListener('pointercancel', (e) => {
         if (icon.hasPointerCapture(e.pointerId)) icon.releasePointerCapture(e.pointerId);
         dragging = false;
+        menuShown = false;
+        clearHold();
+    });
+
+    // A fired hold must not pop the browser context menu (mobile long-press).
+    icon.addEventListener('contextmenu', (e) => {
+        if (holdTimer || menuShown) e.preventDefault();
     });
 
     icon.style.touchAction = 'none';
@@ -255,10 +285,11 @@ export function bindStage2Pulse() {
 /**
  * Mount (or re-sync) the floating launcher. Whether to mount at all is decided
  * by index.js ensureLauncher() from settings.launcherMode.
- * @param {{onToggle?: Function}} [opts]
+ * @param {{onToggle?: Function, onHoldMenu?: Function}} [opts]
  */
-export function ensureFloatingLauncher({ onToggle } = {}) {
+export function ensureFloatingLauncher({ onToggle, onHoldMenu } = {}) {
     if (onToggle) _onToggle = onToggle;
+    if (onHoldMenu) _onHoldMenu = onHoldMenu;
     let icon = getFab();
     if (!icon) {
         icon = document.createElement('div');
@@ -267,7 +298,7 @@ export function ensureFloatingLauncher({ onToggle } = {}) {
         icon.tabIndex = 0;
         icon.setAttribute('role', 'button');
         icon.setAttribute('aria-label', DISPLAY_NAME);
-        icon.title = `${DISPLAY_NAME} — клик: открыть/закрыть, тянуть: переместить`;
+        icon.title = `${DISPLAY_NAME} — клик: открыть/закрыть, удержание: действия, тянуть: переместить`;
         icon.innerHTML = '<span aria-hidden="true">🎨</span>';
 
         icon.addEventListener('keydown', (e) => {
