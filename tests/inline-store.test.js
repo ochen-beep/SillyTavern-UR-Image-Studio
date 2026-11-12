@@ -38,12 +38,12 @@ test('store: messageHash stored alongside items', () => {
     assert.equal(getSlot(7).messageHash, 'h1');
 });
 
-test('store: anchorHash survives the pending → ready upgrade (FIELDS whitelist)', () => {
+test('store: anchorText survives the pending → ready upgrade (FIELDS whitelist)', () => {
     upsertItem(9, { idx: -1, type: 'img', descHash: 'cc', status: 'pending', createdAt: Date.now() });
-    upsertItem(9, { idx: -1, type: 'img', descHash: 'cc', status: 'ready', imagePath: 'p.png', anchorHash: 'deadbeef' });
+    upsertItem(9, { idx: -1, type: 'img', descHash: 'cc', status: 'ready', imagePath: 'p.png', anchorText: 'замок входной двери' });
     const slot = getSlot(9);
     assert.equal(slot.items.length, 1);
-    assert.equal(slot.items[0].anchorHash, 'deadbeef', 'якорь не отфильтрован whitelist-ом');
+    assert.equal(slot.items[0].anchorText, 'замок входной двери', 'якорь не отфильтрован whitelist-ом');
     assert.equal(slot.items[0].status, 'ready');
 });
 

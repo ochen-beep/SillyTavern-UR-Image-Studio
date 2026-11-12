@@ -110,7 +110,7 @@ test('pickAnchorParagraph: matches the middle paragraph ignoring markdown', () =
     const anchor = pickAnchorParagraph(POST, 'Замок входной двери поддался с тихим щелчком, Дамиен толкнул полотно плечом');
     assert.ok(anchor, 'anchor found');
     assert.equal(anchor.index, 1);
-    assert.equal(anchor.anchorHash, stableHash(normalizeAnchorText(POST.split('\n\n')[1])));
+    assert.equal(anchor.anchorText, normalizeAnchorText(POST.split('\n\n')[1]));
 });
 
 test('pickAnchorParagraph: ties resolve to the first qualifying paragraph', () => {
