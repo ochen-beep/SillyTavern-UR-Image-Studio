@@ -17,10 +17,12 @@
  *   - gallery: open the window straight on the gallery tab.
  */
 
-import { getCtx, state } from '../core.js';
+import { getCtx, state, fnv1aHex } from '../core.js';
 import { isGenerationEligible } from '../post-navigator.js';
-import { rerollInline, stableHash, normalizeAnchorText } from '../inline/runner.js';
-import { upsertItem } from '../inline/store.js';
+import { rerollInline, normalizeAnchorText } from '../inline/runner.js';
+import { upsertItem, deleteItem, itemKey, getSlot } from '../inline/store.js';
+import { hashMessage } from '../generation-drafts.js';
+import { randomToken } from '../random.js';
 import { runFullPipelineForDraft } from '../pipeline-stage1.js';
 import { reconcileVisible } from '../inline/render.js';
 import { openCardActionMenu } from './card-action-menu.js';
@@ -60,19 +62,24 @@ export function resolveLastAiPostId(chat) {
 }
 
 /**
- * Pipeline card → inline store item (idx -1 = manual shell, keyed by desc).
- * Same key shape the old 📷 button used, so pending → ready upgrades in place.
- * @param {{card: {id?: string, imagePath?: string, prompt?: string}, desc: string, anchorText?: string|null}} input
+ * Pipeline card → inline store item (story shell, keyed by the run's descHash).
+ * Identity: the item carries the VARIANT digest (hashMessage of the post text
+ * it was generated from) — the store attaches cards to the matching variant,
+ * and the render layer shows it only while the variant text still hashes the
+ * same. `descHash` override keeps a pending → ready upgrade on one key.
+ * @param {{card: {id?: string, imagePath?: string}, digest: string, anchorText?: string|null, descHash?: string|null}} input
  */
-export function buildEmbedItem({ card, desc, anchorText = null }) {
+export function buildEmbedItem({ card, digest, anchorText = null, descHash = null }) {
     return {
         idx: -1,
         type: 'img',
-        desc,
-        descHash: stableHash(`img|${desc}`),
+        origin: 'story',
         status: 'ready',
+        descHash: descHash || fnv1aHex(`story|${digest}`),
+        digest,
         imagePath: String(card?.imagePath || ''),
         cardId: card?.id || null,
+        cardIds: card?.id ? [card.id] : [],
         anchorText: anchorText || undefined,
     };
 }
@@ -170,13 +177,29 @@ export async function runLauncherAction(id, deps = {}) {
     }
     if (id === 'story-last') {
         const messageText = String(chat[msgId].mes || '');
-        const desc = messageText.slice(0, 4000);
-        const card = await deps.runFullPipeline?.({ chatId: await deps.getChatId?.(), msgId, messageText });
+        const card = await deps.runFullPipeline?.({ chatId: await deps.getChatId?.(), msgId, messageText, force: true });
         if (!card || !card.imagePath) throw new Error('Пайплайн не вернул картинку');
-        await deps.embedCard?.(card, msgId, desc, messageText);
+        await deps.embedCard?.(card, msgId, messageText);
         return;
     }
     throw new Error(`Неизвестное действие лаунчера: ${id}`);
+}
+
+/**
+ * Retry entry for a story error shell on a SPECIFIC post (render.js wires it
+ * via initRender). Pure dispatch — the pending/ready bookkeeping lives in the
+ * runFullPipeline dep. Always runs the full pipeline with force: an explicit
+ * retry never reuses the auto fingerprints.
+ * @param {number|string} msgId
+ * @param {{getChat?: Function, getChatId?: Function, runFullPipeline?: Function}} deps
+ */
+export async function rerollStoryForMsg(msgId, deps = {}) {
+    const chat = await deps.getChat?.();
+    const idx = Number(msgId);
+    const msg = Array.isArray(chat) ? chat[idx] : null;
+    const messageText = String(msg?.mes || '');
+    if (!messageText.trim()) throw new Error('Нет текста поста для перегенерации');
+    await deps.runFullPipeline?.({ chatId: await deps.getChatId?.(), msgId: idx, messageText, force: true });
 }
 
 // ── Prod wiring (not unit-tested; graph-covered by integration suites) ──
@@ -199,37 +222,58 @@ function launcherDeps() {
             reconcileVisible();
         },
         runFullPipeline: async (input) => {
-            const desc = String(input.messageText || '').slice(0, 4000);
+            const ctx = getCtx();
+            const opChatId = String(input.chatId ?? ctx.chatId ?? '');
+            const msg = ctx.chat?.[input.msgId] || null;
+            const digest = hashMessage(input.messageText);
+            const variantIdx = Number(msg?.swipe_id ?? 0);
+            const token = `uris_${randomToken(8)}`;
+            const descHash = fnv1aHex(`story|${token}`);
+            // Гвард идентичности: записи уходят в extra.uris СВОЕГО чата/поста.
+            const sameChat = () => {
+                const cur = getCtx();
+                return String(cur.chatId ?? '') === opChatId && cur.chat?.[input.msgId] === msg;
+            };
+            // Прошлые story-ошибки этого поста уходят: retry = новая попытка.
+            for (const item of getSlot(input.msgId).items || []) {
+                if (Number(item.idx) < 0 && item.origin === 'story' && item.status === 'error') {
+                    deleteItem(input.msgId, itemKey(item), { variantIdx });
+                }
+            }
             upsertItem(input.msgId, {
-                idx: -1, type: 'img', desc,
-                descHash: stableHash(`img|${desc}`),
-                status: 'pending', createdAt: Date.now(),
-            });
+                idx: -1, type: 'img', origin: 'story', status: 'pending',
+                descHash, digest, requestId: token, createdAt: Date.now(),
+            }, { variantIdx });
             reconcileVisible();
             try {
-                const card = await runFullPipelineForDraft(input);
-                if (!card || !card.imagePath) {
-                    // Fingerprint match etc.: nothing new was paid — say so on
-                    // the shell instead of a forever-spinner.
-                    throw new Error('Картинка для этого текста уже сгенерирована');
+                const card = await runFullPipelineForDraft(input, undefined, undefined, { force: true });
+                if (!card || !card.imagePath) throw new Error('Пайплайн не вернул картинку');
+                if (!sameChat()) {
+                    throw Object.assign(new Error('Чат сменился — картинка осталась в галерее'), { code: 'CHAT_SWITCHED' });
                 }
                 const anchor = resolveStoryAnchor(input.messageText, card?.prompt);
-                upsertItem(input.msgId, buildEmbedItem({ card, desc, anchorText: anchor?.anchorText || null }));
+                upsertItem(input.msgId,
+                    buildEmbedItem({ card, digest, anchorText: anchor?.anchorText || null, descHash }),
+                    { variantIdx });
                 reconcileVisible();
                 return card;
             } catch (e) {
-                upsertItem(input.msgId, {
-                    idx: -1, type: 'img', desc,
-                    descHash: stableHash(`img|${desc}`),
-                    status: 'error', error: String(e?.message || e).slice(0, 200),
-                });
-                reconcileVisible();
+                if (sameChat()) {
+                    upsertItem(input.msgId, {
+                        idx: -1, type: 'img', origin: 'story', status: 'error',
+                        descHash, digest, error: String(e?.message || e).slice(0, 200),
+                    }, { variantIdx });
+                    reconcileVisible();
+                }
                 throw e;
             }
         },
-        embedCard: (card, msgId, desc, messageText = '') => {
+        embedCard: (card, msgId, messageText = '') => {
+            const msg = getCtx()?.chat?.[msgId];
+            const digest = hashMessage(messageText);
             const anchor = resolveStoryAnchor(messageText, card?.prompt);
-            upsertItem(msgId, buildEmbedItem({ card, desc, anchorText: anchor?.anchorText || null }));
+            upsertItem(msgId, buildEmbedItem({ card, digest, anchorText: anchor?.anchorText || null }),
+                { variantIdx: Number(msg?.swipe_id ?? 0) });
             reconcileVisible();
         },
         openGalleryTab: async () => {
@@ -241,6 +285,13 @@ function launcherDeps() {
 
 function safeRun(id) {
     Promise.resolve(runLauncherAction(id, launcherDeps())).catch((e) => {
+        try { toastr?.error(e?.message || e, 'URIS'); } catch { /* node */ }
+    });
+}
+
+/** Retry of a story error shell on a given post (render.js via initRender). */
+export function retryStoryShell(msgId) {
+    Promise.resolve(rerollStoryForMsg(Number(msgId), launcherDeps())).catch((e) => {
         try { toastr?.error(e?.message || e, 'URIS'); } catch { /* node */ }
     });
 }

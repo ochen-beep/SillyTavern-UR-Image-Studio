@@ -177,7 +177,10 @@ export function attachCard(msgId, digest, cardId, imagePath) {
     }
     const container = targetFor(msg, variantIdx);
     if (!container) return null;
-    let item = container.items.find(i => Number(i.idx) < 0 && i.digest === digest);
+    // Несколько story-запусков на одном варианте — валидно (повторы): карточка
+    // клеится к САМОМУ СВЕЖЕМУ item'у с этим digest.
+    let item = container.items        .filter(i => Number(i.idx) < 0 && i.digest === digest)
+        .sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0))[0] || null;
     if (!item) {
         item = {
             idx: -1, type: 'img', origin: 'story', status: 'ready',
