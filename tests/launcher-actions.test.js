@@ -1,0 +1,119 @@
+// @ts-check
+// Launcher hold-gesture + actions: pure logic under tests/launcher-actions.test.js.
+// The DOM glue (bar button / FAB pointer pipeline) is thin wiring around these.
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+
+import { evaluateGesture, resolveLastAiPostId, buildEmbedItem, runLauncherAction } from '../src/ui/launcher-actions.js';
+
+// ── evaluateGesture: one decision for click vs hold-menu vs drag ──
+
+test('evaluateGesture: quick release without movement is a click', () => {
+    assert.equal(evaluateGesture({ heldMs: 100, maxMovePx: 0 }), 'click');
+    assert.equal(evaluateGesture({ heldMs: 549, maxMovePx: 3 }), 'click');
+});
+
+test('evaluateGesture: hold past the threshold without movement opens the menu', () => {
+    assert.equal(evaluateGesture({ heldMs: 550, maxMovePx: 0 }), 'menu');
+    assert.equal(evaluateGesture({ heldMs: 1200, maxMovePx: 5 }), 'menu');
+});
+
+test('evaluateGesture: movement beyond the drag threshold wins over hold', () => {
+    assert.equal(evaluateGesture({ heldMs: 1200, maxMovePx: 7 }), 'drag');
+    assert.equal(evaluateGesture({ heldMs: 100, maxMovePx: 30 }), 'drag');
+});
+
+// ── resolveLastAiPostId: target for "draw" actions ──
+
+const msg = (mes, extra = {}) => ({ mes, is_user: false, ...extra });
+
+test('resolveLastAiPostId: returns the last eligible AI message id', () => {
+    const chat = [msg('old'), { mes: 'user', is_user: true }, msg('mid'), msg('last text')];
+    assert.equal(resolveLastAiPostId(chat), 3);
+});
+
+test('resolveLastAiPostId: skips user, system, hidden and empty posts', () => {
+    const chat = [
+        msg('real ai'),
+        { mes: 'user line', is_user: true },
+        msg('sys', { is_system: true }),
+        msg('hidden', { is_hidden: true }),
+        msg('   '),
+    ];
+    assert.equal(resolveLastAiPostId(chat), 0);
+});
+
+test('resolveLastAiPostId: null without candidates', () => {
+    assert.equal(resolveLastAiPostId([]), null);
+    assert.equal(resolveLastAiPostId([{ mes: 'x', is_user: true }]), null);
+    assert.equal(resolveLastAiPostId(null), null);
+});
+
+// ── buildEmbedItem: pipeline card → inline store item (manual shell) ──
+
+test('buildEmbedItem: manual-ready item shape keyed by desc', () => {
+    const desc = 'story text';
+    const item = buildEmbedItem({
+        card: { id: 'card-1', imagePath: 'user/images/C/uris_1.png' },
+        desc,
+    });
+    assert.equal(item.idx, -1);
+    assert.equal(item.type, 'img');
+    assert.equal(item.status, 'ready');
+    assert.equal(item.imagePath, 'user/images/C/uris_1.png');
+    assert.equal(item.cardId, 'card-1');
+    assert.equal(item.desc, desc);
+    assert.equal(item.descHash, item.descHash);
+    assert.match(item.descHash, /^[0-9a-f]+$/);
+});
+
+test('buildEmbedItem: same desc → same descHash (shell key stability)', () => {
+    const a = buildEmbedItem({ card: { id: 'a', imagePath: '/a.png' }, desc: 'same' });
+    const b = buildEmbedItem({ card: { id: 'b', imagePath: '/b.png' }, desc: 'same' });
+    assert.equal(a.descHash, b.descHash);
+    assert.notEqual(
+        buildEmbedItem({ card: { id: 'a', imagePath: '/a.png' }, desc: 'other' }).descHash,
+        a.descHash,
+    );
+});
+
+// ── runLauncherAction: dispatch with injected deps ──
+
+test('runLauncherAction: inline-last rerolls the last eligible post', async () => {
+    const calls = [];
+    await runLauncherAction('inline-last', {
+        getChat: () => [msg('first'), msg('target story')],
+        rerollInline: job => calls.push(job),
+    });
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0].msgId, 1);
+    assert.equal(calls[0].idx, -1);
+    assert.equal(calls[0].type, 'img');
+    assert.equal(calls[0].desc, 'target story');
+});
+
+test('runLauncherAction: story-last runs the full pipeline and embeds the card', async () => {
+    const calls = [];
+    const card = { id: 'card-9', imagePath: 'user/images/C/x.png' };
+    await runLauncherAction('story-last', {
+        getChat: () => [msg('story body')],
+        getChatId: () => 'chat-1',
+        runFullPipeline: input => { calls.push(['pipeline', input]); return card; },
+        embedCard: (c, msgId, desc) => calls.push(['embed', c, msgId, desc]),
+        toast: () => {},
+    });
+    assert.deepEqual(calls[0], ['pipeline', { chatId: 'chat-1', msgId: 0, messageText: 'story body' }]);
+    assert.deepEqual(calls[1], ['embed', card, 0, 'story body']);
+});
+
+test('runLauncherAction: gallery opens the gallery tab', async () => {
+    const calls = [];
+    await runLauncherAction('gallery', { openGalleryTab: () => calls.push('gallery') });
+    assert.deepEqual(calls, ['gallery']);
+});
+
+test('runLauncherAction: unknown action and empty chat fail loudly, not silently', async () => {
+    await assert.rejects(() => runLauncherAction('nope', {}));
+    await assert.rejects(() => runLauncherAction('inline-last', { getChat: () => [], rerollInline: () => {} }));
+    await assert.rejects(() => runLauncherAction('story-last', { getChat: () => [], runFullPipeline: () => ({}) }));
+});
