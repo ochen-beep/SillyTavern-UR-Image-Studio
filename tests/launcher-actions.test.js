@@ -5,8 +5,9 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { makeFakeDocument } from './fake-dom.js';
 
-import { evaluateGesture, resolveLastAiPostId, buildEmbedItem, runLauncherAction, extractAnchorQuote, pickAnchorParagraph } from '../src/ui/launcher-actions.js';
+import { evaluateGesture, resolveLastAiPostId, buildEmbedItem, runLauncherAction, rerollStoryForMsg, extractAnchorQuote, pickAnchorParagraph } from '../src/ui/launcher-actions.js';
 import { stableHash, normalizeAnchorText } from '../src/inline/runner.js';
+import { hashMessage } from '../src/generation-drafts.js';
 
 // ── evaluateGesture: one decision for click vs hold-menu vs drag ──
 
@@ -53,30 +54,38 @@ test('resolveLastAiPostId: null without candidates', () => {
 
 // ── buildEmbedItem: pipeline card → inline store item (manual shell) ──
 
-test('buildEmbedItem: manual-ready item shape keyed by desc', () => {
-    const desc = 'story text';
+test('buildEmbedItem: story item with origin, digest and cardIds list', () => {
+    const digest = hashMessage('story text');
     const item = buildEmbedItem({
         card: { id: 'card-1', imagePath: 'user/images/C/uris_1.png' },
-        desc,
+        digest,
     });
     assert.equal(item.idx, -1);
     assert.equal(item.type, 'img');
+    assert.equal(item.origin, 'story');
     assert.equal(item.status, 'ready');
     assert.equal(item.imagePath, 'user/images/C/uris_1.png');
     assert.equal(item.cardId, 'card-1');
-    assert.equal(item.desc, desc);
-    assert.equal(item.descHash, item.descHash);
+    assert.deepEqual(item.cardIds, ['card-1']);
+    assert.equal(item.digest, digest);
     assert.match(item.descHash, /^[0-9a-f]+$/);
+    assert.notEqual(item.descHash, digest, 'ключ item не совпадает с digest варианта');
 });
 
-test('buildEmbedItem: same desc → same descHash (shell key stability)', () => {
-    const a = buildEmbedItem({ card: { id: 'a', imagePath: '/a.png' }, desc: 'same' });
-    const b = buildEmbedItem({ card: { id: 'b', imagePath: '/b.png' }, desc: 'same' });
+test('buildEmbedItem: same digest → same descHash (key stability)', () => {
+    const digest = hashMessage('same');
+    const a = buildEmbedItem({ card: { id: 'a', imagePath: '/a.png' }, digest });
+    const b = buildEmbedItem({ card: { id: 'b', imagePath: '/b.png' }, digest });
     assert.equal(a.descHash, b.descHash);
     assert.notEqual(
-        buildEmbedItem({ card: { id: 'a', imagePath: '/a.png' }, desc: 'other' }).descHash,
+        buildEmbedItem({ card: { id: 'a', imagePath: '/a.png' }, digest: hashMessage('other') }).descHash,
         a.descHash,
     );
+});
+
+test('buildEmbedItem: anchorText passes through when provided', () => {
+    const item = buildEmbedItem({ card: { id: 'a', imagePath: '/a.png' }, digest: 'd1', anchorText: 'замок двери' });
+    assert.equal(item.anchorText, 'замок двери');
 });
 
 // ── extractAnchorQuote: Cyrillic quote from the Stage 1 prompt ──
@@ -140,18 +149,36 @@ test('runLauncherAction: inline-last rerolls the last eligible post', async () =
     assert.equal(calls[0].desc, 'target story');
 });
 
-test('runLauncherAction: story-last runs the full pipeline and embeds the card', async () => {
+test('runLauncherAction: story-last runs the full pipeline with force and embeds the card', async () => {
     const calls = [];
     const card = { id: 'card-9', imagePath: 'user/images/C/x.png' };
     await runLauncherAction('story-last', {
         getChat: () => [msg('story body')],
         getChatId: () => 'chat-1',
         runFullPipeline: input => { calls.push(['pipeline', input]); return card; },
-        embedCard: (c, msgId, desc, messageText) => calls.push(['embed', c, msgId, desc, messageText]),
+        embedCard: (c, msgId, messageText) => calls.push(['embed', c, msgId, messageText]),
         toast: () => {},
     });
-    assert.deepEqual(calls[0], ['pipeline', { chatId: 'chat-1', msgId: 0, messageText: 'story body' }]);
-    assert.deepEqual(calls[1], ['embed', card, 0, 'story body', 'story body']);
+    assert.equal(calls[0][1].force, true, 'явный запуск всегда рисует новую картинку');
+    assert.deepEqual(calls[1], ['embed', card, 0, 'story body']);
+});
+
+test('rerollStoryForMsg: targets the given post with force', async () => {
+    const calls = [];
+    await rerollStoryForMsg(2, {
+        getChat: () => [msg('a'), msg('b'), msg('target')],
+        getChatId: () => 'chat-1',
+        runFullPipeline: input => calls.push(input),
+    });
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0].msgId, 2);
+    assert.equal(calls[0].force, true);
+    assert.equal(calls[0].messageText, 'target');
+});
+
+test('rerollStoryForMsg: empty or missing post fails loudly', async () => {
+    await assert.rejects(() => rerollStoryForMsg(5, { getChat: () => [msg('a')] }));
+    await assert.rejects(() => rerollStoryForMsg(0, { getChat: () => [msg('   ')] }));
 });
 
 test('runLauncherAction: gallery opens the gallery tab', async () => {
