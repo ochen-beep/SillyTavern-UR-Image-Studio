@@ -148,12 +148,14 @@ function makeDraggable(icon) {
     // сработавшее меню подавляет тоггл на pointerup.
     let holdTimer = null;
     let menuShown = false;
+    let downType = '';
     const clearHold = () => { if (holdTimer) { clearTimeout(holdTimer); holdTimer = null; } };
 
     icon.addEventListener('pointerdown', (e) => {
         if (e.pointerType === 'mouse' && e.button !== 0) return;
         dragging = false;
         menuShown = false;
+        downType = e.pointerType || '';
         const r = icon.getBoundingClientRect();
         offsetX = e.clientX - r.left;
         offsetY = e.clientY - r.top;
@@ -204,9 +206,16 @@ function makeDraggable(icon) {
         clearHold();
     });
 
-    // A fired hold must not pop the browser context menu (mobile long-press).
+    // Desktop right-click opens the menu directly; a touch/pen long-press also
+    // synthesizes contextmenu — there the hold timer owns the opening, so the
+    // event is only silenced (Android fires it just before our HOLD_MS).
     icon.addEventListener('contextmenu', (e) => {
-        if (holdTimer || menuShown) e.preventDefault();
+        e.preventDefault();
+        const holdOwnsIt = holdTimer || menuShown || (downType && downType !== 'mouse');
+        if (holdOwnsIt) return;
+        menuShown = true;
+        setTimeout(() => { menuShown = false; }, 400);
+        _onHoldMenu?.(icon);
     });
 
     icon.style.touchAction = 'none';
@@ -298,7 +307,7 @@ export function ensureFloatingLauncher({ onToggle, onHoldMenu } = {}) {
         icon.tabIndex = 0;
         icon.setAttribute('role', 'button');
         icon.setAttribute('aria-label', DISPLAY_NAME);
-        icon.title = `${DISPLAY_NAME} — клик: открыть/закрыть, удержание: действия, тянуть: переместить`;
+        icon.title = `${DISPLAY_NAME} — клик: открыть/закрыть, ПКМ/удержание: действия, тянуть: переместить`;
         icon.innerHTML = '<span aria-hidden="true">🎨</span>';
 
         icon.addEventListener('keydown', (e) => {

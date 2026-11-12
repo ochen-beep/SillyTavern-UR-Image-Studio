@@ -3,6 +3,7 @@
 // The DOM glue (bar button / FAB pointer pipeline) is thin wiring around these.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { makeFakeDocument } from './fake-dom.js';
 
 import { evaluateGesture, resolveLastAiPostId, buildEmbedItem, runLauncherAction } from '../src/ui/launcher-actions.js';
 
@@ -116,4 +117,76 @@ test('runLauncherAction: unknown action and empty chat fail loudly, not silently
     await assert.rejects(() => runLauncherAction('nope', {}));
     await assert.rejects(() => runLauncherAction('inline-last', { getChat: () => [], rerollInline: () => {} }));
     await assert.rejects(() => runLauncherAction('story-last', { getChat: () => [], runFullPipeline: () => ({}) }));
+});
+
+// ── attachHold: contextmenu glue (fake-dom) ──
+
+const { attachHold } = await import('../src/ui/launcher-actions.js');
+
+function holdTarget(doc) {
+    // Detached node is fine: attachHold only binds listeners.
+    return doc.createElement('div');
+}
+
+// fake-dom dispatches plain objects; preventDefault is read by the handlers.
+const pointerEvent = (type, pointerType) => ({
+    type, bubbles: true, cancelable: true, pointerType, button: 0,
+    isPrimary: true, clientX: 10, clientY: 10, pointerId: 1,
+    preventDefault: () => {}, stopPropagation: () => {},
+});
+const contextMenuEvent = () => ({
+    type: 'contextmenu', bubbles: true, cancelable: true, button: 2,
+    preventDefault: () => {}, stopPropagation: () => {},
+});
+
+test('attachHold: desktop right-click (contextmenu without touch) opens the menu once', async () => {
+    const fake = makeFakeDocument();
+    const el = holdTarget(fake.document);
+    const calls = { menu: 0, click: 0 };
+    attachHold(el, {
+        onMenu: () => { calls.menu += 1; },
+        onClick: () => { calls.click += 1; },
+        holdMs: 50,
+    });
+    el.dispatchEvent(contextMenuEvent());
+    await new Promise(res => setTimeout(res, 80));
+    el.dispatchEvent(pointerEvent('pointerup', 'mouse'));
+    assert.equal(calls.menu, 1, 'ПКМ открывает меню');
+    assert.equal(calls.click, 0, 'после меню тоггл не срабатывает');
+});
+
+test('attachHold: touch long-press — contextmenu silenced, hold timer opens the menu once', async () => {
+    const fake = makeFakeDocument();
+    const el = holdTarget(fake.document);
+    const calls = { menu: 0, click: 0 };
+    attachHold(el, {
+        onMenu: () => { calls.menu += 1; },
+        onClick: () => { calls.click += 1; },
+        holdMs: 120,
+    });
+    el.dispatchEvent(pointerEvent('pointerdown', 'touch'));
+    await new Promise(res => setTimeout(res, 60));
+    // Android synthesizes contextmenu ~500ms, before our hold threshold.
+    el.dispatchEvent(contextMenuEvent());
+    await new Promise(res => setTimeout(res, 120));
+    el.dispatchEvent(pointerEvent('pointerup', 'touch'));
+    assert.equal(calls.menu, 1, 'меню открыто ровно один раз (таймером, не contextmenu)');
+    assert.equal(calls.click, 0, 'после зажатия тоггла нет');
+});
+
+test('attachHold: quick left click after a contextmenu still toggles', async () => {
+    const fake = makeFakeDocument();
+    const el = holdTarget(fake.document);
+    const calls = { menu: 0, click: 0 };
+    attachHold(el, {
+        onMenu: () => { calls.menu += 1; },
+        onClick: () => { calls.click += 1; },
+        holdMs: 50,
+    });
+    el.dispatchEvent(contextMenuEvent());
+    await new Promise(res => setTimeout(res, 500)); // menuShown window expired
+    el.dispatchEvent(pointerEvent('pointerdown', 'mouse'));
+    await new Promise(res => setTimeout(res, 10));
+    el.dispatchEvent(pointerEvent('pointerup', 'mouse'));
+    assert.equal(calls.click, 1, 'быстрый клик после ПКМ работает');
 });
