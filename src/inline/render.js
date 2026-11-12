@@ -20,7 +20,7 @@ import { state, getCtx } from '../core.js';
 import { parseInline } from './grammar.js';
 import { getSlot, upsertItem, itemKey } from './store.js';
 import { sanitizeTriggerList, buildAliasIndex, resolveProfile } from './triggers.js';
-import { stableHash, queueInlineJob, DEFAULT_GRACE } from './runner.js';
+import { stableHash, normalizeAnchorText, queueInlineJob, DEFAULT_GRACE } from './runner.js';
 import { showSingleImage, showLightbox } from '../ui/lightbox.js';
 
 const SHELL_ATTR = 'data-uris-inl';
@@ -312,16 +312,18 @@ function shellFor(msgId, entry) {
         }
         const frame = document.createElement('div');
         frame.classList.add('uris-inl-pending');
-        // Аспект динамический (зависит от профиля) — единственный inline-стиль,
-        // остальная геометрия заглушки живёт в .uris-inl-pending (style.css).
-        frame.setAttribute('style', 'aspect-ratio:' + aspectRatioCss(profile?.aspect || '1:1'));
-        const spin = document.createElement('i');
-        spin.classList.add('fa-solid');
-        spin.classList.add('fa-spinner');
-        spin.classList.add('fa-spin');
-        frame.appendChild(spin);
+        // Компактная плашка на всю ширину текста чата (геометрия в
+        // .uris-inl-pending, overlays.css) — вместо аспект-бокса профиля.
+        const star = document.createElement('span');
+        star.classList.add('uris-inl-plate-star');
+        star.textContent = '✦';
+        frame.appendChild(star);
+        const text = document.createElement('span');
+        text.textContent = 'Рисую…';
+        frame.appendChild(text);
         const labelEl = document.createElement('span');
-        labelEl.textContent = `Генерирую ${label}…`;
+        labelEl.classList.add('uris-inl-plate-label');
+        labelEl.textContent = label;
         frame.appendChild(labelEl);
         frame.appendChild(cancel);
         el.appendChild(frame);
@@ -434,11 +436,6 @@ function profileFor(type) {
     try {
         return resolveProfile(buildAliasIndex(sanitizeTriggerList(state.settings?.inlineTriggers || [])), type);
     } catch { return null; }
-}
-
-/** '9:16' → '9 / 16' (синтаксис CSS aspect-ratio). */
-function aspectRatioCss(aspect) {
-    return String(aspect || '1:1').split(':').map(p => p.trim() || '1').join(' / ');
 }
 
 /** Спрятать raw маркера в тексте сообщения (обёртка display:none). */
@@ -664,14 +661,37 @@ function reconcileManualShells(mesEl, textEl, items, { inFlight = null, now = Da
         shell.setAttribute('data-manual', '1');
         shell.setAttribute('data-uris-desc', desc);
         // Прямая замена/добавление: mountShell строит свой узел внутри, атрибуты
-        // data-manual/data-uris-desc на нём не удержать.
-        if (el && el.parentNode) {
+        // data-manual/data-uris-desc на нём не удержать. Якорь абзаца перекрывает
+        // обе ветки: оболочка переносится к своему тексту, пока якорь находит
+        // абзац (текст поста мог отредактировать — тогда прежнее место/конец).
+        const anchor = item.anchorHash ? findAnchorBlock(textEl, item.anchorHash) : null;
+        if (anchor) {
+            removeNode(el);
+            if (!insertAfter(anchor, shell)) textEl.appendChild(shell);
+        } else if (el && el.parentNode) {
             try { el.replaceWith(shell); } catch { removeNode(el); textEl.appendChild(shell); }
         } else {
             textEl.appendChild(shell);
         }
         byKey.set(key, shell);
     }
+}
+
+/** Блок .mes_text с якорным текстом (normalizeAnchorText-хэш): прямой ребёнок
+ * (p/div/значимый текстовый узел), не оболочка. null — не найден. */
+function findAnchorBlock(textEl, anchorHash) {
+    if (!textEl || !anchorHash) return null;
+    let children = [];
+    try { children = Array.from(textEl.childNodes); } catch { return null; }
+    for (const node of children) {
+        const isElement = node.nodeType === 1;
+        const isText = node.nodeType === 3 && String(node.textContent ?? '').trim();
+        if (!isElement && !isText) continue;
+        if (isElement && isShellEl(node)) continue;
+        const norm = normalizeAnchorText(node.textContent);
+        if (norm && stableHash(norm) === anchorHash) return node;
+    }
+    return null;
 }
 
 /** Реролл из DOM: job + catch с toastr (аменда 3: ошибка инициирована здесь —

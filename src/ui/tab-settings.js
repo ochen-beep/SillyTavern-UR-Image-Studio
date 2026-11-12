@@ -88,9 +88,11 @@ export function render(root) {
                 <label class="checkbox_label"><input type="checkbox" id="uris_use_all_params" ${state.settings.useParametersForAllChats === true ? 'checked' : ''}><span>Использовать параметры генерации для всех чатов</span></label>
                 <small class="uris-hint">Глобальные значения (стороны/размер/quality/модель) действуют, только если в текущем чате свой не задан. Изменение параметра во вкладке «Генерация» пишет глобальный дефолт, пока у чата нет собственного значения; как только задали — значение становится чат-локальным.</small>
                 <label class="checkbox_label"><input type="checkbox" id="uris_inline_enabled" ${state.settings.inlineEnabled ? 'checked' : ''}><span>Инлайн-генерация в чате (вкладка «Медиа») ${UNSTABLE_BADGE}</span></label>
-                <small class="uris-hint">[[тип: описание]] в ответах персонажа и 📷-кнопка превращаются в картинки. Профили триггеров — вкладка «Медиа».</small>
+                <small class="uris-hint">[[тип: описание]] в ответах персонажа превращаются в картинки. Профили триггеров — вкладка «Медиа».</small>
                 <label class="checkbox_label"><input type="checkbox" id="uris_inline_chips" ${state.settings.inlineChips === true ? 'checked' : ''}><span>Компакт-режим инлайна (чипы вместо картинок) ${UNSTABLE_BADGE}</span></label>
                 <small class="uris-hint">На месте маркера — чип «📷 тип»; клик раскрывает картинку, ⌃ сворачивает обратно. Удобно, когда картинок в посте много.</small>
+                <label class="checkbox_label"><input type="checkbox" id="uris_launcher_shell_at_end" ${state.settings.launcherShellAtEnd === true ? 'checked' : ''}><span>Лаунчер: картинка всегда в конец поста</span></label>
+                <small class="uris-hint">По умолчанию «Нарисовать по истории» ищет абзац по цитате из промпта Stage 1 (титр на картинке) и ставит результат рядом с ним; цитаты нет — картинка в конце. Тумблер отключает поиск.</small>
                 <label class="checkbox_label"><input type="checkbox" id="uris_auto_retry_ambiguous" ${state.settings.autoRetryAmbiguous === true ? 'checked' : ''}><span>Авто-повтор при неоднозначной доставке (очередь)</span></label>
                 <small class="uris-hint">Если прямой запрос к шлюзу ушёл «без ответа», задача один раз переотправится сама — следующая попытка пойдёт через прокси. Выключено по умолчанию: повтор возможной уже оплаченной генерации — на вашей совести.</small>
             </section>
@@ -271,6 +273,10 @@ function bindBehaviorToggles(root) {
         // Форма готовых/ожидающих оболочек входит в keep-гейт реконсиляции —
         // переключение перестраивает их на месте следующим проходом.
         try { window.dispatchEvent(new CustomEvent('uris:inline-update', {})); } catch { /* node */ }
+    });
+    root.querySelector('#uris_launcher_shell_at_end')?.addEventListener('change', e => {
+        state.settings.launcherShellAtEnd = e.target.checked === true;
+        saveSettings();
     });
 }
 
