@@ -33,7 +33,7 @@ beforeEach(() => {
 });
 
 const {
-    computeShellPlan, reconcileVisible, ensureManualButtons,
+    computeShellPlan, reconcileVisible,
     initRender, shutdownRender,
     messageLightboxItems, setViewerForTests, resetViewerForTests,
     setCardLookupForTests, resetCardLookupForTests,
@@ -409,77 +409,19 @@ test('compact: без чип-режима — прежнее поведение 
     assert.ok(!shell.querySelector('.uris-inl-collapse'), 'сворачивания нет без компакт-режима');
 });
 
-// ── ensureManualButtons (📷 в .mes_buttons) ──
-
-test('ensureManualButtons: 📷 у AI-сообщения; клик → reroll job + ручная оболочка', () => {
-    const { textEl, buttonsEl } = buildChatDOM();
-    const jobs = [];
-    initRender({ reroll: (job) => { jobs.push(job); return Promise.resolve(); } });
-    ensureManualButtons();
-    const btn = buttonsEl.querySelector('[data-uris-manual]');
-    assert.ok(btn, 'кнопка 📷 добавлена');
-    btn.click();
-    assert.equal(jobs.length, 1);
-    assert.deepEqual(jobs[0], { msgId: 0, idx: -1, type: 'img', desc: 'смотри [[img: a]] вот' });
-    const manual = textEl.querySelector('[data-manual="1"]');
-    assert.ok(manual, 'ручная оболочка вставлена в .mes_text');
-    assert.equal(manual.getAttribute('data-uris-status'), 'pending');
-    ensureManualButtons();
-    assert.equal(buttonsEl.querySelectorAll('[data-uris-manual]').length, 1, 'идемпотентно');
-    shutdownRender();
-});
-
-test('ensureManualButtons: сообщение пользователя — без кнопки', () => {
-    chatArr[0].is_user = true;
-    const { buttonsEl } = buildChatDOM();
-    ensureManualButtons();
-    assert.equal(buttonsEl.querySelectorAll('[data-uris-manual]').length, 0);
-});
-
-test('ensureManualButtons: 📷 живёт в .extraMesButtons, а не напрямую в .mes_buttons', () => {
-    const { extraEl } = buildChatDOM();
-    ensureManualButtons();
-    const btn = extraEl.querySelector('[data-uris-manual]');
-    assert.ok(btn, 'кнопка внутри меню дополнительных действий');
-    assert.equal(btn.parentNode, extraEl, 'ровно в .extraMesButtons');
-});
-
-test('ensureManualButtons: без .extraMesButtons — фолбэк в .mes_buttons', () => {
-    const { buttonsEl } = buildChatDOM({ extra: false });
-    ensureManualButtons();
-    const btn = buttonsEl.querySelector('[data-uris-manual]');
-    assert.ok(btn, 'кнопка добавлена даже без меню дополнительных действий');
-    assert.equal(btn.parentNode, buttonsEl);
-});
-
-test('shutdownRender: выключение инлайна снимает 📷-кнопки, включение возвращает', () => {
-    buildChatDOM();
-    ensureManualButtons();
-    assert.ok(document.querySelector('[data-uris-manual]'), 'кнопка стоит до выключения');
-    shutdownRender();
-    assert.equal(document.querySelectorAll('[data-uris-manual]').length, 0, 'после выключения кнопок нет');
-    // Цикл on→off→on: повторное включение возвращает кнопку.
-    initRender({ reroll: () => Promise.resolve() });
-    ensureManualButtons();
-    assert.ok(document.querySelector('[data-uris-manual]'), 'после включения кнопка вернулась');
-    shutdownRender();
-});
-
 test('reconcileVisible: ручная оболочка становится ready после генерации (idx -1)', () => {
-    const { textEl, buttonsEl } = buildChatDOM();
-    const jobs = [];
-    initRender({ reroll: (job) => { jobs.push(job); return Promise.resolve(); } });
-    ensureManualButtons();
-    buttonsEl.querySelector('[data-uris-manual]').click();
-    const manualKey = `-1|img|${stableHash(`img|${jobs[0].desc}`)}`;
+    const { textEl } = buildChatDOM();
+    const DESC = 'смотри [[img: a]] вот';
+    const manualKey = `-1|img|${stableHash(`img|${DESC}`)}`;
+    upsertItem(0, { idx: -1, type: 'img', desc: DESC, descHash: stableHash(`img|${DESC}`), status: 'pending', createdAt: Date.now() });
+    reconcileVisible();
     assert.equal(textEl.querySelector(`[data-uris-inl="${manualKey}"]`).getAttribute('data-uris-status'), 'pending');
-    upsertItem(0, { idx: -1, type: 'img', descHash: stableHash(`img|${jobs[0].desc}`), status: 'ready', imagePath: 'm.png' });
+    upsertItem(0, { idx: -1, type: 'img', descHash: stableHash(`img|${DESC}`), status: 'ready', imagePath: 'm.png' });
     reconcileVisible();
     const shell = textEl.querySelector(`[data-uris-inl="${manualKey}"]`);
     assert.ok(shell, 'ручная оболочка на месте');
     assert.equal(shell.getAttribute('data-uris-status'), 'ready');
     assert.equal(shell.querySelector('img').getAttribute('src'), '/m.png');
-    shutdownRender();
 });
 
 test('render: manual error shell converges (stable identity across passes)', () => {
@@ -487,14 +429,13 @@ test('render: manual error shell converges (stable identity across passes)', () 
     // error-оболочку (data-manual остаётся → совпадение снова) каждый проход —
     // бесконечный чурн через MutationObserver. Здесь без обсервера: 3 прохода
     // подряд должны оставить ТОТ ЖЕ узел.
-    const { textEl, buttonsEl } = buildChatDOM();
-    const jobs = [];
-    initRender({ reroll: (job) => { jobs.push(job); return Promise.resolve(); } });
-    ensureManualButtons();
-    buttonsEl.querySelector('[data-uris-manual]').click();
-    upsertItem(0, { idx: -1, type: 'img', descHash: stableHash(`img|${jobs[0].desc}`), status: 'error', error: 'NO_CONNECTION' });
+    const { textEl } = buildChatDOM();
+    const DESC = 'смотри [[img: a]] вот';
+    upsertItem(0, { idx: -1, type: 'img', desc: DESC, descHash: stableHash(`img|${DESC}`), status: 'pending', createdAt: Date.now() });
     reconcileVisible();
-    const manualKey = `-1|img|${stableHash(`img|${jobs[0].desc}`)}`;
+    upsertItem(0, { idx: -1, type: 'img', descHash: stableHash(`img|${DESC}`), status: 'error', error: 'NO_CONNECTION' });
+    reconcileVisible();
+    const manualKey = `-1|img|${stableHash(`img|${DESC}`)}`;
     const first = textEl.querySelector(`[data-uris-inl="${manualKey}"]`);
     assert.equal(first.getAttribute('data-uris-status'), 'error');
     // Маркер [[img: a]] получает собственную button-оболочку — считаем её,
@@ -524,12 +465,13 @@ test('render: маркерные оболочки тоже сходятся (ide
 });
 
 test('render: осиротевшая ручная pending-оболочка → error, спиннер не живёт вечно', () => {
-    const { textEl, buttonsEl } = buildChatDOM();
-    const jobs = [];
-    initRender({ reroll: (job) => { jobs.push(job); return Promise.resolve(); } });
-    ensureManualButtons();
-    buttonsEl.querySelector('[data-uris-manual]').click();
-    const descHash = stableHash(`img|${jobs[0].desc}`);
+    const { textEl } = buildChatDOM();
+    const DESC = 'смотри [[img: a]] вот';
+    const descHash = stableHash(`img|${DESC}`);
+    upsertItem(0, { idx: -1, type: 'img', desc: DESC, descHash, status: 'pending', createdAt: Date.now() });
+    reconcileVisible();
+    // Генерация убита перезагрузкой: item pending с мёртвым requestId, грейс истёк.
+    upsertItem(0, { idx: -1, type: 'img', descHash, status: 'pending', requestId: 'dead', createdAt: 0 });
     // Генерация убита перезагрузкой: item pending с мёртвым requestId, грейс истёк.
     upsertItem(0, { idx: -1, type: 'img', descHash, status: 'pending', requestId: 'dead', createdAt: 0 });
     reconcileVisible();
