@@ -9,7 +9,7 @@ import assert from 'node:assert/strict';
 import { makeFakeDocument } from './fake-dom.js';
 import { state } from '../src/core.js';
 import { upsertItem } from '../src/inline/store.js';
-import { stableHash } from '../src/inline/runner.js';
+import { stableHash, normalizeAnchorText } from '../src/inline/runner.js';
 
 let doc = null;
 let root = null;
@@ -176,6 +176,54 @@ test('computeShellPlan: свежий pending без requestId (ещё старт
 
 // ── reconcileVisible (smoke через fake-dom) ──
 
+test('reconcileVisible: pending → компактная плашка без аспект-бокса', () => {
+    const { textEl } = buildChatDOM();
+    upsertItem(0, { idx: 0, type: 'img', descHash: HASH_A, status: 'pending', createdAt: Date.now() });
+    reconcileVisible();
+    const plate = textEl.querySelector('.uris-inl-pending');
+    assert.ok(plate, 'плашка смонтирована');
+    assert.equal(plate.getAttribute('style'), null, 'aspect-ratio inline убран');
+    assert.match(plate.textContent, /Рисую/);
+    assert.ok(plate.querySelector('.uris-inl-plate-star'), '✦-индикатор на месте');
+    assert.ok(plate.querySelector('[data-uris-cancel]'), '✕ (платный гвард) на месте');
+});
+
+test('reconcileVisible: ручная оболочка с anchorHash встаёт после своего абзаца', () => {
+    chatArr[0].mes = 'история без маркеров';
+    const { textEl } = buildChatDOM();
+    // Markdown-рендер: три абзаца, второй — момент из поста (сырой текст
+    // содержит **markdown**, DOM — нет; normalizeAnchorText сводит формы).
+    textEl.innerHTML = '';
+    for (const t of ['Утро и кофе на кухне.', '22 октября. Замок входной двери поддался с тихим щелчком.', 'Дождь за окном.']) {
+        const p = doc.createElement('p');
+        p.textContent = t;
+        textEl.appendChild(p);
+    }
+    const DESC = 'история';
+    const anchorHash = stableHash(normalizeAnchorText('**22 октября.** Замок входной двери поддался с тихим щелчком.'));
+    const key = `-1|img|${stableHash(`img|${DESC}`)}`;
+    upsertItem(0, { idx: -1, type: 'img', desc: DESC, descHash: stableHash(`img|${DESC}`), status: 'ready', imagePath: 'story.png', anchorHash });
+    reconcileVisible();
+    const shell = textEl.querySelector(`[data-uris-inl="${key}"]`);
+    assert.ok(shell, 'оболочка смонтирована');
+    // fake-dom не даёт previousSibling — порядок читаем из childNodes.
+    const at = textEl.childNodes.indexOf(shell);
+    assert.equal(textEl.childNodes[at - 1]?.textContent, '22 октября. Замок входной двери поддался с тихим щелчком.',
+        'оболочка стоит сразу после якорного абзаца');
+});
+
+test('reconcileVisible: anchorHash без совпадения → оболочка в конце (fallback)', () => {
+    chatArr[0].mes = 'история без маркеров';
+    const { textEl } = buildChatDOM();
+    const DESC = 'история';
+    const key = `-1|img|${stableHash(`img|${DESC}`)}`;
+    upsertItem(0, { idx: -1, type: 'img', desc: DESC, descHash: stableHash(`img|${DESC}`), status: 'ready', imagePath: 'story.png', anchorHash: 'no-such-hash' });
+    reconcileVisible();
+    const shell = textEl.querySelector(`[data-uris-inl="${key}"]`);
+    assert.ok(shell, 'оболочка смонтирована');
+    assert.equal(shell, textEl.childNodes[textEl.childNodes.length - 1], 'fallback: последний ребёнок .mes_text');
+});
+
 test('reconcileVisible: ready → img с src=/+path, маркер скрыт, оболочка помечена', () => {
     const { textEl } = buildChatDOM();
     upsertItem(0, readyItem());
@@ -214,7 +262,7 @@ test('reconcileVisible: pending → спиннер; ready в store → заме�
     reconcileVisible();
     let shell = textEl.querySelector('[data-uris-inl]');
     assert.equal(shell.getAttribute('data-uris-status'), 'pending');
-    assert.ok(textEl.querySelector('.fa-spinner'), 'спиннер показан');
+    assert.ok(textEl.querySelector('.uris-inl-plate-star'), 'индикатор генерации показан (✦-плашка)');
     // В проде это приходит событием uris:inline-end → reconcileVisible; в тесте
     // вызываем reconcileVisible напрямую — тот же путь обновления оболочки.
     upsertItem(0, { idx: 0, type: 'img', descHash: HASH_A, status: 'ready', imagePath: 'p.png', requestId: 'r1' });

@@ -5,7 +5,8 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { makeFakeDocument } from './fake-dom.js';
 
-import { evaluateGesture, resolveLastAiPostId, buildEmbedItem, runLauncherAction } from '../src/ui/launcher-actions.js';
+import { evaluateGesture, resolveLastAiPostId, buildEmbedItem, runLauncherAction, extractAnchorQuote, pickAnchorParagraph } from '../src/ui/launcher-actions.js';
+import { stableHash, normalizeAnchorText } from '../src/inline/runner.js';
 
 // ── evaluateGesture: one decision for click vs hold-menu vs drag ──
 
@@ -78,6 +79,52 @@ test('buildEmbedItem: same desc → same descHash (shell key stability)', () => 
     );
 });
 
+// ── extractAnchorQuote: Cyrillic quote from the Stage 1 prompt ──
+
+test('extractAnchorQuote: prefers the Subtitle line quote', () => {
+    const prompt = 'Capture the moment...\nSubtitle: Clean minimalist typography reading: "Поставь меня на пол" (omit if none)';
+    assert.equal(extractAnchorQuote(prompt), 'Поставь меня на пол');
+});
+
+test('extractAnchorQuote: falls back to any quoted Cyrillic phrase', () => {
+    const prompt = 'She whispers "уходи, Дэм" and steps back into the rain.';
+    assert.equal(extractAnchorQuote(prompt), 'уходи, Дэм');
+});
+
+test('extractAnchorQuote: ignores English-only quotes and long quotes', () => {
+    assert.equal(extractAnchorQuote('"Damien Blackwood" stands tall, "heritage silver" glints.'), null);
+    const long = 'word '.repeat(13).trim();
+    assert.equal(extractAnchorQuote(`Subtitle: reading: "${long}"`), null);
+    assert.equal(extractAnchorQuote('no quotes at all'), null);
+});
+
+// ── pickAnchorParagraph: same-language fuzzy paragraph match ──
+
+const POST = [
+    'Первый абзац про утро и кофе на кухне.',
+    '**22 октября.** Замок входной двери поддался с тихим щелчком. Дамиен толкнул тяжёлое полотно плечом.',
+    'Финальный абзац про дождь за окном.',
+].join('\n\n');
+
+test('pickAnchorParagraph: matches the middle paragraph ignoring markdown', () => {
+    const anchor = pickAnchorParagraph(POST, 'Замок входной двери поддался с тихим щелчком, Дамиен толкнул полотно плечом');
+    assert.ok(anchor, 'anchor found');
+    assert.equal(anchor.index, 1);
+    assert.equal(anchor.anchorHash, stableHash(normalizeAnchorText(POST.split('\n\n')[1])));
+});
+
+test('pickAnchorParagraph: ties resolve to the first qualifying paragraph', () => {
+    const text = 'Он толкнул дверь плечом.\n\nОн толкнул дверь плечом снова.';
+    const anchor = pickAnchorParagraph(text, 'толкнул дверь плечом');
+    assert.equal(anchor.index, 0);
+});
+
+test('pickAnchorParagraph: below threshold → null (caller appends at end)', () => {
+    assert.equal(pickAnchorParagraph(POST, 'совершенно другая тема про космос и звёзды'), null);
+    assert.equal(pickAnchorParagraph(POST, null), null);
+    assert.equal(pickAnchorParagraph('', 'замок двери'), null);
+});
+
 // ── runLauncherAction: dispatch with injected deps ──
 
 test('runLauncherAction: inline-last rerolls the last eligible post', async () => {
@@ -100,11 +147,11 @@ test('runLauncherAction: story-last runs the full pipeline and embeds the card',
         getChat: () => [msg('story body')],
         getChatId: () => 'chat-1',
         runFullPipeline: input => { calls.push(['pipeline', input]); return card; },
-        embedCard: (c, msgId, desc) => calls.push(['embed', c, msgId, desc]),
+        embedCard: (c, msgId, desc, messageText) => calls.push(['embed', c, msgId, desc, messageText]),
         toast: () => {},
     });
     assert.deepEqual(calls[0], ['pipeline', { chatId: 'chat-1', msgId: 0, messageText: 'story body' }]);
-    assert.deepEqual(calls[1], ['embed', card, 0, 'story body']);
+    assert.deepEqual(calls[1], ['embed', card, 0, 'story body', 'story body']);
 });
 
 test('runLauncherAction: gallery opens the gallery tab', async () => {

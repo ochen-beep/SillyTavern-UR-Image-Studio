@@ -277,6 +277,9 @@ export const defaultSettings = Object.freeze({
     inlineListenUser: false,   // дефолт реагировать на ключевые слова в сообщениях юзера
     inlineChips: false,        // компакт-режим: готовые/ожидающие картинки — чипами, клик раскрывает
     inlineTriggers: null,      // профили; null → sanitizeTriggerList(DEFAULT_TRIGGERS) в потребителях
+    // Лаунчер «Нарисовать по истории»: true — картинка всегда в конец поста;
+    // false (дефолт) — автоопределение абзаца по цитате из промпта Stage 1.
+    launcherShellAtEnd: false,
 
     // ── Text-LLM source (for building the image prompt) ──
     // 'profile' = Connection Manager ST (routed by ST server — no CORS/405).

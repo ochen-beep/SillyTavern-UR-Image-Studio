@@ -54,6 +54,18 @@ export function stableHash(str) {
 }
 
 /**
+ * Канонический текст абзаца для якорей оболочек: только буквы/цифры/пробелы
+ * в нижнем регистре. Markdown-разметка поста (**жирный**, *курсив*) и
+ * DOM-textContent отрендеренного абзаца сводятся к одной форме, поэтому
+ * anchorHash из сырого messageText совпадает с хэшем текста абзаца в чате.
+ * @param {string} text
+ * @returns {string}
+ */
+export function normalizeAnchorText(text) {
+    return String(text || '').toLowerCase().replace(/[^\p{L}\p{N}]+/gu, ' ').trim();
+}
+
+/**
  * Решение по одному сообщению. Чистая: время и живые requestId внедряются.
  * @param {{
  *   msgId:number|string,

@@ -19,7 +19,7 @@
 
 import { getCtx, state } from '../core.js';
 import { isGenerationEligible } from '../post-navigator.js';
-import { rerollInline, stableHash } from '../inline/runner.js';
+import { rerollInline, stableHash, normalizeAnchorText } from '../inline/runner.js';
 import { upsertItem } from '../inline/store.js';
 import { runFullPipelineForDraft } from '../pipeline-stage1.js';
 import { reconcileVisible } from '../inline/render.js';
@@ -62,9 +62,9 @@ export function resolveLastAiPostId(chat) {
 /**
  * Pipeline card → inline store item (idx -1 = manual shell, keyed by desc).
  * Same key shape the old 📷 button used, so pending → ready upgrades in place.
- * @param {{card: {id?: string, imagePath?: string}, desc: string}} input
+ * @param {{card: {id?: string, imagePath?: string, prompt?: string}, desc: string, anchorHash?: string|null}} input
  */
-export function buildEmbedItem({ card, desc }) {
+export function buildEmbedItem({ card, desc, anchorHash = null }) {
     return {
         idx: -1,
         type: 'img',
@@ -73,7 +73,77 @@ export function buildEmbedItem({ card, desc }) {
         status: 'ready',
         imagePath: String(card?.imagePath || ''),
         cardId: card?.id || null,
+        anchorHash: anchorHash || undefined,
     };
+}
+
+// ── Story-shell anchor: which post paragraph the picture illustrates ──
+
+/**
+ * First Cyrillic quote in the Stage 1 prompt. Primary source: the base
+ * template's `Subtitle: … "Exact short quote in Russian"` line (the quote is
+ * rendered into the image as a caption, so it names the exact moment); falls
+ * back to any other quoted Cyrillic phrase. English-only quotes (character
+ * names in the Characters section) are ignored. Pure, unit-tested.
+ * @param {string} prompt
+ * @returns {string|null}
+ */
+export function extractAnchorQuote(prompt) {
+    const text = String(prompt || '');
+    const candidates = [];
+    const subtitle = text.match(/Subtitle:[^\n]*?"([^"\n]{2,120})"/i);
+    if (subtitle) candidates.push(subtitle[1]);
+    for (const m of text.matchAll(/"([^"\n]{2,120})"/g)) candidates.push(m[1]);
+    for (const quote of candidates) {
+        const words = quote.trim().split(/\s+/).filter(Boolean);
+        if (words.length > 12) continue;
+        if (/\p{Script=Cyrillic}/u.test(quote)) return quote.trim();
+    }
+    return null;
+}
+
+/**
+ * Best post paragraph for an anchor quote: token overlap (same language —
+ * the base template asks for a Russian quote while the post is Russian).
+ * Ties → the FIRST paragraph; below the threshold → null (caller falls back
+ * to append-at-end). Pure, unit-tested.
+ * @param {string} postText
+ * @param {string|null} quote
+ * @returns {{index: number, anchorHash: string}|null}
+ */
+export function pickAnchorParagraph(postText, quote) {
+    const normalizedQuote = normalizeAnchorText(quote);
+    if (!normalizedQuote) return null;
+    const quoteTokens = new Set(normalizedQuote.split(' ').filter(t => t.length >= 2));
+    if (!quoteTokens.size) return null;
+    const paragraphs = String(postText || '')
+        .split(/\n{2,}|\n/)
+        .map(p => p.trim())
+        .filter(Boolean);
+    let best = null;
+    for (let index = 0; index < paragraphs.length; index++) {
+        const norm = normalizeAnchorText(paragraphs[index]);
+        if (!norm) continue;
+        const tokens = new Set(norm.split(' '));
+        let hits = 0;
+        for (const t of quoteTokens) if (tokens.has(t)) hits += 1;
+        const ratio = hits / quoteTokens.size;
+        const qualifies = hits >= 2 || ratio >= 0.3;
+        if (!qualifies) continue;
+        // Strictly greater: ties keep the earlier paragraph.
+        if (!best || hits > best.hits) best = { index, hits, norm };
+    }
+    if (!best) return null;
+    return { index: best.index, anchorHash: stableHash(best.norm) };
+}
+
+/** Anchor for a finished story pipeline (null when the end-placement toggle
+ * is on, the prompt has no usable quote, or nothing matched). */
+function resolveStoryAnchor(messageText, prompt) {
+    if (state.settings?.launcherShellAtEnd === true) return null;
+    const quote = extractAnchorQuote(prompt);
+    if (!quote) return null;
+    return pickAnchorParagraph(messageText, quote);
 }
 
 /**
@@ -101,7 +171,7 @@ export async function runLauncherAction(id, deps = {}) {
         const desc = messageText.slice(0, 4000);
         const card = await deps.runFullPipeline?.({ chatId: await deps.getChatId?.(), msgId, messageText });
         if (!card || !card.imagePath) throw new Error('Пайплайн не вернул картинку');
-        await deps.embedCard?.(card, msgId, desc);
+        await deps.embedCard?.(card, msgId, desc, messageText);
         return;
     }
     throw new Error(`Неизвестное действие лаунчера: ${id}`);
@@ -141,7 +211,8 @@ function launcherDeps() {
                     // the shell instead of a forever-spinner.
                     throw new Error('Картинка для этого текста уже сгенерирована');
                 }
-                upsertItem(input.msgId, buildEmbedItem({ card, desc }));
+                const anchor = resolveStoryAnchor(input.messageText, card?.prompt);
+                upsertItem(input.msgId, buildEmbedItem({ card, desc, anchorHash: anchor?.anchorHash || null }));
                 reconcileVisible();
                 return card;
             } catch (e) {
@@ -154,8 +225,9 @@ function launcherDeps() {
                 throw e;
             }
         },
-        embedCard: (card, msgId, desc) => {
-            upsertItem(msgId, buildEmbedItem({ card, desc }));
+        embedCard: (card, msgId, desc, messageText = '') => {
+            const anchor = resolveStoryAnchor(messageText, card?.prompt);
+            upsertItem(msgId, buildEmbedItem({ card, desc, anchorHash: anchor?.anchorHash || null }));
             reconcileVisible();
         },
         openGalleryTab: async () => {

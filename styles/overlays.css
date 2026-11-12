@@ -799,18 +799,18 @@ div.pswp__img--placeholder,
 }
 
 /* ── Инлайн-оболочки в сообщениях чата (src/inline/render.js) ──
-   Контейнер картинки/заглушки в .mes_text; позиционирование бейджа —
-   относительно оболочки. Остальное (рамки, кнопки, pending-frame) — inline. */
+   Контейнер картинки/заглушки в .mes_text: вся ширина текста чата,
+   по центру; позиционирование бейджа — относительно оболочки. */
 .uris-inl-shell {
-    max-width: min(100%, 420px);
-    margin: 6px 0;
+    width: 100%;
+    max-width: 100%;
+    margin: 8px auto;
     position: relative;
     line-height: 0;
 }
 .uris-inl-shell img {
-    max-width: 100%;
-    max-height: 420px;
-    width: auto;
+    width: 100%;
+    height: auto;
     /* Единый радиус картинок расширения (--uris-radius-card), как у плиток
        галереи/референсов и инлайн-заглушки (было 10px — радиус окна). */
     border-radius: var(--uris-radius-card);
@@ -836,25 +836,31 @@ div.pswp__img--placeholder,
     pointer-events: none;
 }
 
-/* Заглушка «генерирую…» и кнопки инлайн-блока: классы вместо inline-стилей
-   (render.js). Рамки/цвет — от темы ST (элемент живёт в сообщении чата),
-   радиусы — токены URIS: заглушка совпадает с картинкой (--uris-radius-card),
-   кнопки — с системным --uris-radius. Аспект заглушки динамический —
-   остаётся единственным inline-стилем (aspect-ratio в render.js). */
+/* Компактная плашка «Рисую ✦ … [✕]» на время генерации: одна на все
+   заглушки (маркеры и лаунчер-пайплайн). Рамки/цвет — от темы ST,
+   радиус совпадает с картинкой (--uris-radius-card). */
 .uris-inl-pending {
-    max-width: 100%;
-    /* Кап = max-height готовой картинки (uris-inl-shell img): 9:16-заглушка
-       не раздувает пост на ~750px и при готовности не даёт layout-скачок. */
-    max-height: 420px;
+    width: 100%;
     border: 1px dashed var(--SmartThemeBorderColor, #666);
     border-radius: var(--uris-radius-card);
-    display: flex; flex-direction: column; align-items: center; justify-content: center;
-    gap: 6px; padding: 12px;
+    display: flex; align-items: center; justify-content: center;
+    gap: 8px; padding: 10px 14px;
     color: var(--SmartThemeEmColor, inherit);
     font-size: small; line-height: 1.4;
 }
+.uris-inl-plate-star {
+    font-size: 15px;
+    animation: uris-star-pulse 1.6s ease-in-out infinite;
+}
+.uris-inl-plate-label {
+    opacity: 0.75;
+}
+@keyframes uris-star-pulse {
+    0%, 100% { opacity: 1; transform: scale(1); }
+    50% { opacity: 0.35; transform: scale(0.82); }
+}
 .uris-inl-cancel {
-    margin-top: 2px; padding: 2px 10px;
+    margin-left: auto; padding: 2px 10px;
     border-radius: var(--uris-radius);
     border: 1px solid var(--SmartThemeBorderColor, #666);
     background: transparent; color: inherit; cursor: pointer;
@@ -903,5 +909,6 @@ button.uris-inl-chip { cursor: pointer; }
 @media (prefers-reduced-motion: reduce) {.uris-fetch-models.loading i,
     .uris-server-probe.uris-server-loading::before,
     .uris-server-probe.loading::before,
-    .uris-pswp .pswp__preloader .pswp__icn{ animation: none; }
+    .uris-pswp .pswp__preloader .pswp__icn,
+    .uris-inl-plate-star{ animation: none; }
 }
