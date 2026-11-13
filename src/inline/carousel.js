@@ -30,6 +30,13 @@ export function collectManualView(items) {
         return item;
     });
     const ready = all.filter(i => i.status === 'ready' && i.imagePath);
+    // Счётчик версий = суммарное число встроенных карточек (cardIds), не item'ов:
+    // один item может нести несколько версий (attach-хук приклеивает каждую
+    // платную карточку поста в его cardIds — живой QA 2026-11-13).
+    const count = ready.reduce((n, i) => n
+        + (Array.isArray(i.cardIds) && i.cardIds.length
+            ? i.cardIds.length
+            : (i.cardId ? 1 : 0)), 0);
     return {
         items: all,
         ready,
@@ -38,7 +45,7 @@ export function collectManualView(items) {
         // «Текст изменился» (digest-инвариант): готовые, чей вариант текста уехал.
         changed: all.filter(i => i.status === 'changed'),
         cover: ready.length ? ready[ready.length - 1] : null,
-        count: ready.length,
+        count,
         empty: !all.length,
     };
 }
