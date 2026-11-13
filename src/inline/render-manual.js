@@ -68,9 +68,8 @@ function latestAnchorText(view) {
     return null;
 }
 
-function positionManualShell(textEl, shell, view) {
+function positionManualShell(textEl, shell, view, position = resolveShellPosition()) {
     const blocks = manualBlocks(textEl);
-    const position = resolveShellPosition();
     // «В начало» — ПЕРЕД первым блоком (insertAfter первого абзаца ставил бы
     // оболочку после первого абзаца — живой QA 2026-11-13).
     if (position === 'start' && blocks.length) {
@@ -128,8 +127,12 @@ export function reconcileManualShells(mesEl, textEl, items, { inFlight = null, n
     }
     const status = manualStatus(view);
     const form = manualFormFor(view);
+    const position = resolveShellPosition();
+    // Позиция входит в keep-гейт: смена настройки должна переставить уже
+    // смонтированную оболочку (живой QA 2026-11-13 — без этого shellPosition
+    // применялся только при первом монтировании).
     const sig = [
-        status, form, view.cover?.imagePath || '', view.count,
+        status, form, position, view.cover?.imagePath || '', view.count,
         view.pendings.length,
         view.errors.map(e => `${e.descHash}:${e.error || ''}`).join(','),
         view.changed.map(e => e.descHash).join(','),
@@ -138,7 +141,7 @@ export function reconcileManualShells(mesEl, textEl, items, { inFlight = null, n
     const shell = buildManualShell(msgId, view, status, form, sig);
     shell.setAttribute('data-manual', '1');
     if (el) removeNode(el);
-    positionManualShell(textEl, shell, view);
+    positionManualShell(textEl, shell, view, position);
 }
 
 function manualFormFor(view) {
