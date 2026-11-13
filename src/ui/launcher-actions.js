@@ -258,7 +258,7 @@ function launcherDeps() {
             upsertItem(input.msgId, {
                 idx: -1, type: 'img', origin: 'story', status: 'pending',
                 descHash, digest, requestId: token, createdAt: Date.now(),
-            }, { variantIdx });
+            }, { variantIdx, save: false });
             reconcileVisible();
             try {
                 const card = await runFullPipelineForDraft(input, undefined, abort.signal, { force: true });

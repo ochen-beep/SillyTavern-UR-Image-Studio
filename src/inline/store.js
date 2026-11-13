@@ -77,6 +77,16 @@ export function itemKey(item) {
 }
 
 // ── Дебаунс saveChat: записи в extra сохраняются чатом, не metadata ──
+//
+// Стоимость: один saveChat = JSON.stringify + POST всего файла чата. На
+// больших чатах (6 МБ+) это сотни миллисекунд main-thread (замер 2026-11-13:
+// 699 мс на чате 97 постов/395 свайпов). Политика двух слоёв:
+//  • pending-записи НЕ сохраняются вовсе — после краша плашка честно станет
+//    error с retry (грейс-механика рендера), платный ready всегда доезжает;
+//  • важные записи (ready/error/attach/удаление) — дебаунс 4 с, чтобы пачки
+//    завершений склеивались в один save; pagehide-флаш (flushChatSave)
+//    остаётся принудительным.
+const SAVE_DEBOUNCE_MS = 4000;
 
 let saveTimer = null;
 
@@ -85,7 +95,7 @@ function scheduleChatSave() {
     saveTimer = setTimeout(() => {
         saveTimer = null;
         try { chatCtx().saveChat?.(); } catch { /* node-тесты */ }
-    }, 800);
+    }, SAVE_DEBOUNCE_MS);
 }
 
 /** Немедленный флеш отложенной записи чата (выгрузка страницы, тесты). */
@@ -120,7 +130,7 @@ export function getSlot(msgId) {
  * requestId стирается при выходе из pending. undefined-значения не затирают.
  * @returns {object|null} сохранённый item (null — нет поста/варианта)
  */
-export function upsertItem(msgId, item, { variantIdx } = {}) {
+export function upsertItem(msgId, item, { variantIdx, save = true } = {}) {
     const msg = msgOf(msgId);
     if (!msg || !item || typeof item !== 'object') return null;
     const container = targetFor(msg, variantIdx);
@@ -144,7 +154,7 @@ export function upsertItem(msgId, item, { variantIdx } = {}) {
         if (!Array.isArray(existing.cardIds)) existing.cardIds = [];
         if (!existing.cardIds.includes(existing.cardId)) existing.cardIds.push(existing.cardId);
     }
-    scheduleChatSave();
+    if (save) scheduleChatSave();
     return existing;
 }
 
@@ -270,9 +280,11 @@ export function migrateLegacySlots() {
     const store = ctx.chatMetadata?.[LEGACY_KEY];
     if (!store?.msgs || !Array.isArray(ctx.chat)) return 0;
     let moved = 0;
+    let touched = 0;
     for (const [key, slot] of Object.entries(store.msgs)) {
         if (!slot || slot.migratedAt) continue;
         slot.migratedAt = Date.now();
+        touched++;
         if (!Array.isArray(slot.items) || !slot.items.length) continue;
         let idx = Number(key);
         if (!Number.isInteger(idx) || idx < 0 || ctx.chat[idx]?.mes !== slot.sourceText) {
@@ -302,8 +314,12 @@ export function migrateLegacySlots() {
             }
         }
     }
-    if (moved) scheduleChatSave();
-    try { ctx.saveMetadataDebounced?.(); } catch { /* node-тесты */ }
+    // migratedAt-разметка меняет metadata — сохраняем ТОЛЬКО при изменениях:
+    // безгвардовое saveMetadataDebounced на каждом тике/CHAT_CHANGED давало
+    // фоновую запись (живой QA 2026-11-13).
+    if (moved || touched) {
+        try { ctx.saveMetadataDebounced?.(); } catch { /* node-тесты */ }
+    }
     return moved;
 }
 
