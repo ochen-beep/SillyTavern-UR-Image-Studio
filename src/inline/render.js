@@ -78,6 +78,8 @@ export function initRender({ reroll, rerollStory } = {}) {
     _onInlineEvent = () => { try { reconcileVisible(); } catch { /* рендер не роняет обработчик */ } };
     if (typeof window !== 'undefined' && typeof window.addEventListener === 'function') {
         window.addEventListener('uris:inline-update', _onInlineEvent);
+        window.addEventListener('uris:inline-queued', _onInlineEvent);
+        window.addEventListener('uris:inline-start', _onInlineEvent);
         window.addEventListener('uris:inline-end', _onInlineEvent);
     }
     ensureObserver();
@@ -90,6 +92,8 @@ export function shutdownRender() {
     if (_debounceId) { clearTimeout(_debounceId); _debounceId = null; }
     if (_onInlineEvent && typeof window !== 'undefined' && typeof window.removeEventListener === 'function') {
         window.removeEventListener('uris:inline-update', _onInlineEvent);
+        window.removeEventListener('uris:inline-queued', _onInlineEvent);
+        window.removeEventListener('uris:inline-start', _onInlineEvent);
         window.removeEventListener('uris:inline-end', _onInlineEvent);
     }
     _onInlineEvent = null;
