@@ -18,6 +18,7 @@ import { reportFailure, URIS_SCOPES } from '../error-pool.js';
 import { reconcileCards, restoreCardsFromSidecars } from '../gallery-index.js';
 import { clearGallery } from '../storage.js';
 import { isStudioActive, resolveActiveChatId } from '../studio-scope.js';
+import { resolveShellPosition, resolveShellClickAction } from '../core.js';
 import { refreshActive, renderTabs } from './tabs.js';
 import { applyInlineRuntime } from './tab-media.js';
 
@@ -91,8 +92,23 @@ export function render(root) {
                 <small class="uris-hint">[[тип: описание]] в ответах персонажа превращаются в картинки. Профили триггеров — вкладка «Медиа».</small>
                 <label class="checkbox_label"><input type="checkbox" id="uris_inline_chips" ${state.settings.inlineChips === true ? 'checked' : ''}><span>Компакт-режим инлайна (чипы вместо картинок) ${UNSTABLE_BADGE}</span></label>
                 <small class="uris-hint">На месте маркера — чип «📷 тип»; клик раскрывает картинку, ⌃ сворачивает обратно. Удобно, когда картинок в посте много.</small>
-                <label class="checkbox_label"><input type="checkbox" id="uris_launcher_shell_at_end" ${state.settings.launcherShellAtEnd === true ? 'checked' : ''}><span>Лаунчер: картинка всегда в конец поста</span></label>
-                <small class="uris-hint">По умолчанию «Нарисовать по истории» ищет абзац по цитате из промпта Stage 1 (титр на картинке) и ставит результат рядом с ним; цитаты нет — картинка в конце. Тумблер отключает поиск.</small>
+                <label class="checkbox_label"><span>Позиция картинки в посте</span>
+                    <select class="text_pole uris-notify-select" id="uris_launcher_shell_position">
+                        <option value="context" ${resolveShellPosition() === 'context' ? 'selected' : ''}>По смыслу (цитата из промпта)</option>
+                        <option value="start" ${resolveShellPosition() === 'start' ? 'selected' : ''}>В начало поста</option>
+                        <option value="middle" ${resolveShellPosition() === 'middle' ? 'selected' : ''}>В середину поста</option>
+                        <option value="end" ${resolveShellPosition() === 'end' ? 'selected' : ''}>В конец поста</option>
+                    </select></label>
+                <small class="uris-hint">«По смыслу» ищет абзац по цитате из промпта Stage 1 (титр на картинке); цитаты нет — картинка в конце. Смена действует и на уже готовые картинки.</small>
+                <label class="checkbox_label"><span>Клик по картинке в посте</span>
+                    <select class="text_pole uris-notify-select" id="uris_shell_click_action">
+                        <option value="lightbox" ${resolveShellClickAction() === 'lightbox' ? 'selected' : ''}>Лайтбокс (просмотр всех версий)</option>
+                        <option value="tab" ${resolveShellClickAction() === 'tab' ? 'selected' : ''}>Новая вкладка браузера</option>
+                        <option value="none" ${resolveShellClickAction() === 'none' ? 'selected' : ''}>Ничего</option>
+                    </select></label>
+                <small class="uris-hint">Нативное меню браузера (сохранить/копировать) на картинках в посте всегда доступно правой кнопкой или зажатием.</small>
+                <label class="checkbox_label"><input type="checkbox" id="uris_carousel_all_versions" ${state.settings.carouselAllVersions === true ? 'checked' : ''}><span>Лайтбокс поста: показывать все версии картинок</span></label>
+                <small class="uris-hint">По умолчанию лайтбокс показывает только картинки, встроенные в пост. Тумблер добавляет ВСЕ картинки этого поста из галереи (авто-генерации, старые прогоны).</small>
                 <label class="checkbox_label"><input type="checkbox" id="uris_auto_retry_ambiguous" ${state.settings.autoRetryAmbiguous === true ? 'checked' : ''}><span>Авто-повтор при неоднозначной доставке (очередь)</span></label>
                 <small class="uris-hint">Если прямой запрос к шлюзу ушёл «без ответа», задача один раз переотправится сама — следующая попытка пойдёт через прокси. Выключено по умолчанию: повтор возможной уже оплаченной генерации — на вашей совести.</small>
             </section>
@@ -274,8 +290,20 @@ function bindBehaviorToggles(root) {
         // переключение перестраивает их на месте следующим проходом.
         try { window.dispatchEvent(new CustomEvent('uris:inline-update', {})); } catch { /* node */ }
     });
-    root.querySelector('#uris_launcher_shell_at_end')?.addEventListener('change', e => {
-        state.settings.launcherShellAtEnd = e.target.checked === true;
+    root.querySelector('#uris_launcher_shell_position')?.addEventListener('change', e => {
+        const value = String(e.target.value || '');
+        if (['context', 'start', 'middle', 'end'].includes(value)) state.settings.shellPosition = value;
+        saveSettings();
+        // Позиция применяется при отрисовке — готовые оболочки переставляются.
+        try { window.dispatchEvent(new CustomEvent('uris:inline-update', {})); } catch { /* node */ }
+    });
+    root.querySelector('#uris_shell_click_action')?.addEventListener('change', e => {
+        const value = String(e.target.value || '');
+        if (['lightbox', 'tab', 'none'].includes(value)) state.settings.shellClickAction = value;
+        saveSettings();
+    });
+    root.querySelector('#uris_carousel_all_versions')?.addEventListener('change', e => {
+        state.settings.carouselAllVersions = e.target.checked === true;
         saveSettings();
     });
 }

@@ -146,10 +146,10 @@ export function pickAnchorParagraph(postText, quote) {
     return { index: best.index, anchorText: best.norm.slice(0, 160) };
 }
 
-/** Anchor for a finished story pipeline (null when the end-placement toggle
- * is on, the prompt has no usable quote, or nothing matched). */
+/** Anchor for a finished story pipeline (null when the prompt has no usable
+ * quote or nothing matched). The POSITION setting applies at render time —
+ * the anchor is always computed so a setting change repositions old shells. */
 function resolveStoryAnchor(messageText, prompt) {
-    if (state.settings?.launcherShellAtEnd === true) return null;
     const quote = extractAnchorQuote(prompt);
     if (!quote) return null;
     return pickAnchorParagraph(messageText, quote);
