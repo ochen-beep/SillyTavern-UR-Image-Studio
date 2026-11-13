@@ -75,14 +75,6 @@ test('carouselLightboxItems: карточки нет в галерее → сл�
     assert.equal(out[0].id, 'gone');
 });
 
-test('carouselLightboxItems: все версии поста добавляются без дублей', () => {
-    const cards = new Map([['c1', { id: 'c1', imagePath: 'p.png' }]]);
-    const slotItems = [item()];
-    const extra = [{ id: 'c1', imagePath: 'p.png' }, { id: 'c9', imagePath: 'z.png' }];
-    const out = carouselLightboxItems({ slotItems, cards, allVersionsCards: extra });
-    assert.deepEqual(out.map(i => i.id), ['c1', 'c9']);
-});
-
 test('placementRef: start/middle/end/context', () => {
     const blocks = [{ textContent: 'первый абзац' }, { textContent: 'второй длинный абзац' }, { textContent: 'третий абзац' }];
     assert.equal(placementRef(blocks, { position: 'start' }), blocks[0]);

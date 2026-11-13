@@ -107,8 +107,6 @@ export function render(root) {
                         <option value="none" ${resolveShellClickAction() === 'none' ? 'selected' : ''}>Ничего</option>
                     </select></label>
                 <small class="uris-hint">Нативное меню браузера (сохранить/копировать) на картинках в посте всегда доступно правой кнопкой или зажатием.</small>
-                <label class="checkbox_label"><input type="checkbox" id="uris_carousel_all_versions" ${state.settings.carouselAllVersions === true ? 'checked' : ''}><span>Лайтбокс поста: показывать все версии картинок</span></label>
-                <small class="uris-hint">По умолчанию лайтбокс показывает только картинки, встроенные в пост. Тумблер добавляет ВСЕ картинки этого поста из галереи (авто-генерации, старые прогоны).</small>
                 <label class="checkbox_label"><input type="checkbox" id="uris_auto_retry_ambiguous" ${state.settings.autoRetryAmbiguous === true ? 'checked' : ''}><span>Авто-повтор при неоднозначной доставке (очередь)</span></label>
                 <small class="uris-hint">Если прямой запрос к шлюзу ушёл «без ответа», задача один раз переотправится сама — следующая попытка пойдёт через прокси. Выключено по умолчанию: повтор возможной уже оплаченной генерации — на вашей совести.</small>
             </section>
@@ -300,10 +298,6 @@ function bindBehaviorToggles(root) {
     root.querySelector('#uris_shell_click_action')?.addEventListener('change', e => {
         const value = String(e.target.value || '');
         if (['lightbox', 'tab', 'none'].includes(value)) state.settings.shellClickAction = value;
-        saveSettings();
-    });
-    root.querySelector('#uris_carousel_all_versions')?.addEventListener('change', e => {
-        state.settings.carouselAllVersions = e.target.checked === true;
         saveSettings();
     });
 }

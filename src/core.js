@@ -283,8 +283,6 @@ export const defaultSettings = Object.freeze({
     shellPosition: 'context',
     // Клик по картинке в посте: 'lightbox' | 'tab' | 'none'.
     shellClickAction: 'lightbox',
-    // Лайтбокс поста показывает все карточки галереи этого поста (chatId+sourceMsgId).
-    carouselAllVersions: false,
 
     // ── Text-LLM source (for building the image prompt) ──
     // 'profile' = Connection Manager ST (routed by ST server — no CORS/405).
