@@ -41,7 +41,7 @@ export async function scanMessage(msgId, { auto = true } = {}) {
         let dirty = false;
         for (const a of actions) {
             if (a.action === 'store-pending') {
-                upsertItem(msgId, { ...a.item }, { messageHash });
+                upsertItem(msgId, { ...a.item }, { messageHash, save: false });
                 dirty = true;
             } else if (a.action === 'queue') {
                 queueInlineJob({ msgId: Number(msgId), idx: a.item.idx, type: a.item.type, desc: a.marker.desc })

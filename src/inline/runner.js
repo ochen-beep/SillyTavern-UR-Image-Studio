@@ -184,7 +184,9 @@ export async function processJob({ msgId, idx, type, desc }, operation = null) {
     // retry, пока ещё выполняется. Store не даёт готовому ready откатиться
     // в pending (его guard ready→pending), а keyword-задачи получают видимый
     // живой pending ещё до первого скана.
-    if (msgId >= 0 && sourceCurrent(operation, msgId)) upsertItem(msgId, { idx, type, descHash, desc, status: 'pending', requestId, createdAt: Date.now() });
+    // pending НЕ сохраняет чат: спиннер переживает краш как error-плашка
+    // (грейс рендера), а полный saveChat на больших чатах стоит сотни мс.
+    if (msgId >= 0 && sourceCurrent(operation, msgId)) upsertItem(msgId, { idx, type, descHash, desc, status: 'pending', requestId, createdAt: Date.now() }, { save: false });
     let outcome = 'error';      // 'ready' | 'cancelled' | 'error'
     let errorCode = null;
     let errorText = null;       // человекочитаемая причина для UI (item.error, uris:inline-end)
@@ -297,7 +299,7 @@ export function queueInlineJob(job) {
     const operation = captureOperation(job);
     if (job.msgId >= 0) upsertItem(job.msgId, { idx: job.idx, type: job.type,
         descHash: stableHash(`${job.type}|${job.desc}`), status: 'pending',
-        requestId: operation.requestId, createdAt: Date.now() });
+        requestId: operation.requestId, createdAt: Date.now() }, { save: false });
     // Журнал очереди (бейдж QUEUE): строка рождается «ждёт» ещё в автолейне и
     // переходит в «выполняется» только когда processJob реально стартует.
     // Пишет продюсер (один писатель; окно — только читатель).

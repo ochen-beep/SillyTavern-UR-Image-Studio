@@ -46,16 +46,28 @@ test('store: нет extra.uris → пустой слот', () => {
     assert.deepEqual(getSlot(0), { messageHash: null, items: [] });
 });
 
-test('store: upsertItem пишет в msg.extra.uris и сохраняет чатом', () => {
-    const it = upsertItem(0, { idx: -1, type: 'img', origin: 'story', status: 'pending',
-        descHash: 'aa', digest: digest1, createdAt: 1 });
+test('store: upsertItem пишет в msg.extra.uris; ready сохраняет чатом', () => {
+    const it = upsertItem(0, { idx: -1, type: 'img', origin: 'story', status: 'ready',
+        descHash: 'aa', digest: digest1, imagePath: 'p.png', createdAt: 1 });
     assert.ok(it);
     const cont = chatArr[0].extra.uris;
     assert.equal(cont.v, 1);
     assert.equal(cont.items.length, 1);
     flushChatSave();
-    assert.ok(chatSaved > 0, 'saveChat вызван');
+    assert.ok(chatSaved > 0, 'saveChat вызван для важной записи');
     assert.equal(metaSaved, 0, 'metadata не трогается item-записью');
+});
+
+test('store: pending-запись НЕ планирует saveChat (дорогой save только для платного)', () => {
+    // Регресс производительности 2026-11-13: pending на чате 6МБ триггерил
+    // полный saveChat (замер — 699мс). Спиннер деградирует в error после
+    // краша — сохранять его не нужно.
+    upsertItem(0, { idx: -1, type: 'img', origin: 'story', status: 'pending',
+        descHash: 'aa', digest: digest1, requestId: 'r1', createdAt: 1 });
+    assert.equal(chatSaved, 0, 'pending не планирует saveChat');
+    // pagehide-флаш сохраняет всё за один раз — это отдельный контракт.
+    flushChatSave();
+    assert.equal(chatSaved, 1, 'флаш на выгрузке принудителен');
 });
 
 test('store: pending → ready апгрейд по ключу (idx,type,descHash)', () => {
