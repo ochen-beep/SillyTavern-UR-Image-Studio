@@ -211,6 +211,33 @@ test('reconcileVisible: ручная оболочка с anchorText встаёт
         'оболочка стоит сразу после якорного абзаца');
 });
 
+test('reconcileVisible: смена shellPosition переставляет смонтированную оболочку', () => {
+    // Регресс 2026-11-13: позиция не входила в keep-гейт — оболочка отвечала
+    // на смену настройки только при первом монтировании.
+    chatArr[0].mes = 'история без маркеров';
+    const { textEl } = buildChatDOM();
+    for (const t of ['Первый абзац.', 'Второй абзац.', 'Третий абзац.']) {
+        const p = doc.createElement('p');
+        p.textContent = t;
+        textEl.appendChild(p);
+    }
+    state.settings.shellPosition = 'start';
+    upsertItem(0, { idx: -1, type: 'img', descHash: 'm1', status: 'ready', imagePath: 'story.png' });
+    reconcileVisible();
+    assert.equal(textEl.childNodes[0].getAttribute('data-uris-inl'), 'manual', 'start — первым');
+    state.settings.shellPosition = 'end';
+    reconcileVisible();
+    assert.equal(textEl.childNodes[textEl.childNodes.length - 1].getAttribute('data-uris-inl'), 'manual', 'end — последним');
+    state.settings.shellPosition = 'middle';
+    reconcileVisible();
+    const nodes = Array.from(textEl.childNodes);
+    const at = nodes.indexOf(textEl.querySelector('[data-uris-inl="manual"]'));
+    // Блоки включают ведущий текстовый узел buildChatDOM: [text, p1, p2, p3] —
+    // middle = blocks[2] (p2), оболочка сразу после него.
+    assert.equal(nodes[at - 1]?.textContent, 'Второй абзац.', 'middle — после blocks[2]');
+    state.settings.shellPosition = 'context';
+});
+
 test('reconcileVisible: позиция «в начало» ставит оболочку первым блоком', () => {
     state.settings.shellPosition = 'start';
     chatArr[0].mes = 'история без маркеров';
