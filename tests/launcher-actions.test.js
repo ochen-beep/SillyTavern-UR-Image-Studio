@@ -5,8 +5,9 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { makeFakeDocument } from './fake-dom.js';
 
-import { evaluateGesture, resolveLastAiPostId, buildEmbedItem, runLauncherAction, rerollStoryForMsg, extractAnchorQuote, pickAnchorParagraph } from '../src/ui/launcher-actions.js';
+import { evaluateGesture, resolveLastAiPostId, buildEmbedItem, runLauncherAction, rerollStoryForMsg, registerStoryAbort, extractAnchorQuote, pickAnchorParagraph } from '../src/ui/launcher-actions.js';
 import { stableHash, normalizeAnchorText } from '../src/inline/runner.js';
+import { state } from '../src/core.js';
 import { hashMessage } from '../src/generation-drafts.js';
 
 // ── evaluateGesture: one decision for click vs hold-menu vs drag ──
@@ -132,6 +133,18 @@ test('pickAnchorParagraph: below threshold → null (caller appends at end)', ()
     assert.equal(pickAnchorParagraph(POST, 'совершенно другая тема про космос и звёзды'), null);
     assert.equal(pickAnchorParagraph(POST, null), null);
     assert.equal(pickAnchorParagraph('', 'замок двери'), null);
+});
+
+// ── registerStoryAbort: the shell ✕ controls the real pipeline signal ──
+
+test('registerStoryAbort: token aborts its signal and dispose unregisters it', () => {
+    const token = 'uris_test_abort';
+    const registration = registerStoryAbort(token);
+    assert.equal(state.activeGenerations.has(token), true);
+    state.activeGenerations.get(token).abort();
+    assert.equal(registration.signal.aborted, true);
+    registration.dispose();
+    assert.equal(state.activeGenerations.has(token), false);
 });
 
 // ── runLauncherAction: dispatch with injected deps ──

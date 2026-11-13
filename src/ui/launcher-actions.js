@@ -213,6 +213,18 @@ export function initLauncherActions({ togglePanel } = {}) {
     if (typeof togglePanel === 'function') _togglePanel = togglePanel;
 }
 
+/** Register a launcher story run for cancellation through its shell ✕.
+ * The returned signal is passed to the full pipeline, so aborting the token
+ * cancels the current Stage 1/Stage 2 request as well as the UI item. */
+export function registerStoryAbort(token) {
+    const controller = new AbortController();
+    state.activeGenerations.set(token, controller);
+    return {
+        signal: controller.signal,
+        dispose: () => { state.activeGenerations.delete(token); },
+    };
+}
+
 function launcherDeps() {
     return {
         getChat: () => { try { return getCtx()?.chat || []; } catch { return []; } },
@@ -231,6 +243,7 @@ function launcherDeps() {
             const variantIdx = Number(msg?.swipe_id ?? 0);
             const token = `uris_${randomToken(8)}`;
             const descHash = fnv1aHex(`story|${token}`);
+            const abort = registerStoryAbort(token);
             // Гвард идентичности: записи уходят в extra.uris СВОЕГО чата/поста.
             const sameChat = () => {
                 const cur = getCtx();
@@ -248,7 +261,8 @@ function launcherDeps() {
             }, { variantIdx });
             reconcileVisible();
             try {
-                const card = await runFullPipelineForDraft(input, undefined, undefined, { force: true });
+                const card = await runFullPipelineForDraft(input, undefined, abort.signal, { force: true });
+                if (abort.signal.aborted) throw new DOMException('Aborted', 'AbortError');
                 if (!card || !card.imagePath) throw new Error('Пайплайн не вернул картинку');
                 if (!sameChat()) {
                     throw Object.assign(new Error('Чат сменился — картинка осталась в галерее'), { code: 'CHAT_SWITCHED' });
@@ -279,6 +293,8 @@ function launcherDeps() {
                     reconcileVisible();
                 }
                 throw e;
+            } finally {
+                abort.dispose();
             }
         },
         openGalleryTab: async () => {
