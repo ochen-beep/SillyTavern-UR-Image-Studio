@@ -94,6 +94,16 @@ test('store: requestId стирается при выходе из pending', () 
     assert.equal(item.requestId, undefined);
 });
 
+test('store: cardId без cardIds синхронизируется (инлайн-путь)', () => {
+    upsertItem(0, { idx: 0, type: 'img', origin: 'marker', status: 'ready', descHash: 'mk',
+        digest: digest1, imagePath: 'm.png', cardId: 'mc1' });
+    const item = getSlot(0).items[0];
+    assert.deepEqual(item.cardIds, ['mc1'], 'cardIds выведен из cardId');
+    upsertItem(0, { idx: 0, type: 'img', origin: 'marker', status: 'ready', descHash: 'mk',
+        digest: digest1, cardId: 'mc2' });
+    assert.deepEqual(getSlot(0).items[0].cardIds, ['mc1', 'mc2'], 'новая карточка дописана');
+});
+
 test('store: undefined не затирает сохранённое', () => {
     upsertItem(0, { idx: -1, type: 'img', origin: 'story', status: 'ready', descHash: 'aa',
         digest: digest1, imagePath: 'keep.png' });
