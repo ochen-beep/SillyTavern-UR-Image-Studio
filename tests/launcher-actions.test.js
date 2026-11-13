@@ -149,7 +149,10 @@ test('runLauncherAction: inline-last rerolls the last eligible post', async () =
     assert.equal(calls[0].desc, 'target story');
 });
 
-test('runLauncherAction: story-last runs the full pipeline with force and embeds the card', async () => {
+test('runLauncherAction: story-last runs the full pipeline with force, WITHOUT double embed', async () => {
+    // Регресс 2026-11-13: runFullPipeline уже встраивает карточку; второй вызов
+    // embedCard создавал item с другим descHash — дубль в карусели (×2 от одной
+    // платной генерации).
     const calls = [];
     const card = { id: 'card-9', imagePath: 'user/images/C/x.png' };
     await runLauncherAction('story-last', {
@@ -160,7 +163,7 @@ test('runLauncherAction: story-last runs the full pipeline with force and embeds
         toast: () => {},
     });
     assert.equal(calls[0][1].force, true, 'явный запуск всегда рисует новую картинку');
-    assert.deepEqual(calls[1], ['embed', card, 0, 'story body']);
+    assert.deepEqual(calls.slice(1), [], 'второй записи нет — дедуп по принадлежности');
 });
 
 test('rerollStoryForMsg: targets the given post with force', async () => {
