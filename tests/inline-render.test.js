@@ -614,6 +614,20 @@ test('клик по инлайн-картинке открывает все го
     assert.equal(options.chatId, null, 'chatId резолвится из контекста');
 });
 
+test('reconcileVisible: после «Убрать из поста» пустой слот сносит оболочку (инлайн выключен)', async () => {
+    // Регресс 2026-11-13 (живой QA): !inlineOn-фаст-пат пропускал посты с
+    // опустевшим слотом — оболочка-зомби оставалась в посте навсегда.
+    state.settings.inlineEnabled = false;
+    const { textEl } = buildChatDOM();
+    upsertItem(0, { idx: -1, type: 'img', descHash: 'm1', status: 'ready', imagePath: 'story.png' });
+    reconcileVisible();
+    assert.ok(textEl.querySelector('[data-uris-inl="manual"]'), 'оболочка до удаления');
+    const { deleteItem, itemKey } = await import('../src/inline/store.js');
+    deleteItem(0, itemKey({ idx: -1, type: 'img', descHash: 'm1' }));
+    reconcileVisible();
+    assert.equal(textEl.querySelectorAll('[data-uris-inl]').length, 0, 'оболочка снесена');
+});
+
 test('клик: двойной клик не ставит платную задачу (dblclick-реролл убран)', () => {
     const { textEl } = buildChatDOM();
     upsertItem(0, { ...readyItem(), cardId: 'c1' });

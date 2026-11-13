@@ -170,7 +170,12 @@ export function reconcileVisible({ only = null } = {}) {
             if (msgIdRaw == null || msgIdRaw === '') continue;
             if (only && !only.has(Number(msgIdRaw))) continue;
             const items = getSlot(Number(msgIdRaw)).items;
-            if (!items.some(item => item && Number(item.idx) < 0)) continue;
+            const hasManual = items.some(item => item && Number(item.idx) < 0);
+            let hasManualShell = false;
+            try { hasManualShell = !!mesEl.querySelector('[data-manual="1"]'); } catch { /* fake-dom */ }
+            // Пустой слот при живой оболочке тоже проходит: «Убрать из поста»
+            // должно снести оболочку (2026-11-13), а не оставить зомби.
+            if (!hasManual && !hasManualShell) continue;
             const textEl = mesEl.querySelector('.mes_text');
             if (!textEl) continue;
             reconcileManualShells(mesEl, textEl, items, { inFlight });
