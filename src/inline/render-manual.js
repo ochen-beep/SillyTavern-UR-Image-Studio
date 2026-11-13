@@ -26,6 +26,45 @@ import {
 
 export const MANUAL_KEY = 'manual';
 
+/** Художественный разделитель (флерон): линия — ромбы — большой ромб — линия.
+ * currentColor — следует цвету текста темы. */
+const ORNAMENT_VIEWBOX = '0 0 240 14';
+/** Узел орнамента: createElementNS в браузере, обычный createElement в fake-dom. */
+function ornNode(tag) {
+    const el = typeof document.createElementNS === 'function'
+        ? document.createElementNS('http://www.w3.org/2000/svg', tag)
+        : document.createElement(tag);
+    return el;
+}
+
+function buildOrnamentSvg() {
+    const svg = ornNode('svg');
+    svg.setAttribute('class', 'uris-inl-orn-svg');
+    svg.setAttribute('viewBox', ORNAMENT_VIEWBOX);
+    svg.setAttribute('aria-hidden', 'true');
+    const line = (x1, x2) => {
+        const l = ornNode('line');
+        l.setAttribute('x1', String(x1)); l.setAttribute('y1', '7');
+        l.setAttribute('x2', String(x2)); l.setAttribute('y2', '7');
+        l.setAttribute('stroke', 'currentColor'); l.setAttribute('stroke-width', '1');
+        svg.appendChild(l);
+    };
+    const diamond = (cx, r) => {
+        const d = ornNode('path');
+        d.setAttribute('d', `M${cx - r} 7 L${cx} ${7 - r} L${cx + r} 7 L${cx} ${7 + r} Z`);
+        d.setAttribute('fill', 'currentColor');
+        svg.appendChild(d);
+    };
+    line(0, 88);
+    diamond(96, 3);
+    diamond(106, 3);
+    diamond(120, 6.5);
+    diamond(134, 3);
+    diamond(144, 3);
+    line(152, 240);
+    return svg;
+}
+
 /** ⌃-сворачивание карусели поста без чип-режима (сессия, не metadata). */
 const _folded = new Set();
 
@@ -161,14 +200,30 @@ function buildManualShell(msgId, view, status, form, sig) {
     el.setAttribute('data-uris-sig', sig);
     if (form === 'chip') {
         const chip = document.createElement('button');
-        chip.classList.add('uris-inl-chip');
-        chip.textContent = view.count > 1 ? `📷 Картинка ×${view.count}` : '📷 Картинка';
-        chip.setAttribute('title', 'Показать');
+        chip.setAttribute('title', view.count > 1 ? `Показать картинки (${view.count})` : 'Показать картинку');
         chip.addEventListener('click', () => {
             _folded.delete(MANUAL_KEY);
             _expanded.add(MANUAL_KEY);
             try { reconcileVisible({ only: new Set([msgId]) }); } catch { /* fake-dom */ }
         });
+        if (status === 'pending') {
+            // Свернутый pending сохраняет словесный статус — там важен прогресс.
+            chip.classList.add('uris-inl-chip');
+            chip.textContent = 'Рисую…';
+            el.appendChild(chip);
+            return el;
+        }
+        // Готовый свернутый вид — художественный разделитель без эмодзи и слов
+        // (решение 2026-11-13); количество версий — малой цифрой рядом.
+        chip.classList.add('uris-inl-chip', 'uris-inl-orn');
+        chip.setAttribute('aria-label', chip.getAttribute('title'));
+        chip.appendChild(buildOrnamentSvg());
+        if (view.count > 1) {
+            const count = document.createElement('span');
+            count.classList.add('uris-inl-orn-count');
+            count.textContent = String(view.count);
+            chip.appendChild(count);
+        }
         el.appendChild(chip);
         return el;
     }
