@@ -364,11 +364,13 @@ async function init() {
     // metadata but no shell ever mounted (QA box 2026-11-12). The lock still
     // gates the scanner and automation above — only those write.
     {
-        // One-time migration: legacy uris_inline slots move onto message
-        // objects (extra.uris). Also allowed in a busy tab — it repairs the
-        // tab's own view of the chat.
-        try { (await import('./src/inline/store.js')).migrateLegacySlots(); } catch { /* первый запуск без legacy */ }
+        // Migration of legacy uris_inline slots runs on every init tick AND on
+        // CHAT_CHANGED (events.js): at init time the chat is usually not loaded
+        // yet, so a single call at boot would miss it. Idempotent — migratedAt
+        // slots are skipped. Allowed in a busy tab: it repairs the tab's own
+        // view of the chat.
         void (async () => {
+            const store = await import('./src/inline/store.js').catch(() => null);
             let m = null;
             for (let attempt = 0; attempt < 3 && !m; attempt++) {
                 m = await import('./src/inline/render.js').catch(() => null);
@@ -382,9 +384,11 @@ async function init() {
             let ticks = 0;
             const iv = setInterval(() => {
                 ticks += 1;
+                try { store?.migrateLegacySlots(); } catch { /* не критично */ }
                 try { m.reconcileVisible(); } catch { /* проводка не критична */ }
                 if (ticks >= 30) clearInterval(iv);
             }, 500);
+            try { store?.migrateLegacySlots(); } catch { /* не критично */ }
             try { m.reconcileVisible(); } catch { /* первая проводка не критична */ }
         })();
     }
