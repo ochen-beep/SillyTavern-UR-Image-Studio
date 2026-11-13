@@ -179,7 +179,9 @@ export async function runLauncherAction(id, deps = {}) {
         const messageText = String(chat[msgId].mes || '');
         const card = await deps.runFullPipeline?.({ chatId: await deps.getChatId?.(), msgId, messageText, force: true });
         if (!card || !card.imagePath) throw new Error('Пайплайн не вернул картинку');
-        await deps.embedCard?.(card, msgId, messageText);
+        // Встраивание — внутри runFullPipeline (pending → ready на одном ключе);
+        // отдельный embedCard здесь давал ВТОРОЙ item с другим descHash — дубль
+        // в карусели (живой QA 2026-11-13).
         return;
     }
     throw new Error(`Неизвестное действие лаунчера: ${id}`);
@@ -252,9 +254,20 @@ function launcherDeps() {
                     throw Object.assign(new Error('Чат сменился — картинка осталась в галерее'), { code: 'CHAT_SWITCHED' });
                 }
                 const anchor = resolveStoryAnchor(input.messageText, card?.prompt);
-                upsertItem(input.msgId,
-                    buildEmbedItem({ card, digest, anchorText: anchor?.anchorText || null, descHash }),
-                    { variantIdx });
+                // Дедуп по cardId: карточка могла уже быть приклеена attach-хуком
+                // (Stage 2) — тогда обновляем СУЩЕСТВУЮЩИЙ item, не создаём второй.
+                const existing = (getSlot(input.msgId).items || [])
+                    .find(i => Array.isArray(i.cardIds) && i.cardIds.includes(card.id));
+                if (existing) {
+                    upsertItem(input.msgId, {
+                        idx: existing.idx, type: existing.type, descHash: existing.descHash,
+                        anchorText: anchor?.anchorText || undefined,
+                    }, { variantIdx });
+                } else {
+                    upsertItem(input.msgId,
+                        buildEmbedItem({ card, digest, anchorText: anchor?.anchorText || null, descHash }),
+                        { variantIdx });
+                }
                 reconcileVisible();
                 return card;
             } catch (e) {
@@ -267,14 +280,6 @@ function launcherDeps() {
                 }
                 throw e;
             }
-        },
-        embedCard: (card, msgId, messageText = '') => {
-            const msg = getCtx()?.chat?.[msgId];
-            const digest = hashMessage(messageText);
-            const anchor = resolveStoryAnchor(messageText, card?.prompt);
-            upsertItem(msgId, buildEmbedItem({ card, digest, anchorText: anchor?.anchorText || null }),
-                { variantIdx: Number(msg?.swipe_id ?? 0) });
-            reconcileVisible();
         },
         openGalleryTab: async () => {
             if (state.settings.collapsed !== false && _togglePanel) await _togglePanel();
