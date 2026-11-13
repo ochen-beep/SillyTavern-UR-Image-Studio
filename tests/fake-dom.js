@@ -148,6 +148,18 @@ export function makeFakeDocument() {
                 this.children.unshift(...nodes);
                 this.childNodes.unshift(...nodes);
             },
+            insertBefore(el, ref) {
+                if (ref == null || !this.childNodes.includes(ref)) {
+                    if (ref == null) { this.appendChild(el); return el; }
+                    throw new Error('insertBefore: ref not a child');
+                }
+                const at = this.childNodes.indexOf(ref);
+                el.parentNode = this;
+                el.ownerDocument = this.ownerDocument;
+                this.childNodes.splice(at, 0, el);
+                this.children.splice(this.children.indexOf(ref), 0, el);
+                return el;
+            },
             removeChild(child) {
                 this.children = this.children.filter(c => c !== child);
                 this.childNodes = this.childNodes.filter(c => c !== child);
