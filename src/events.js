@@ -218,6 +218,8 @@ export function bindEvents(handlers) {
         const i = getLastPostIndex();
         if (i != null) setCurrentMsgId(i);
         log('CHAT_CHANGED, last post', state.currentMsgId);
+        // Миграция legacy uris_inline → extra.uris этого чата (идемпотентна).
+        void (async () => { try { (await import('./inline/store.js')).migrateLegacySlots(); } catch { /* не критично */ } })();
         recordDiagnosticEvent({
             event: 'chat-changed',
             chatHash: hashDiagnosticId(state.currentChatId),

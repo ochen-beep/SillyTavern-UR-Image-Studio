@@ -19,6 +19,46 @@ import { createGalleryFolder, listGalleryFolders } from '../gallery-folders.js';
 import { reportFailure, URIS_SCOPES } from '../error-pool.js';
 
 import { canonicalizeNativeImagePath } from '../native-image-path.js';
+import { removeCardFromItems, upsertItem, getSlot, itemKey } from '../inline/store.js';
+import { reconcileVisible } from '../inline/render.js';
+
+/**
+ * «Убрать из поста» (2026-11-13): вычеркнуть карточку из каруселей постов
+ * (extra.uris текущего чата), не трогая файл и запись галереи. Обложке,
+ * потерявшей карточку, путь резолвится по следующей карточке из cardIds;
+ * пустой список → item исчезает вовсе. `deps.listCards` — шов для тестов
+ * (node-окружение не поднимает file-store галереи).
+ * @param {{id?: string}} card карточка галереи (достаточно id)
+ * @param {{listCards?: Function}} [deps]
+ * @returns {Promise<boolean>} true — что-то было отклеено
+ */
+export async function detachCardFromPosts(card, deps = {}) {
+    const id = card?.id;
+    if (!id) return false;
+    const touched = removeCardFromItems(id);
+    if (!touched.length) return false;
+    const needsCover = touched.filter(t => t.needsCover && t.newCoverCardId);
+    if (needsCover.length) {
+        try {
+            const listCards = deps.listCards
+                || (async () => (await import('../gallery-index.js')).listCards({ reconcile: false }));
+            const cards = await listCards({ reconcile: false });
+            const byId = new Map((Array.isArray(cards) ? cards : []).map(c => [c.id, c]));
+            for (const t of needsCover) {
+                const item = (getSlot(t.msgId).items || []).find(i => itemKey(i) === t.key);
+                const next = byId.get(t.newCoverCardId);
+                if (item && next) {
+                    upsertItem(t.msgId, {
+                        idx: item.idx, type: item.type, descHash: item.descHash,
+                        cardId: t.newCoverCardId, imagePath: String(next.imagePath || ''),
+                    });
+                }
+            }
+        } catch { /* нет галереи — обложка деградирует в error-строку рендера */ }
+    }
+    reconcileVisible();
+    return true;
+}
 
 /**
  * Текстовые поля сущности, доступные для копирования. Порядок = порядок в
@@ -384,6 +424,9 @@ export async function deleteImage(item, chatId, root) {
     const deleteFile = await confirmDeleteModal(ctx);
     if (deleteFile === null) return false; // cancelled
     const removed = await deleteGalleryCard(chatId, item.id, { deleteFile });
+    // Удалённая карточка отклеивается от каруселей постов (2026-11-13):
+    // обложка ← предыдущая, пустой список → оболочка исчезает.
+    if (removed !== false) await detachCardFromPosts({ id: item.id });
     if (root) refreshRoot(root);
     return removed !== false;
 }

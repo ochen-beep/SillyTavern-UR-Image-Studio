@@ -33,7 +33,7 @@ async function loadPhotoSwipe() {
     }
     return _photoSwipeCtor;
 }
-import { copyItemText, copyImageToClipboard, cropGalleryImage, cropReference, saveAsReference, regenerate, editPromptAndRegenerate, deleteImage, toggleFavorite, assignGalleryFolders, downloadImage } from './gallery-actions.js';
+import { copyItemText, copyImageToClipboard, cropGalleryImage, cropReference, saveAsReference, regenerate, editPromptAndRegenerate, deleteImage, toggleFavorite, assignGalleryFolders, downloadImage, detachCardFromPosts } from './gallery-actions.js';
 import { bindCardContextMenu, openCardActionMenu } from './card-action-menu.js';
 import { getCtx } from '../core.js';
 import { cardDimensions, ensureCardDimensions, FALLBACK_DIMENSIONS } from '../image-dimensions.js';
@@ -226,7 +226,8 @@ function registerActionButtons(pswp, ctx) {
         { name: 'uris-crop', order: 31, icon: 'fa-crop-simple', title: 'Обрезать (в новую карточку)', danger: false, run: async item => { if (await cropGalleryImage(item, ctx.chatId, ctx.root)) pswp.close(); } },
         { name: 'uris-save-ref', order: 32, icon: 'fa-bookmark', title: 'Сохранить как референс', danger: false, run: item => saveAsReference(item) },
         { name: 'uris-regen', order: 33, icon: 'fa-rotate-right', title: 'Перегенерировать', danger: false, run: async item => { if (await regenerate(item, ctx.root, null)) pswp.close(); } },
-        { name: 'uris-del', order: 34, icon: 'fa-trash', title: 'Удалить', danger: true, run: async item => { if (await deleteImage(item, ctx.chatId, ctx.root)) pswp.close(); } },
+        { name: 'uris-remove-post', order: 34, icon: 'fa-right-from-bracket', title: 'Убрать из поста (карточка остаётся в галерее)', danger: false, run: async item => { if (await detachCardFromPosts(item)) pswp.close(); } },
+        { name: 'uris-del', order: 35, icon: 'fa-trash', title: 'Удалить', danger: true, run: async item => { if (await deleteImage(item, ctx.chatId, ctx.root)) pswp.close(); } },
     ];
     pswp.on('uiRegister', () => {
         for (const button of buttons) {
@@ -300,6 +301,7 @@ function registerContextMenu(pswp, ctx) {
             { id: 'uris-ctx-copy-img', icon: 'fa-image', label: 'Скопировать', onSelect: () => copyImageToClipboard(item) },
             { id: 'uris-ctx-edit', icon: 'fa-pen', label: 'Отредактировать промпт…', onSelect: () => closeOnOk(editPromptAndRegenerate(item, ctx.root)) },
             { id: 'uris-ctx-more', icon: 'fa-rotate-right', label: 'Сгенерировать ещё', onSelect: () => closeOnOk(regenerate(item, ctx.root, null)) },
+            ...(item.sourceMsgId != null ? [{ id: 'uris-ctx-remove-post', icon: 'fa-right-from-bracket', label: 'Убрать из поста', onSelect: () => closeOnOk(detachCardFromPosts(item)) }] : []),
         );
         openCardActionMenu({
             title: item.prompt ? String(item.prompt).slice(0, 80) : 'Изображение',
