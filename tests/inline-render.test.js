@@ -631,6 +631,26 @@ test('клик по инлайн-картинке открывает все го
     assert.equal(options.chatId, null, 'chatId резолвится из контекста');
 });
 
+test('initRender: слушает uris:inline-queued/start — мгновенный pending после реролла', () => {
+    // Регресс 2026-11-13: клик по «📷 Нарисовать» ставил pending в store, но
+    // оболочка оставалась кнопкой до конца генерации — слушались только
+    // update/end. Регистрируем шим window и проверяем подписки.
+    const added = [];
+    const removed = [];
+    globalThis.window = {
+        addEventListener: (type, fn) => added.push(type),
+        removeEventListener: (type, fn) => removed.push(type),
+        dispatchEvent: () => true,
+    };
+    initRender({ reroll: () => Promise.resolve() });
+    shutdownRender();
+    delete globalThis.window;
+    for (const type of ['uris:inline-queued', 'uris:inline-start']) {
+        assert.ok(added.includes(type), `подписка на ${type}`);
+        assert.ok(removed.includes(type), `отписка от ${type}`);
+    }
+});
+
 test('reconcileVisible: после «Убрать из поста» пустой слот сносит оболочку (инлайн выключен)', async () => {
     // Регресс 2026-11-13 (живой QA): !inlineOn-фаст-пат пропускал посты с
     // опустевшим слотом — оболочка-зомби оставалась в посте навсегда.
