@@ -202,7 +202,12 @@ export function attachCard(msgId, digest, cardId, imagePath) {
         item.cardId = cardId;
         item.imagePath = String(imagePath || '');
         if (item.status !== 'ready' && item.imagePath) item.status = 'ready';
-        if (item.status === 'ready') delete item.requestId;
+        if (item.status === 'ready') {
+            // Позднее завершение поверх отменённого item: статус ready, поле
+            // error должно уйти вместе с ним (живой QA 2026-11-13).
+            delete item.requestId;
+            delete item.error;
+        }
     }
     scheduleChatSave();
     return item;
