@@ -238,6 +238,20 @@ test('reconcileVisible: смена shellPosition переставляет смо
     state.settings.shellPosition = 'context';
 });
 
+test('compact: орнамент-чип несёт малую цифру версий без слов', () => {
+    shutdownRender(); // очистить _folded/_expanded от предыдущих тестов
+    state.settings.inlineChips = true;
+    const { textEl } = buildChatDOM();
+    upsertItem(0, { idx: -1, type: 'img', origin: 'story', status: 'ready', descHash: 'm1',
+        imagePath: 'a.png', cardId: 'c1', cardIds: ['c1', 'c2'] });
+    reconcileVisible();
+    const shell = textEl.querySelector('[data-uris-inl="manual"]');
+    const count = shell.querySelector('.uris-inl-orn-count');
+    assert.equal(count?.textContent, '2', 'цифра версий на месте');
+    assert.ok(!shell.textContent.includes('Картинка'), 'без слова «Картинка»');
+    state.settings.inlineChips = false;
+});
+
 test('reconcileVisible: позиция «в начало» ставит оболочку первым блоком', () => {
     state.settings.shellPosition = 'start';
     chatArr[0].mes = 'история без маркеров';
