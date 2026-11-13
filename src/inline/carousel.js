@@ -68,9 +68,9 @@ export function manualStatus(view) {
  * Слайды лайтбокса поста: встроенные cardIds раскрываются карточками
  * (порядок хронологический, обложка — путь item'а, остальные — путь
  * карточки), затем опциональные «все версии поста» без дублей.
- * @param {{slotItems: Array, cards?: Map|Array, allVersionsCards?: Array|null}} input
+ * @param {{slotItems: Array, cards?: Map|Array}} input
  */
-export function carouselLightboxItems({ slotItems, cards = null, allVersionsCards = null }) {
+export function carouselLightboxItems({ slotItems, cards = null }) {
     const view = collectManualView(slotItems);
     const cardMap = new Map(
         (cards instanceof Map ? [...cards.values()] : Array.isArray(cards) ? cards : [])
@@ -114,15 +114,6 @@ export function carouselLightboxItems({ slotItems, cards = null, allVersionsCard
                 __inlineKey: `${entry.idx}|${entry.type}|${entry.descHash}|${cardId}`,
             });
         }
-    }
-    for (const card of (Array.isArray(allVersionsCards) ? allVersionsCards : [])) {
-        if (!card?.id || seen.has(card.id)) continue;
-        seen.add(card.id);
-        out.push({
-            ...card,
-            src: `/${String(card.imagePath || '').replace(/^\/+/, '')}`,
-            __inlineKey: `gal|${card.id}`,
-        });
     }
     return out;
 }

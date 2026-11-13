@@ -454,21 +454,12 @@ export async function openMessageLightbox(msgId, target = {}) {
     const markerCardIds = (slot.items || [])
         .filter(i => i && Number(i.idx) >= 0 && i.cardId).map(i => i.cardId);
     const cards = await cardsByIds([...new Set([...markerCardIds, ...manualCardIds])]);
-    let allVersionsCards = null;
-    if (state.settings?.carouselAllVersions === true) {
-        try {
-            const load = _loadCards || (async () =>
-                (await import('../gallery-index.js')).listCards({ reconcile: false }));
-            const all = await load();
-            const chatId = getCtx()?.chatId ?? null;
-            allVersionsCards = (Array.isArray(all) ? all : [])
-                .filter(c => c && c.provenance?.chatId === chatId
-                    && Number(c.sourceMsgId) === Number(msgId));
-        } catch { /* нет галереи — только встроенные */ }
-    }
+    // Лайтбокс листает ТОЛЬКО встроенные картинки поста (post+swipe):
+    // «все версии из галереи» убраны по решению 2026-11-13 — чужие прогоны
+    // и скрытые карточки в просмотре поста не нужны.
     const items = [
         ...messageLightboxItems(slot.items, cards, msgId),
-        ...carouselLightboxItems({ slotItems: slot.items, cards, allVersionsCards }),
+        ...carouselLightboxItems({ slotItems: slot.items, cards }),
     ];
     if (!items.length) return;
     const clicked = target.cardId
