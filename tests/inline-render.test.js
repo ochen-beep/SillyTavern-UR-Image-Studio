@@ -211,6 +211,23 @@ test('reconcileVisible: ручная оболочка с anchorText встаёт
         'оболочка стоит сразу после якорного абзаца');
 });
 
+test('reconcileVisible: позиция «в начало» ставит оболочку первым блоком', () => {
+    state.settings.shellPosition = 'start';
+    chatArr[0].mes = 'история без маркеров';
+    const { textEl } = buildChatDOM();
+    for (const t of ['Первый абзац.', 'Второй абзац.']) {
+        const p = doc.createElement('p');
+        p.textContent = t;
+        textEl.appendChild(p);
+    }
+    upsertItem(0, { idx: -1, type: 'img', descHash: 'm1', status: 'ready', imagePath: 'story.png' });
+    reconcileVisible();
+    const shell = textEl.querySelector('[data-uris-inl="manual"]');
+    assert.ok(shell);
+    assert.equal(textEl.childNodes[0], shell, 'оболочка — первый элемент .mes_text');
+    state.settings.shellPosition = 'context';
+});
+
 test('reconcileVisible: anchorText без совпадения → оболочка в конце (fallback)', () => {
     chatArr[0].mes = 'история без маркеров';
     const { textEl } = buildChatDOM();

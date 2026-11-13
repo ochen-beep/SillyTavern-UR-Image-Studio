@@ -69,8 +69,18 @@ function latestAnchorText(view) {
 }
 
 function positionManualShell(textEl, shell, view) {
-    const ref = placementRef(manualBlocks(textEl), {
-        position: resolveShellPosition(),
+    const blocks = manualBlocks(textEl);
+    const position = resolveShellPosition();
+    // «В начало» — ПЕРЕД первым блоком (insertAfter первого абзаца ставил бы
+    // оболочку после первого абзаца — живой QA 2026-11-13).
+    if (position === 'start' && blocks.length) {
+        try {
+            blocks[0].parentNode.insertBefore(shell, blocks[0]);
+            return;
+        } catch { /* узел ушёл — фолбэк ниже */ }
+    }
+    const ref = placementRef(blocks, {
+        position,
         anchorText: latestAnchorText(view),
     });
     if (ref) {
