@@ -329,8 +329,14 @@ async function init() {
         }
     };
     document.addEventListener('visibilitychange', _visibilityHandler);
+    // Extra.uris writes are debounced in the store — flush the chat save on
+    // pagehide so a pagehide never drops a paid result write (same contract
+    // as the metadata flush in _visibilityHandler).
     _pageHideHandler = () => {
         flushAllFileStoresOnUnload();
+        void (async () => {
+            try { (await import('./src/inline/store.js')).flushChatSave(); } catch { /* node */ }
+        })();
     };
     window.addEventListener('pagehide', _pageHideHandler);
 
@@ -351,7 +357,17 @@ async function init() {
     // the render layer's own observer keeps shells alive afterwards. A failed
     // module fetch here used to kill the layer silently for the whole page —
     // the import retries instead of a single swallowed rejection.
-    if (lockState !== 'busy') {
+    //
+    // 2026-11-13: WITHOUT the singleton-lock gate — display is a read path and
+    // must never wait for write coordination. A busy (second) tab used to skip
+    // this bootstrap entirely and went blind: paid pictures existed in
+    // metadata but no shell ever mounted (QA box 2026-11-12). The lock still
+    // gates the scanner and automation above — only those write.
+    {
+        // One-time migration: legacy uris_inline slots move onto message
+        // objects (extra.uris). Also allowed in a busy tab — it repairs the
+        // tab's own view of the chat.
+        try { (await import('./src/inline/store.js')).migrateLegacySlots(); } catch { /* первый запуск без legacy */ }
         void (async () => {
             let m = null;
             for (let attempt = 0; attempt < 3 && !m; attempt++) {
@@ -359,6 +375,10 @@ async function init() {
                 if (!m && attempt < 2) await new Promise(res => setTimeout(res, 1000));
             }
             if (!m) return;
+            m.initRender({
+                reroll: (job) => (async () => (await import('./src/inline/runner.js')).queueInlineJob(job))(),
+                rerollStory: (msgId) => (async () => (await import('./src/ui/launcher-actions.js')).retryStoryShell(msgId))(),
+            });
             let ticks = 0;
             const iv = setInterval(() => {
                 ticks += 1;
