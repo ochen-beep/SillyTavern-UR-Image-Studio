@@ -158,6 +158,16 @@ test('store: attachCard с digest чужого варианта → item в сн
     assert.equal(chatArr[0].swipe_info[0].extra.uris.items[0].cardId, 'c8');
 });
 
+test('store: attachCard стирает error при позднем завершении', () => {
+    upsertItem(0, { idx: -1, type: 'img', origin: 'story', status: 'error', descHash: 'aa',
+        digest: digest1, error: 'Отменено' });
+    attachCard(0, digest1, 'cL', 'late.png');
+    const item = getSlot(0).items[0];
+    assert.equal(item.status, 'ready');
+    assert.equal(item.error, undefined, 'устаревшая ошибка стёрта');
+    assert.equal(item.imagePath, 'late.png');
+});
+
 test('store: deleteItem убирает item по ключу', () => {
     upsertItem(0, { idx: -1, type: 'img', origin: 'story', status: 'error', descHash: 'aa', digest: digest1 });
     deleteItem(0, itemKey({ idx: -1, type: 'img', descHash: 'aa' }));
