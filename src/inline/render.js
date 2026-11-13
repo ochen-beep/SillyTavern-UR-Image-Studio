@@ -16,7 +16,7 @@
  * снимаются — «реролл = замена»; ручные (data-manual="1") и готовые результаты
  * ручной генерации (idx<0) переживают чистку.
  */
-import { state, getCtx } from '../core.js';
+import { state, getCtx, resolveShellClickAction } from '../core.js';
 import { parseInline } from './grammar.js';
 import { getSlot, upsertItem, deleteItem, itemKey } from './store.js';
 import { sanitizeTriggerList, buildAliasIndex, resolveProfile } from './triggers.js';
@@ -279,7 +279,15 @@ function shellFor(msgId, entry) {
         img.setAttribute('loading', 'lazy');
         img.setAttribute('alt', entry.desc || label);
         img.setAttribute('title', `${label} — клик: просмотр всех картинок поста`);
-        img.addEventListener('click', () => { void openMessageLightbox(msgId, entry); });
+        img.addEventListener('click', () => {
+            const action = resolveShellClickAction();
+            if (action === 'none') return;
+            if (action === 'tab') {
+                try { window.open(`/${String(entry.item?.imagePath || '').replace(/^\/+/, '')}`, '_blank'); } catch { /* fake-dom */ }
+                return;
+            }
+            void openMessageLightbox(msgId, entry);
+        });
         el.appendChild(img);
         el.appendChild(badge(label));
         if (state.settings?.inlineChips === true) {

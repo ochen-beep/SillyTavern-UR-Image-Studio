@@ -277,9 +277,14 @@ export const defaultSettings = Object.freeze({
     inlineListenUser: false,   // дефолт реагировать на ключевые слова в сообщениях юзера
     inlineChips: false,        // компакт-режим: готовые/ожидающие картинки — чипами, клик раскрывает
     inlineTriggers: null,      // профили; null → sanitizeTriggerList(DEFAULT_TRIGGERS) в потребителях
-    // Лаунчер «Нарисовать по истории»: true — картинка всегда в конец поста;
-    // false (дефолт) — автоопределение абзаца по цитате из промпта Stage 1.
-    launcherShellAtEnd: false,
+    // ── Картинки в посте (карусель, 2026-11-13) ──
+    // Позиция story-оболочки: 'context' (цитата из промпта) | 'start' | 'middle' | 'end'.
+    // Старый тумблер launcherShellAtEnd:true читается как 'end' (resolveShellPosition).
+    shellPosition: 'context',
+    // Клик по картинке в посте: 'lightbox' | 'tab' | 'none'.
+    shellClickAction: 'lightbox',
+    // Лайтбокс поста показывает все карточки галереи этого поста (chatId+sourceMsgId).
+    carouselAllVersions: false,
 
     // ── Text-LLM source (for building the image prompt) ──
     // 'profile' = Connection Manager ST (routed by ST server — no CORS/405).
@@ -289,6 +294,18 @@ export const defaultSettings = Object.freeze({
     customEndpoint: '',        // URL for 'custom' source
     customModel: '',           // model id (opt.) for 'custom' source
 });
+
+/** Позиция story-оболочки с миграцией старого тумблера (true → 'end'). */
+export function resolveShellPosition() {
+    const s = state.settings || {};
+    return s.shellPosition || (s.launcherShellAtEnd === true ? 'end' : 'context');
+}
+
+/** Клик по картинке в посте: lightbox | tab | none (дефолт lightbox). */
+export function resolveShellClickAction() {
+    const v = state.settings?.shellClickAction;
+    return v === 'tab' || v === 'none' ? v : 'lightbox';
+}
 
 // Schema-v4 chat-scoped config envelope default.
 // Canonical source: both chat-binding.js and refs-library.js derive defaults here.

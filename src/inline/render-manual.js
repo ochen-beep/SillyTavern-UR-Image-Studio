@@ -14,7 +14,7 @@
  * declarations обоих модулей к моменту любого вызова разрешены).
  */
 
-import { state, getCtx } from '../core.js';
+import { state, getCtx, resolveShellPosition, resolveShellClickAction } from '../core.js';
 import { upsertItem, deleteItem, itemKey } from './store.js';
 import { queueInlineJob, DEFAULT_GRACE } from './runner.js';
 import { hashMessage } from '../generation-drafts.js';
@@ -36,11 +36,6 @@ const _folded = new Set();
 // error-строки с retry по origin. Digest-инвариант: готовый item с чужим
 // digest показывается как «текст изменился», просроченные ошибки снимаются.
 // Позиция — placementRef по настройке shellPosition (context/start/middle/end).
-
-function resolveShellPosition() {
-    const s = state.settings || {};
-    return s.shellPosition || (s.launcherShellAtEnd === true ? 'end' : 'context');
-}
 
 function currentVariantDigest(msgId) {
     const msg = getCtx()?.chat?.[Number(msgId)];
@@ -180,6 +175,12 @@ function coverEl(msgId, view) {
     img.setAttribute('alt', 'Картинка');
     img.setAttribute('title', `Картинка — клик: просмотр всех (${view.count})`);
     img.addEventListener('click', () => {
+        const action = resolveShellClickAction();
+        if (action === 'none') return;
+        if (action === 'tab') {
+            try { window.open(`/${String(view.cover.imagePath).replace(/^\/+/, '')}`, '_blank'); } catch { /* fake-dom */ }
+            return;
+        }
         void openMessageLightbox(msgId, { cardId: view.cover.cardId, imagePath: view.cover.imagePath });
     });
     wrap.appendChild(img);
