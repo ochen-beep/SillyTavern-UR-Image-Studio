@@ -137,6 +137,13 @@ export function upsertItem(msgId, item, { variantIdx } = {}) {
         Object.assign(existing, patch);
         if (existing.status && existing.status !== 'pending') delete existing.requestId;
     }
+    // cardIds — производное от cardId для ВСЕХ путей записи (инлайн-путь
+    // пишет только cardId): без синхронизации отклейка/удаление карточки
+    // не находили marker-item (живой QA 2026-11-13).
+    if (existing.cardId) {
+        if (!Array.isArray(existing.cardIds)) existing.cardIds = [];
+        if (!existing.cardIds.includes(existing.cardId)) existing.cardIds.push(existing.cardId);
+    }
     scheduleChatSave();
     return existing;
 }
