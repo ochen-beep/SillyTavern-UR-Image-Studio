@@ -897,6 +897,35 @@ button.uris-inl-chip { cursor: pointer; }
     cursor: pointer; font-size: 12px;
 }
 
+/* ── Карусель поста (ручные items, 2026-11-13): обложка + счётчик версий ──
+   Одна оболочка на пост: картинка-обложка, ×N сверху (⌃ — правее), строки
+   pending «Рисую ✦» и error/«текст изменился» — под обложкой. */
+.uris-inl-cover { width: 100%; }
+.uris-inl-count {
+    position: absolute;
+    top: 8px;
+    right: 34px;
+    z-index: 1;
+    padding: 2px 8px;
+    border-radius: var(--uris-radius-pill);
+    background: rgba(0, 0, 0, 0.55);
+    color: #fff;
+    font-size: var(--uris-font-xs);
+    line-height: 1.5;
+    pointer-events: none;
+}
+.uris-inl-error-row {
+    width: 100%;
+    border: 1px dashed var(--SmartThemeBorderColor, #666);
+    border-radius: var(--uris-radius-card);
+    display: flex; align-items: center; justify-content: center;
+    gap: 8px; padding: 6px 10px;
+    margin-top: 6px;
+    color: var(--SmartThemeEmColor, inherit);
+    font-size: small; line-height: 1.4;
+}
+.uris-inl-error-row .uris-inl-btn { margin: 0; }
+
 /* ── prefers-reduced-motion: спиннеры (консолидированный блок) ──
    Единая политика «минимум движения»: при reduce гасятся ВСЕ спиннеры
    расширения — fetch-models, server-probe, pending-server (три вида) и

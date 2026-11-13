@@ -18,9 +18,11 @@
  */
 import { state, getCtx } from '../core.js';
 import { parseInline } from './grammar.js';
-import { getSlot, upsertItem, itemKey } from './store.js';
+import { getSlot, upsertItem, deleteItem, itemKey } from './store.js';
 import { sanitizeTriggerList, buildAliasIndex, resolveProfile } from './triggers.js';
-import { stableHash, normalizeAnchorText, queueInlineJob, DEFAULT_GRACE } from './runner.js';
+import { stableHash, queueInlineJob, DEFAULT_GRACE } from './runner.js';
+import { hashMessage } from '../generation-drafts.js';
+import { collectManualView, manualStatus, manualItems, carouselLightboxItems, placementRef } from './carousel.js';
 import { showSingleImage, showLightbox } from '../ui/lightbox.js';
 
 const SHELL_ATTR = 'data-uris-inl';
@@ -28,15 +30,21 @@ const STATUS_ATTR = 'data-uris-status';
 const HIDDEN_ATTR = 'data-uris-inl-hidden';
 const FORM_ATTR = 'data-uris-form';
 const DEBOUNCE_MS = 250;
+/** Ключ единственной карусельной оболочки поста (все manual-items). */
+const MANUAL_KEY = 'manual';
 
 let _observer = null;
 let _onInlineEvent = null;
 let _reroll = null;
+let _rerollStory = null;
 let _debounceId = null;
 
 /** Раскрытые из чипов оболочки (компакт-режим). Рантайм, не настройка:
  * переключение настройки перестраивает оболочки следующим проходом. */
 const _expanded = new Set();
+
+/** ⌃-сворачивание карусели поста без чип-режима (сессия, не metadata). */
+const _folded = new Set();
 
 /** Форма оболочки (компакт-режим state.settings.inlineChips): ready/pending —
  * чип, пока не раскрыт кликом; остальное и всегда при выключенном режиме —
@@ -61,9 +69,10 @@ export function setCardLookupForTests(fn) { _loadCards = fn; }
 export function resetCardLookupForTests() { _loadCards = null; }
 
 /** Подписка MutationObserver на #chat (debounce 250мс) + события uris:inline-*;
- * reroll сохраняется в модульную переменную (по умолчанию — автолейн). */
-export function initRender({ reroll } = {}) {
+ * reroll — маркерный перезапуск, rerollStory — retry story-оболочки (по origin). */
+export function initRender({ reroll, rerollStory } = {}) {
     if (typeof reroll === 'function') _reroll = reroll;
+    if (typeof rerollStory === 'function') _rerollStory = rerollStory;
     if (_onInlineEvent) return; // слушатели уже стоят; reroll обновлён выше
     _onInlineEvent = () => { try { reconcileVisible(); } catch { /* рендер не роняет обработчик */ } };
     if (typeof window !== 'undefined' && typeof window.addEventListener === 'function') {
@@ -84,7 +93,9 @@ export function shutdownRender() {
     }
     _onInlineEvent = null;
     _reroll = null;
+    _rerollStory = null;
     _expanded.clear();
+    _folded.clear();
 }
 
 function ensureObserver() {
@@ -383,8 +394,9 @@ async function cardsByIds(ids) {
 }
 
 /**
- * Чистое: items для лайтбокса по слоту сообщения. Берём готовые результаты с
- * файлом, порядок — по idx (затем по createdAt: у ручных idx=-1, их несколько).
+ * Чистое: items для лайтбокса по слоту сообщения — только МАРКЕРНЫЕ
+ * результаты (idx≥0). Ручные (idx<0) собираются отдельно через
+ * carousel.carouselLightboxItems (openMessageLightbox объединяет оба списка).
  * Карточка авторитетна для промпта/параметров/размеров, item — для файла и
  * идентичности слайда.
  *
@@ -396,7 +408,7 @@ async function cardsByIds(ids) {
 export function messageLightboxItems(items, cards = null, msgId = null) {
     const list = Array.isArray(items) ? items : [];
     return list
-        .filter(item => item && item.status === 'ready' && item.imagePath)
+        .filter(item => item && item.status === 'ready' && item.imagePath && Number(item.idx) >= 0)
         .slice()
         .sort((a, b) => (Number(a.idx) - Number(b.idx)) || ((a.createdAt || 0) - (b.createdAt || 0)))
         .map(item => {
@@ -415,19 +427,45 @@ export function messageLightboxItems(items, cards = null, msgId = null) {
         });
 }
 
-/** Открыть общий просмотрщик по всем готовым картинкам сообщения. */
-async function openMessageLightbox(msgId, entry) {
+/** Открыть общий просмотрщик по всем готовым картинкам сообщения:
+ * маркерные + карусель поста (+ «все версии поста» по настройке). */
+async function openMessageLightbox(msgId, target = {}) {
     const slot = getSlot(msgId);
-    const cards = await cardsByIds((slot.items || []).map(item => item?.cardId));
-    const items = messageLightboxItems(slot.items, cards, msgId);
+    const manualView = collectManualView(slot.items);
+    const manualCardIds = manualView.ready.flatMap(i =>
+        Array.isArray(i.cardIds) && i.cardIds.length ? i.cardIds : [i.cardId].filter(Boolean));
+    const markerCardIds = (slot.items || [])
+        .filter(i => i && Number(i.idx) >= 0 && i.cardId).map(i => i.cardId);
+    const cards = await cardsByIds([...new Set([...markerCardIds, ...manualCardIds])]);
+    let allVersionsCards = null;
+    if (state.settings?.carouselAllVersions === true) {
+        try {
+            const load = _loadCards || (async () =>
+                (await import('../gallery-index.js')).listCards({ reconcile: false }));
+            const all = await load();
+            const chatId = getCtx()?.chatId ?? null;
+            allVersionsCards = (Array.isArray(all) ? all : [])
+                .filter(c => c && c.provenance?.chatId === chatId
+                    && Number(c.sourceMsgId) === Number(msgId));
+        } catch { /* нет галереи — только встроенные */ }
+    }
+    const items = [
+        ...messageLightboxItems(slot.items, cards, msgId),
+        ...carouselLightboxItems({ slotItems: slot.items, cards, allVersionsCards }),
+    ];
     if (!items.length) return;
-    const clicked = items.findIndex(item => item.__inlineKey === entry.key);
+    const clicked = target.cardId
+        ? items.findIndex(i => i.id === target.cardId)
+        : items.findIndex(i => i.__inlineKey === target.key);
     try {
         await _viewer.showLightbox(items, clicked < 0 ? 0 : clicked, { chatId: getCtx()?.chatId ?? null });
     } catch {
         // Просмотрщик недоступен (нет PhotoSwipe) — деградируем к одиночному.
+        const fallbackPath = target.imagePath
+            || (target.cardId ? manualView.cover?.imagePath : null)
+            || items[0]?.imagePath || '';
         try {
-            void showSingleImage({ src: `/${String(entry.item?.imagePath || '').replace(/^\/+/, '')}`, prompt: entry.desc || '' });
+            if (fallbackPath) void showSingleImage({ src: `/${String(fallbackPath).replace(/^\/+/, '')}`, prompt: '' });
         } catch { /* и одиночный не поднялся */ }
     }
 }
@@ -619,81 +657,278 @@ function removeNode(el) {
     } catch { /* узел уже снят */ }
 }
 
-/** Ручные оболочки (idx < 0 в store): монтирование новых и pending → ready/error
- * из store. Источник ручных задач — лаунчер-действия (по посту без маркеров):
- * pending пишется в store, оболочку ставит реконсиляция. Осиротевший pending
- * (requestId вне inFlight, грейс истёк) → error: ручная генерация, убитая
- * перезагрузкой, не должна крутить спиннер вечно. Гард сходимости — как в
- * marker-пути: тот же ключ и статус → узел не пересоздаётся (чурн ~4 Гц через
- * MutationObserver на error-оболочках). */
+// ── Ручные оболочки: одна карусель на пост-вариант (2026-11-13) ──
+//
+// Все manual-items (idx<0) поста собираются в ОДНУ оболочку (ключ 'manual'):
+// обложка (последняя готовая) + счётчик версий + pending-строки «Рисую ✦» +
+// error-строки с retry по origin. Digest-инвариант: готовый item с чужим
+// digest показывается как «текст изменился», просроченные ошибки снимаются.
+// Позиция — placementRef по настройке shellPosition (context/start/middle/end).
+
+function resolveShellPosition() {
+    const s = state.settings || {};
+    return s.shellPosition || (s.launcherShellAtEnd === true ? 'end' : 'context');
+}
+
+function currentVariantDigest(msgId) {
+    const msg = getCtx()?.chat?.[Number(msgId)];
+    if (!msg) return null;
+    const swipes = Array.isArray(msg.swipes) ? msg.swipes : null;
+    const current = Number(msg.swipe_id ?? 0);
+    const text = swipes && swipes[current] !== undefined
+        ? swipes[current]
+        : String(msg.mes || '');
+    try { return hashMessage(String(text || '')); } catch { return null; }
+}
+
+/** Прямые блоки .mes_text (p/div/значимый текст), не оболочки. */
+function manualBlocks(textEl) {
+    let children = [];
+    try { children = Array.from(textEl.childNodes); } catch { return []; }
+    return children.filter(node => {
+        const isElement = node.nodeType === 1;
+        const isText = node.nodeType === 3 && String(node.textContent ?? '').trim();
+        if (!isElement && !isText) return false;
+        if (isElement && isShellEl(node)) return false;
+        return true;
+    });
+}
+
+function latestAnchorText(view) {
+    for (const item of [...view.items].reverse()) {
+        if (item.anchorText) return item.anchorText;
+    }
+    return null;
+}
+
+function positionManualShell(textEl, shell, view) {
+    const ref = placementRef(manualBlocks(textEl), {
+        position: resolveShellPosition(),
+        anchorText: latestAnchorText(view),
+    });
+    if (ref) {
+        try { if (insertAfter(ref, shell)) return; } catch { /* узел ушёл */ }
+    }
+    textEl.appendChild(shell);
+}
+
+/** Ручные items с вычисленными статусами: осиротевший pending (requestId вне
+ * inFlight, грейс истёк) → error; digest-инвариант — ready с чужим digest →
+ * «изменилось», просроченные ошибки уходят. */
+function computedManualItems(msgId, items, { inFlight = null, now = Date.now, grace = DEFAULT_GRACE } = {}) {
+    const digestNow = currentVariantDigest(msgId);
+    const out = [];
+    for (const item of manualItems(items)) {
+        if (item.status === 'pending') {
+            const live = !!(inFlight && item.requestId != null && inFlight.has(item.requestId));
+            const fresh = (now() - (item.createdAt || 0)) < grace;
+            if (!live && !fresh) {
+                out.push({ ...item, status: 'error', error: item.error || 'Генерация прервана', orphaned: true });
+                continue;
+            }
+            out.push(item);
+            continue;
+        }
+        if (digestNow && item.digest && item.digest !== digestNow) {
+            if (item.status === 'error') continue; // просроченная ошибка — убрать
+            out.push({ ...item, status: 'changed' });
+            continue;
+        }
+        out.push(item);
+    }
+    return out;
+}
+
 function reconcileManualShells(mesEl, textEl, items, { inFlight = null, now = Date.now, grace = DEFAULT_GRACE } = {}) {
     if (!textEl) return;
     const msgId = Number(mesEl.getAttribute('mesid'));
-    const byKey = new Map();
-    try {
-        for (const el of mesEl.querySelectorAll('[data-manual="1"]')) {
-            byKey.set(el.getAttribute(SHELL_ATTR), el);
-        }
-    } catch { return; }
-    for (const item of (items || [])) {
-        if (!item || Number(item.idx) >= 0 || !item.descHash) continue; // маркерные — не ручные
-        const key = itemKey(item);
-        const el = byKey.get(key) || null;
-        let computedStatus = (item.status === 'ready' && !item.imagePath) ? 'error' : item.status;
-        let orphaned = false;
-        if (computedStatus === 'pending') {
-            const live = !!(inFlight && item.requestId != null && inFlight.has(item.requestId));
-            const fresh = (now() - (item.createdAt || 0)) < grace;
-            if (!live && !fresh) { computedStatus = 'error'; orphaned = true; }
-        }
-        // Живой/свежий pending: существующую оболочку не пересоздаём.
-        if (el && computedStatus === 'pending') continue;
-        if (computedStatus !== 'pending' && computedStatus !== 'ready' && computedStatus !== 'error') continue;
-        if (el && el.getAttribute(SHELL_ATTR) === key && el.getAttribute(STATUS_ATTR) === computedStatus
-            && el.getAttribute(FORM_ATTR) === formFor(computedStatus, key)) continue;
-        const desc = el?.getAttribute('data-uris-desc') || item.desc || '';
-        const entry = {
-            msgId, idx: item.idx, type: item.type, desc, descHash: item.descHash,
-            key, item, status: computedStatus, orphaned,
-            marker: { raw: null },
-        };
-        const shell = shellFor(msgId, entry);
-        shell.setAttribute('data-manual', '1');
-        shell.setAttribute('data-uris-desc', desc);
-        // Прямая замена/добавление: mountShell строит свой узел внутри, атрибуты
-        // data-manual/data-uris-desc на нём не удержать. Якорь абзаца перекрывает
-        // обе ветки: оболочка переносится к своему тексту, пока якорь находит
-        // абзац (текст поста мог отредактировать — тогда прежнее место/конец).
-        const anchor = item.anchorText ? findAnchorBlock(textEl, item.anchorText) : null;
-        if (anchor) {
-            removeNode(el);
-            if (!insertAfter(anchor, shell)) textEl.appendChild(shell);
-        } else if (el && el.parentNode) {
-            try { el.replaceWith(shell); } catch { removeNode(el); textEl.appendChild(shell); }
-        } else {
-            textEl.appendChild(shell);
-        }
-        byKey.set(key, shell);
+    const view = collectManualView(computedManualItems(msgId, items, { inFlight, now, grace }));
+    let el = null;
+    try { el = mesEl.querySelector('[data-manual="1"]') || null; } catch { return; }
+    if (view.empty) {
+        if (el) removeNode(el);
+        return;
     }
+    const status = manualStatus(view);
+    const form = manualFormFor(view);
+    const sig = [
+        status, form, view.cover?.imagePath || '', view.count,
+        view.pendings.length,
+        view.errors.map(e => `${e.descHash}:${e.error || ''}`).join(','),
+        view.changed.map(e => e.descHash).join(','),
+    ].join('|');
+    if (el && el.getAttribute(SHELL_ATTR) === MANUAL_KEY && el.getAttribute('data-uris-sig') === sig) return;
+    const shell = buildManualShell(msgId, view, status, form, sig);
+    shell.setAttribute('data-manual', '1');
+    if (el) removeNode(el);
+    positionManualShell(textEl, shell, view);
 }
 
-/** Блок .mes_text, содержащий якорный текст: match по вхождению в
- * normalizeAnchorText (ST перегруппировывает абзацы при рендере — мягкие
- * переносы сливаются в один <p>, хэш целого блока был бы хрупким). Прямой
- * ребёнок (p/div/значимый текстовый узел), не оболочка. null — не найден. */
-function findAnchorBlock(textEl, anchorText) {
-    if (!textEl || !anchorText) return null;
-    let children = [];
-    try { children = Array.from(textEl.childNodes); } catch { return null; }
-    for (const node of children) {
-        const isElement = node.nodeType === 1;
-        const isText = node.nodeType === 3 && String(node.textContent ?? '').trim();
-        if (!isElement && !isText) continue;
-        if (isElement && isShellEl(node)) continue;
-        const norm = normalizeAnchorText(node.textContent);
-        if (norm && norm.includes(anchorText)) return node;
+function manualFormFor(view) {
+    const status = manualStatus(view);
+    if (status !== 'ready' && status !== 'pending') return 'full';
+    if (state.settings?.inlineChips === true) return _expanded.has(MANUAL_KEY) ? 'full' : 'chip';
+    return _folded.has(MANUAL_KEY) ? 'chip' : 'full';
+}
+
+function buildManualShell(msgId, view, status, form, sig) {
+    const el = document.createElement('div');
+    el.classList.add('uris-inl-shell', 'uris-inl-manual');
+    el.setAttribute(SHELL_ATTR, MANUAL_KEY);
+    el.setAttribute(STATUS_ATTR, status);
+    el.setAttribute(FORM_ATTR, form);
+    el.setAttribute('data-uris-image', String(view.cover?.imagePath || ''));
+    el.setAttribute('data-uris-sig', sig);
+    if (form === 'chip') {
+        const chip = document.createElement('button');
+        chip.classList.add('uris-inl-chip');
+        chip.textContent = view.count > 1 ? `📷 Картинка ×${view.count}` : '📷 Картинка';
+        chip.setAttribute('title', 'Показать');
+        chip.addEventListener('click', () => {
+            _folded.delete(MANUAL_KEY);
+            _expanded.add(MANUAL_KEY);
+            try { reconcileVisible({ only: new Set([msgId]) }); } catch { /* fake-dom */ }
+        });
+        el.appendChild(chip);
+        return el;
     }
-    return null;
+    if (status === 'ready' || status === 'mixed') el.appendChild(coverEl(msgId, view));
+    for (const pending of view.pendings) el.appendChild(pendingRow(msgId, pending));
+    for (const err of view.errors) el.appendChild(errorRow(msgId, err));
+    for (const changed of view.changed || []) el.appendChild(changedRow(msgId, changed));
+    return el;
+}
+
+function coverEl(msgId, view) {
+    const wrap = document.createElement('div');
+    wrap.classList.add('uris-inl-cover');
+    const img = document.createElement('img');
+    img.setAttribute('src', `/${String(view.cover.imagePath).replace(/^\/+/, '')}`);
+    img.setAttribute('loading', 'lazy');
+    img.setAttribute('alt', 'Картинка');
+    img.setAttribute('title', `Картинка — клик: просмотр всех (${view.count})`);
+    img.addEventListener('click', () => {
+        void openMessageLightbox(msgId, { cardId: view.cover.cardId, imagePath: view.cover.imagePath });
+    });
+    wrap.appendChild(img);
+    if (view.count > 1) {
+        const count = document.createElement('div');
+        count.classList.add('uris-inl-count');
+        count.textContent = `×${view.count}`;
+        count.setAttribute('title', `Версий картинки: ${view.count}`);
+        wrap.appendChild(count);
+    }
+    const fold = document.createElement('button');
+    fold.classList.add('uris-inl-collapse');
+    fold.setAttribute('title', 'Свернуть в чип');
+    fold.textContent = '⌃';
+    fold.addEventListener('click', (ev) => {
+        try { ev?.stopPropagation?.(); } catch { /* fake-dom */ }
+        _folded.add(MANUAL_KEY);
+        _expanded.delete(MANUAL_KEY);
+        try { reconcileVisible({ only: new Set([msgId]) }); } catch { /* fake-dom */ }
+    });
+    wrap.appendChild(fold);
+    return wrap;
+}
+
+function pendingRow(msgId, item) {
+    const row = document.createElement('div');
+    row.classList.add('uris-inl-pending');
+    const star = document.createElement('span');
+    star.classList.add('uris-inl-plate-star');
+    star.textContent = '✦';
+    row.appendChild(star);
+    const text = document.createElement('span');
+    text.textContent = 'Рисую…';
+    row.appendChild(text);
+    const cancel = document.createElement('button');
+    cancel.classList.add('uris-inl-cancel');
+    cancel.setAttribute('data-uris-cancel', '1');
+    cancel.setAttribute('title', 'Отменить генерацию');
+    cancel.textContent = '✕';
+    cancel.addEventListener('click', (ev) => {
+        try { ev?.stopPropagation?.(); } catch { /* fake-dom */ }
+        cancelManualPending(msgId, item);
+    });
+    row.appendChild(cancel);
+    return row;
+}
+
+function errorRow(msgId, item) {
+    const row = document.createElement('div');
+    row.classList.add('uris-inl-error-row');
+    const btn = document.createElement('button');
+    btn.classList.add('uris-inl-btn');
+    btn.textContent = item.orphaned
+        ? 'Генерация прервана — клик: retry'
+        : `Ошибка: ${item.error || 'неизвестно'} — клик: retry`;
+    btn.addEventListener('click', () => retryManual(msgId, item));
+    row.appendChild(btn);
+    row.appendChild(dismissRowButton(msgId, item));
+    return row;
+}
+
+function changedRow(msgId, item) {
+    const row = document.createElement('div');
+    row.classList.add('uris-inl-error-row');
+    const btn = document.createElement('button');
+    btn.classList.add('uris-inl-btn');
+    btn.textContent = 'Текст изменился — клик: перерисовать';
+    btn.addEventListener('click', () => retryManual(msgId, item));
+    row.appendChild(btn);
+    row.appendChild(dismissRowButton(msgId, item));
+    return row;
+}
+
+function dismissRowButton(msgId, item) {
+    const dismiss = document.createElement('button');
+    dismiss.classList.add('uris-inl-cancel');
+    dismiss.setAttribute('title', 'Убрать');
+    dismiss.textContent = '✕';
+    dismiss.addEventListener('click', (ev) => {
+        try { ev?.stopPropagation?.(); } catch { /* fake-dom */ }
+        try { deleteItem(msgId, itemKey(item)); } catch { /* нет чата */ }
+        reconcileVisible();
+    });
+    return dismiss;
+}
+
+/** Retry ручной строки: story — полный пайплайн (force), inline/legacy —
+ * прежний инлайн-путь по живому тексту поста. */
+function retryManual(msgId, item) {
+    const notify = (e) => { try { toastr?.error(e?.message || e, 'URIS'); } catch { /* node */ } };
+    try {
+        if (item.origin === 'story' && typeof _rerollStory === 'function') {
+            _rerollStory(msgId);
+            return;
+        }
+        const desc = String(getCtx()?.chat?.[Number(msgId)]?.mes || '').slice(0, 4000);
+        Promise.resolve((_reroll || queueInlineJob)({
+            msgId: Number(msgId), idx: Number(item.idx) || -1, type: item.type || 'img', desc,
+        })).catch(notify);
+    } catch (e) { notify(e); }
+}
+
+/** Отмена ручной pending: живой requestId → abort (processJob запишет error);
+ * мёртвый → error-item «Отменено». Store-гард не даёт погасить ready. */
+function cancelManualPending(msgId, item) {
+    const rid = item?.requestId || null;
+    if (rid) {
+        let controller = null;
+        try { controller = state.activeGenerations?.get(rid) || null; } catch { controller = null; }
+        if (controller) {
+            try { controller.abort(); } catch { /* уже отменено */ }
+            return;
+        }
+    }
+    try {
+        upsertItem(msgId, {
+            idx: -1, type: 'img', origin: item.origin || 'story', status: 'error',
+            descHash: item.descHash, digest: item.digest, error: 'Отменено',
+        });
+    } catch { /* нет чата — узел заменит следующий reconcile */ }
+    reconcileVisible();
 }
 
 /** Реролл из DOM: job + catch с toastr (аменда 3: ошибка инициирована здесь —

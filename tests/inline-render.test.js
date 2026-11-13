@@ -199,14 +199,12 @@ test('reconcileVisible: ручная оболочка с anchorText встаёт
         p.textContent = t;
         textEl.appendChild(p);
     }
-    const DESC = 'история';
     // Якорь — нормализованный текст абзаца; markdown и регистр не важны.
     const anchorText = normalizeAnchorText('**22 октября.** Замок входной двери поддался с тихим щелчком.');
-    const key = `-1|img|${stableHash(`img|${DESC}`)}`;
-    upsertItem(0, { idx: -1, type: 'img', desc: DESC, descHash: stableHash(`img|${DESC}`), status: 'ready', imagePath: 'story.png', anchorText });
+    upsertItem(0, { idx: -1, type: 'img', descHash: 'm1', status: 'ready', imagePath: 'story.png', anchorText });
     reconcileVisible();
-    const shell = textEl.querySelector(`[data-uris-inl="${key}"]`);
-    assert.ok(shell, 'оболочка смонтирована');
+    const shell = textEl.querySelector('[data-uris-inl="manual"]');
+    assert.ok(shell, 'карусель смонтирована');
     // fake-dom не даёт previousSibling — порядок читаем из childNodes.
     const at = textEl.childNodes.indexOf(shell);
     assert.equal(textEl.childNodes[at - 1]?.textContent, '22 октября. Замок входной двери поддался с тихим щелчком.',
@@ -216,12 +214,10 @@ test('reconcileVisible: ручная оболочка с anchorText встаёт
 test('reconcileVisible: anchorText без совпадения → оболочка в конце (fallback)', () => {
     chatArr[0].mes = 'история без маркеров';
     const { textEl } = buildChatDOM();
-    const DESC = 'история';
-    const key = `-1|img|${stableHash(`img|${DESC}`)}`;
-    upsertItem(0, { idx: -1, type: 'img', desc: DESC, descHash: stableHash(`img|${DESC}`), status: 'ready', imagePath: 'story.png', anchorText: 'совсем другой текст про море' });
+    upsertItem(0, { idx: -1, type: 'img', descHash: 'm1', status: 'ready', imagePath: 'story.png', anchorText: 'совсем другой текст про море' });
     reconcileVisible();
-    const shell = textEl.querySelector(`[data-uris-inl="${key}"]`);
-    assert.ok(shell, 'оболочка смонтирована');
+    const shell = textEl.querySelector('[data-uris-inl="manual"]');
+    assert.ok(shell, 'карусель смонтирована');
     assert.equal(shell, textEl.childNodes[textEl.childNodes.length - 1], 'fallback: последний ребёнок .mes_text');
 });
 
@@ -460,39 +456,34 @@ test('compact: без чип-режима — прежнее поведение 
 
 test('reconcileVisible: ручная оболочка становится ready после генерации (idx -1)', () => {
     const { textEl } = buildChatDOM();
-    const DESC = 'смотри [[img: a]] вот';
-    const manualKey = `-1|img|${stableHash(`img|${DESC}`)}`;
-    upsertItem(0, { idx: -1, type: 'img', desc: DESC, descHash: stableHash(`img|${DESC}`), status: 'pending', createdAt: Date.now() });
+    upsertItem(0, { idx: -1, type: 'img', descHash: 'm1', status: 'pending', createdAt: Date.now() });
     reconcileVisible();
-    assert.equal(textEl.querySelector(`[data-uris-inl="${manualKey}"]`).getAttribute('data-uris-status'), 'pending');
-    upsertItem(0, { idx: -1, type: 'img', descHash: stableHash(`img|${DESC}`), status: 'ready', imagePath: 'm.png' });
+    const shell = textEl.querySelector('[data-uris-inl="manual"]');
+    assert.equal(shell.getAttribute('data-uris-status'), 'pending');
+    upsertItem(0, { idx: -1, type: 'img', descHash: 'm1', status: 'ready', imagePath: 'm.png' });
     reconcileVisible();
-    const shell = textEl.querySelector(`[data-uris-inl="${manualKey}"]`);
-    assert.ok(shell, 'ручная оболочка на месте');
-    assert.equal(shell.getAttribute('data-uris-status'), 'ready');
-    assert.equal(shell.querySelector('img').getAttribute('src'), '/m.png');
+    const readyShell = textEl.querySelector('[data-uris-inl="manual"]');
+    assert.ok(readyShell, 'карусель на месте');
+    assert.equal(readyShell.getAttribute('data-uris-status'), 'ready');
+    assert.equal(readyShell.querySelector('img').getAttribute('src'), '/m.png');
 });
 
 test('render: manual error shell converges (stable identity across passes)', () => {
-    // Регрессия: безгардовая replaceWith() в reconcileManualShells пересоздавала
-    // error-оболочку (data-manual остаётся → совпадение снова) каждый проход —
-    // бесконечный чурн через MutationObserver. Здесь без обсервера: 3 прохода
-    // подряд должны оставить ТОТ ЖЕ узел.
+    // Регрессия: пересоздание error-оболочки каждый проход — бесконечный чурн
+    // через MutationObserver. 3 прохода подряд должны оставить ТОТ ЖЕ узел.
     const { textEl } = buildChatDOM();
-    const DESC = 'смотри [[img: a]] вот';
-    upsertItem(0, { idx: -1, type: 'img', desc: DESC, descHash: stableHash(`img|${DESC}`), status: 'pending', createdAt: Date.now() });
+    upsertItem(0, { idx: -1, type: 'img', descHash: 'm1', status: 'pending', createdAt: Date.now() });
     reconcileVisible();
-    upsertItem(0, { idx: -1, type: 'img', descHash: stableHash(`img|${DESC}`), status: 'error', error: 'NO_CONNECTION' });
+    upsertItem(0, { idx: -1, type: 'img', descHash: 'm1', status: 'error', error: 'NO_CONNECTION' });
     reconcileVisible();
-    const manualKey = `-1|img|${stableHash(`img|${DESC}`)}`;
-    const first = textEl.querySelector(`[data-uris-inl="${manualKey}"]`);
+    const first = textEl.querySelector('[data-uris-inl="manual"]');
     assert.equal(first.getAttribute('data-uris-status'), 'error');
     // Маркер [[img: a]] получает собственную button-оболочку — считаем её,
     // инвариант: количество оболочек не растёт от прохода к проходу.
     const countAfterFirst = textEl.querySelectorAll('[data-uris-inl]').length;
     for (let i = 0; i < 3; i++) {
         reconcileVisible();
-        const shell = textEl.querySelector(`[data-uris-inl="${manualKey}"]`);
+        const shell = textEl.querySelector('[data-uris-inl="manual"]');
         assert.equal(shell, first, `проход ${i + 1}: узел не пересоздаётся`);
     }
     assert.equal(textEl.querySelectorAll('[data-uris-inl]').length, countAfterFirst, 'без churn: число оболочек стабильно');
@@ -517,39 +508,34 @@ test('reconcileVisible: инлайн выключен — ручные обол�
     state.settings.inlineEnabled = false;
     const { textEl } = buildChatDOM();
     // Ручная запись лаунчер-пайплайна (idx<0, без маркера в тексте).
-    const DESC = 'пост без маркеров';
-    upsertItem(0, { idx: -1, type: 'img', desc: DESC, descHash: stableHash(`img|${DESC}`), status: 'pending', createdAt: Date.now() });
+    upsertItem(0, { idx: -1, type: 'img', descHash: 'm1', status: 'pending', createdAt: Date.now() });
     // Маркерная запись инлайна (idx>=0) — при выключенном тумблере не монтируется.
     upsertItem(0, { idx: 0, type: 'img', descHash: HASH_A, status: 'ready', imagePath: 'old.png' });
     reconcileVisible();
-    assert.ok(
-        textEl.querySelector(`[data-uris-inl="-1|img|${stableHash(`img|${DESC}`)}"]`),
-        'ручная оболочка лаунчера смонтирована при выключенном инлайне',
-    );
+    const shell = textEl.querySelector('[data-uris-inl="manual"]');
+    assert.ok(shell, 'карусель лаунчера смонтирована при выключенном инлайне');
     assert.equal(textEl.querySelectorAll('[data-uris-inl]').length, 1, 'маркерная оболочка не смонтирована');
     // Готовая ручная карточка → картинка на месте.
-    upsertItem(0, { idx: -1, type: 'img', descHash: stableHash(`img|${DESC}`), status: 'ready', imagePath: 'story.png' });
+    upsertItem(0, { idx: -1, type: 'img', descHash: 'm1', status: 'ready', imagePath: 'story.png' });
     reconcileVisible();
-    const shell = textEl.querySelector(`[data-uris-inl="-1|img|${stableHash(`img|${DESC}`)}"]`);
-    assert.equal(shell.getAttribute('data-uris-status'), 'ready');
-    assert.equal(shell.querySelector('img').getAttribute('src'), '/story.png');
+    const readyShell = textEl.querySelector('[data-uris-inl="manual"]');
+    assert.equal(readyShell.getAttribute('data-uris-status'), 'ready');
+    assert.equal(readyShell.querySelector('img').getAttribute('src'), '/story.png');
     // Существующая маркерная картинка не удалена из DOM (история не исчезает).
     reconcileVisible();
-    assert.ok(shell.isConnected, 'ручная оболочка стабильна между проходами');
+    assert.ok(readyShell.isConnected, 'карусель стабильна между проходами');
 });
 
 test('render: осиротевшая ручная pending-оболочка → error, спиннер не живёт вечно', () => {
     const { textEl } = buildChatDOM();
-    const DESC = 'смотри [[img: a]] вот';
-    const descHash = stableHash(`img|${DESC}`);
-    upsertItem(0, { idx: -1, type: 'img', desc: DESC, descHash, status: 'pending', createdAt: Date.now() });
+    upsertItem(0, { idx: -1, type: 'img', descHash: 'm1', status: 'pending', createdAt: Date.now() });
     reconcileVisible();
     // Генерация убита перезагрузкой: item pending с мёртвым requestId, грейс истёк.
-    upsertItem(0, { idx: -1, type: 'img', descHash, status: 'pending', requestId: 'dead', createdAt: 0 });
+    upsertItem(0, { idx: -1, type: 'img', descHash: 'm1', status: 'pending', requestId: 'dead', createdAt: 0 });
     reconcileVisible();
-    const shell = textEl.querySelector(`[data-uris-inl="-1|img|${descHash}"]`);
+    const shell = textEl.querySelector('[data-uris-inl="manual"]');
     assert.equal(shell.getAttribute('data-uris-status'), 'error');
-    assert.equal(shell.getAttribute('data-manual'), '1', 'ручная оболочка остаётся ручной');
+    assert.equal(shell.getAttribute('data-manual'), '1', 'карусель остаётся ручной');
     shutdownRender();
 });
 
@@ -590,13 +576,12 @@ test('messageLightboxItems: готовые с файлом, порядок по 
     assert.equal(out[1].sourceMsgId, 0);
 });
 
-test('messageLightboxItems: ручные результаты (idx<0) сортируются по createdAt', () => {
+test('messageLightboxItems: только маркерные — ручные идут через карусель', () => {
     const out = messageLightboxItems([
         { idx: -1, type: 'img', descHash: 'new', status: 'ready', imagePath: 'n.png', createdAt: 200 },
         { idx: -1, type: 'img', descHash: 'old', status: 'ready', imagePath: 'o.png', createdAt: 100 },
     ], null, 4);
-    assert.deepEqual(out.map(i => i.imagePath), ['o.png', 'n.png']);
-    assert.equal(out[0].sourceMsgId, 4);
+    assert.deepEqual(out, [], 'ручные items собирает carouselLightboxItems (tests/inline-carousel.test.js)');
 });
 
 test('клик по инлайн-картинке открывает все готовые картинки поста с данными карточки', async () => {
@@ -621,8 +606,8 @@ test('клик по инлайн-картинке открывает все го
 
     assert.equal(calls.length, 1, 'showLightbox вызван один раз');
     const [items, index, options] = calls[0];
-    assert.deepEqual(items.map(i => i.src), ['/two.png', '/one.png'], 'оба готовых результата поста');
-    assert.equal(index, 1, 'открыто именно нажатое изображение');
+    assert.deepEqual(items.map(i => i.src), ['/one.png', '/two.png'], 'маркерные, затем карусель поста');
+    assert.equal(index, 0, 'открыто именно нажатое изображение');
     assert.equal(items[index].id, 'c1', 'id карточки — без него не работают regen/delete');
     assert.equal(items[index].prompt, 'кофе на столе');
     assert.equal(items[index].width, 512);
