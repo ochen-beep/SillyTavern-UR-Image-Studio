@@ -20,11 +20,19 @@ test('collectManualView: обложка — последний ready, count, м�
         item({ imagePath: 'first.png', cardId: 'c1', cardIds: ['c1'], createdAt: 1 }),
         item({ imagePath: 'second.png', cardId: 'c2', cardIds: ['c1', 'c2'], createdAt: 2 }),
     ]);
-    assert.equal(view.count, 2);
+    assert.equal(view.count, 3, 'версии: 1 + 2 cardIds двух itemов');
     assert.equal(view.cover.imagePath, 'second.png');
     assert.equal(view.pendings.length, 1);
     assert.equal(view.errors.length, 0);
     assert.equal(view.ready.length, 2);
+});
+
+test('collectManualView: счётчик версий — по cardIds, а не по числу items', () => {
+    const view = collectManualView([
+        item({ cardId: 'c1', cardIds: ['c1', 'c2', 'c3'], imagePath: 'p.png' }),
+    ]);
+    assert.equal(view.count, 3, 'один item с тремя карточками → ×3');
+    assert.equal(view.cover.imagePath, 'p.png');
 });
 
 test('collectManualView: ready без файла → error (показывать нечего)', () => {
