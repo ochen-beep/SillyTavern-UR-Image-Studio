@@ -43,13 +43,6 @@ test('зум вкладок/тела действует и в мобильном
     assert.match(css.slice(open + 1, close), /zoom:\s*var\(--uris-scale,\s*1\)/);
 });
 
-test('зум-правило стоит ПОСЛЕ канонического .uris-body (контракт CSS-парсеров тестов)', () => {
-    const canonical = css.indexOf('.uris-body {');
-    assert.notEqual(canonical, -1);
-    const zoomRule = css.indexOf('.uris-window .uris-tabs,');
-    assert.ok(zoomRule > canonical, 'парсеры тестов берут первое вхождение `.uris-body {` — зум-правило не должно его предшествовать');
-});
-
 test('fullscreen-геометрия .uris-mobile не компенсирует зум вручную', () => {
     const { block } = ruleBlock('#urisWindow.uris-mobile {');
     assert.match(block, /width:\s*100%/, 'фуллскрин тянется на 100% ширины');

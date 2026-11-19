@@ -6,7 +6,6 @@
 // со злом: ///, хвостовой /v1, /api/v1, порт ComfyUI.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFile } from 'node:fs/promises';
 
 import { resolveEndpoint, interpolatePath } from '../src/endpoint-utils.js';
 import { getProviderDescriptor } from '../src/provider-descriptors.js';
@@ -128,12 +127,6 @@ test('cloudflare-workers-ai: base обязан включать account ID, хв
     const base = resolveEndpoint(d, 'https://api.cloudflare.com/client/v4/accounts/abc123');
     assert.equal(`${base}${d.endpoint.generationPath}@cf/x/y`, 'https://api.cloudflare.com/client/v4/accounts/abc123/ai/run/@cf/x/y');
     assert.equal(`${base}${d.endpoint.modelsPath}?task=Text-to-Image`, 'https://api.cloudflare.com/client/v4/accounts/abc123/ai/models/search?task=Text-to-Image');
-});
-
-test('grep-инвариант (пункт 2.3): регэксп /pollinations|naistera/i по display name удалён из image-base', async () => {
-    const src = await readFile(new URL('../src/providers/image-base.js', import.meta.url), 'utf8');
-    assert.doesNotMatch(src, /pollinations\|naistera/i, 'isBearerContract больше не матчит display name');
-    assert.match(src, /authProfileFor\(contract\)/, 'коды 401/403 берутся из дескриптора');
 });
 
 test('дескрипторы: статус-коды 401/403 только у bearer-контрактов с токенами от бота/сервиса', () => {

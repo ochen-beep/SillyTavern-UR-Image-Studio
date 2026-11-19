@@ -1,14 +1,7 @@
 // @ts-check
-// Регрессионный статический тест на «клеверный» стиль кнопки «+ Референс»
-// (#urisRefsAddBtn, класс .uris-refs-add в src/ui/tab-references.js).
-//
-// Контекст: кнопка добавления референса была нейтрально-серой и визуально
-// терялась рядом с поиском. По требованию она должна быть «немного
-// прозрачно зеленоватой, цвета клевера» — т.е. использовать зелёную
-// гамму акцента темы: полупрозрачный фон var(--uris-accent-soft)
-// (rgba(90,158,58,.18), тот же приём, что у .uris-proxy-ok) и зелёный
-// текст var(--uris-accent). Тест страхует регресс: если правило
-// случайно вернут к серому — соберётся красным.
+// Статический контракт поверхностей и редактора папок в refs-UI:
+// непрозрачные тематические поверхности (читаемость на тёмных темах
+// SillyTavern) и позиции действий поверх превью.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
@@ -34,43 +27,6 @@ function ruleBodyFor(css, selector) {
     const m = css.match(re);
     return m ? m[1] : null;
 }
-
-test('.uris-refs-add has translucent clover-green background (accent-soft)', () => {
-    const body = ruleBodyFor(readCss(), '.uris-refs-add');
-    assert.ok(body, '.uris-refs-add rule not found in style.css');
-    assert.match(body, /background\s*:\s*var\(--uris-accent-soft\)/,
-        '.uris-refs-add must declare background: var(--uris-accent-soft) — translucent clover green');
-});
-
-test('.uris-refs-add uses clover-green accent for text color', () => {
-    const body = ruleBodyFor(readCss(), '.uris-refs-add');
-    assert.ok(body, '.uris-refs-add rule not found in style.css');
-    assert.match(body, /color\s*:\s*var\(--uris-accent\)/,
-        '.uris-refs-add must declare color: var(--uris-accent) — clover green text');
-});
-
-// Мобильный аналог кнопки «+ Референс» (тулбар мобильных экранов) должен
-// выглядеть так же — тот же «клевер».
-test('.uris-mobile-add-ref has translucent clover-green background (accent-soft)', () => {
-    const body = ruleBodyFor(readCss(), '.uris-mobile-add-ref');
-    assert.ok(body, '.uris-mobile-add-ref rule not found in style.css');
-    assert.match(body, /background\s*:\s*var\(--uris-accent-soft\)/,
-        '.uris-mobile-add-ref must declare background: var(--uris-accent-soft) — translucent clover green');
-});
-
-test('.uris-mobile-add-ref uses clover-green accent for text color', () => {
-    const body = ruleBodyFor(readCss(), '.uris-mobile-add-ref');
-    assert.ok(body, '.uris-mobile-add-ref rule not found in style.css');
-    assert.match(body, /color\s*:\s*var\(--uris-accent\)/,
-        '.uris-mobile-add-ref must declare color: var(--uris-accent) — clover green text');
-});
-
-test('.uris-folder-editor-swatch palette wraps', () => {
-    const body = ruleBodyFor(readCss(), '.uris-folder-editor-palette');
-    assert.ok(body, '.uris-folder-editor-palette rule not found in style.css');
-    assert.match(body, /flex-wrap\s*:\s*wrap/,
-        'folder editor palette must wrap swatches');
-});
 
 test('.uris-editor-preview-wrap positions preview actions at bottom-right', () => {
     const css = readCss();

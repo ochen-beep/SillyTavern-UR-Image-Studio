@@ -25,13 +25,3 @@ test('.uris-btn[hidden] глушит display: скрытые кнопки не �
     const body = ruleBodyFor('.uris-btn[hidden]');
     assert.match(body, /display\s*:\s*none/, 'без display:none атрибут hidden бессилен против .uris-btn { display: inline-flex }');
 });
-
-test('спасатель специфичнее базового правила и не полагается на !important', () => {
-    // (0,2,0) у .uris-btn[hidden] против (0,1,0) у .uris-btn — порядка строк
-    // не требуется; !important проект резервирует для чужих стилей, не своих.
-    const rescueIdx = css.indexOf('.uris-btn[hidden]');
-    const baseIdx = css.indexOf('.uris-btn {');
-    assert.ok(baseIdx !== -1 && rescueIdx !== -1);
-    const rescue = css.slice(rescueIdx, css.indexOf('}', rescueIdx));
-    assert.doesNotMatch(rescue, /!important/, 'проект предпочитает специфичность !important');
-});

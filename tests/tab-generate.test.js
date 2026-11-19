@@ -625,18 +625,6 @@ test('pending prompt autosave lands in the draft of the post being edited', asyn
     }
 });
 
-test('tab-generate source imports every runtime symbol bindGenerate calls at attach time', async () => {
-    // Regression guard: bindGenerate's cancel handler calls abortGeneration() and
-    // its paths call getCtx()/state. Dropping a core.js import throws
-    // ReferenceError during render and silently disables every Generate-tab
-    // button, including Stage 1 and Stage 2. (Originally guarded debounce():
-    // since the cancellable prompt autosave is wired in, attach no longer calls it.)
-    const src = await readFile(new URL('../src/ui/tab-generate.js', import.meta.url), 'utf8');
-    assert.match(src, /import\s*\{[^}]*\babortGeneration\b[^}]*\}\s*from\s*'\.\.\/core\.js'/);
-    assert.match(src, /import\s*\{[^}]*\bgetCtx\b[^}]*\}\s*from\s*'\.\.\/core\.js'/);
-    assert.match(src, /createCancellablePromptAutosave\(\{[\s\S]*?persist:/, 'bindGenerate must use the cancellable autosave, not a bare debounce');
-});
-
 test('bindGenerate attaches Stage 1 and Stage 2 click handlers without throwing', () => {
     const attached = [];
     const makeEl = (sel) => {

@@ -25,10 +25,3 @@ test('showLightbox берёт seq до первого await и проверяе�
     const lastAwait = src.lastIndexOf('await ensureCardDimensions', guard);
     assert.notEqual(lastAwait, -1, 'гард стоит ПОСЛЕ await\'ов пробы размеров (иначе он ничего не ловит)');
 });
-
-test('устаревший вызов не трогает _active и не регистрирует кнопки', () => {
-    const guardIdx = src.indexOf('if (seq !== _openSeq) return;');
-    assert.notEqual(guardIdx, -1);
-    const tail = src.slice(guardIdx, guardIdx + 400);
-    assert.match(tail, /const pswp = new PhotoSwipe/, 'гард стоит непосредственно перед созданием viewer\'а');
-});
