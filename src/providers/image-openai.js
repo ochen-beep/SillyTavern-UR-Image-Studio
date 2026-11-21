@@ -370,13 +370,14 @@ async function dispatchEditWithDialectChain({ endpoint, route, request, referenc
     noteEditDialectOutcome({ connId: diagnostic.connId, endpoint, dialect, ok, rejectKind }).catch(() => {});
   };
   const readParsed = async response => ({ ...parse(await readJsonResponse(response, 'OpenAI Images', authProfileFor(route?.generationContract))), warnings: paramWarnings(route, request) });
-  // Бесплатная проверка ключа GET /models через ту же прокси-доставку. Нужна
-  // только для 400 на проксированной ноге: прямые 401/403 отсекает
-  // isDialectCandidate, а 400 под прокси — это либо честный отказ диалекта,
-  // либо ремапнутая auth-ошибка. Сломанный ключ падает и на пробе → платную
-  // img2img-ногу не тратим, отдаём исходную ошибку. Живой ключ получает каталог
-  // → 400 был отказом диалекта → цепочка идёт дальше. Сетевой сбой пробы —
-  // исход неопределён, не мешаем (поведение прежнее).
+  // Free key check: GET /models through the same proxy delivery. Needed only
+  // for a 400 on the proxied leg: direct 401/403 are filtered by
+  // isDialectCandidate, while a 400 under the proxy is either an honest
+  // dialect rejection or a remapped auth error. A broken key fails the probe
+  // too → the paid img2img leg is skipped and the original error surfaces. A
+  // live key gets the catalog → the 400 was a dialect rejection → the chain
+  // proceeds. A network failure of the probe leaves the outcome undecided —
+  // do not interfere (behavior unchanged).
   const proxiedAuthBroken = async () => {
     try {
       const proxyRoute = { ...route, transport: { ...route.transport, initialDelivery: 'proxy' } };
@@ -402,26 +403,26 @@ async function dispatchEditWithDialectChain({ endpoint, route, request, referenc
       note('img2img', true);
       return parsed;
     } catch (imgError) {
-      // Оборачиваем только HTTP-отказ (диалект отвергнут). Сетевой сбой или
-      // «200 без картинки» — честная ошибка самого img2img, не «диалекты
-      // исчерпаны».
+      // Wrap only an HTTP rejection (dialect refused). A network failure or a
+      // "200 without an image" is an honest img2img error, not "dialects
+      // exhausted".
       if (!Number.isSafeInteger(imgError?.httpStatus)) throw imgError;
       throw editsExhaustedError(previousError, imgError);
     }
   };
 
-  // Явный JSON-пин — shipped поведение без цепочки.
+  // Explicit JSON pin — shipped behavior, no chain.
   if (editProtocol(connection) === 'json') {
     return await readParsed(await sendJsonEdit({ endpoint, route, request, references, transport, headers, signal, connection, diagnostic }));
   }
 
   const hint = auto ? editDialectHintFor(connection) : null;
-  // Опыт: img2img принимается — сразу он, без пересмотра мёртвых диалектов.
+  // Experience: img2img is accepted — go straight to it, without revisiting dead dialects.
   if (hint === 'img2img-proxy') {
     return await readParsed(await sendGenerationsImageEdit({ endpoint, route, request, references, transport, headers, signal, connection, diagnostic }))
       .then(parsed => { note('img2img', true); return parsed; });
   }
-  // Опыт: JSON принимается — сразу JSON proxy-first; отвергнут → img2img.
+  // Experience: JSON is accepted — go straight to JSON proxy-first; rejected → img2img.
   if (hint === 'json-proxy') {
     try {
       return await runJsonLeg();
@@ -432,7 +433,7 @@ async function dispatchEditWithDialectChain({ endpoint, route, request, referenc
     }
   }
 
-  // (1) multipart напрямую — классика OpenAI.
+  // (1) multipart directly — the OpenAI classic.
   if (request && typeof request === 'object') request.editDialect = 'multipart';
   const form = formData(route, request, references);
   const encodedReferences = typeof form.getAll === 'function' ? form.getAll('image').length : references.length;
@@ -441,9 +442,9 @@ async function dispatchEditWithDialectChain({ endpoint, route, request, referenc
   try {
     multipartResponse = await transport.requestMultipart(editUrl(endpoint), diagnosticRequestOptions({ method: 'POST', headers, body: form, signal }, diagnostic, { bodyKind: 'multipart', wireFields: ['model', 'prompt', 'n', 'image', ...(form.get('size') ? ['size'] : []), ...(form.get('quality') ? ['quality'] : []), ...(form.get('input_fidelity') ? ['input_fidelity'] : [])] }), route, connection.timeoutMs);
   } catch (error) {
-    // Shipped путь: явный прокси-консент → JSON proxy-first. С 2026-09-28
-    // через тот же оракул, что и auto-цепочка: единый стандарт доказательства
-    // «multipart не ушёл» вместо исторического предположения.
+    // Shipped path: explicit proxy consent → JSON proxy-first. Since
+    // 2026-09-28 through the same oracle as the auto chain: one standard of
+    // proof for "multipart never left" instead of the historical assumption.
     if (shouldFallbackToProxyJson(error, connection)) {
       const verdict = await probePreflightDelivery(editUrl(endpoint), signal, connection.timeoutMs ?? 120000);
       if (verdict !== 'dead' || isCorsProxyAvailable() === false) throw ambiguousMultipartEditError();
@@ -456,24 +457,36 @@ async function dispatchEditWithDialectChain({ endpoint, route, request, referenc
       });
       return await runJsonLeg();
     }
-    if (error?.code !== 'MULTIPART_CORS_REQUIRED' || !auto) throw error;
-    // auto: доказываем «запрос не ушёл», прежде чем менять диалект.
+    if (error?.code !== 'MULTIPART_CORS_REQUIRED') throw error;
+    if (!auto) {
+      // Explicit-direct without proxy consent: a bare TypeError does not prove
+      // "the body never left" — a mid-flight drop looks identical, and the
+      // same multipart route can succeed on the next attempt. Run the same
+      // free OPTIONS oracle the consent path uses before blaming the
+      // provider's CORS: a live preflight means the POST may have reached
+      // the provider and been billed, so the outcome is ambiguous, not a
+      // config directive.
+      const verdict = await probePreflightDelivery(editUrl(endpoint), signal, connection.timeoutMs ?? 120000);
+      if (verdict !== 'dead') throw ambiguousMultipartEditError();
+      throw error;
+    }
+    // auto: prove "the request never left" before switching dialects.
     const verdict = await probePreflightDelivery(editUrl(endpoint), signal, connection.timeoutMs ?? 120000);
     if (verdict === 'alive') {
-      // Preflight живой: POST мог доехать и отрисоваться — исход неизвестен.
+      // Preflight alive: the POST may have reached the provider and rendered — outcome unknown.
       throw ambiguousMultipartEditError();
     }
     if (verdict !== 'dead' || isCorsProxyAvailable() === false) throw error;
     note('multipart', false, 'preflight');
-    // (2) JSON /edits через прокси.
+    // (2) JSON /edits through the proxy.
     try {
       return await runJsonLeg();
     } catch (jsonError) {
       if (!isDialectCandidate(jsonError)) throw jsonError;
-      // 400 под прокси — ремапнутая auth возможна: дешёвая проверка ключа
-      // прежде, чем тратить img2img-ногу.
+      // A 400 under the proxy may be a remapped auth error: a cheap key check
+      // before spending the img2img leg.
       if (jsonError.httpStatus === 400 && await proxiedAuthBroken()) throw jsonError;
-      // (3) generations + image через прокси.
+      // (3) generations + image through the proxy.
       return await runImg2imgLeg(jsonError);
     }
   }
@@ -521,9 +534,9 @@ export async function generateOpenAIImage(input) {
   });
   const headers = { Authorization: `Bearer ${apiKey}` };
   if (references.length) {
-    // Wire-copy подгонка под выученный лимит тела (HTTP 413): каноничные
-    // референсы в сторе не трогаем, уплотняется только копия для этого
-    // диспетча. Соединения без выученного лимита работают как раньше.
+    // Wire-copy fitting under the learned body limit (HTTP 413): canonical
+    // references in the store stay untouched, only the copy for this dispatch
+    // gets flattened. Connections without a learned limit work as before.
     let wireReferences = references;
     const budget = await wireBodyBudget(diagnostic?.connId);
     if (budget) {
@@ -535,14 +548,14 @@ export async function generateOpenAIImage(input) {
       }
     }
     try {
-      // Цепочка диалектов редактирования (multipart → JSON → img2img) — уже
-      // возвращает разобранный payload с warnings.
+      // The edit dialect chain (multipart → JSON → img2img) already returns
+      // the parsed payload with warnings.
       return await dispatchEditWithDialectChain({ endpoint, route, request, references: wireReferences, transport, headers, signal, connection, diagnostic });
     } catch (error) {
-      // 413 — отказ шлюза ДО приложения (nginx client_max_body_size и родня):
-      // ничего не сгенерировано и не списано, поэтому ровно один ретрай с
-      // полностью сплощёнными референсами безопасен. Выученный бюджет затем
-      // держит все последующие диспетчи этого соединения под лимитом с старта.
+      // 413 is a gateway rejection BEFORE the app (nginx client_max_body_size
+      // and kin): nothing was generated or billed, so exactly one retry with
+      // fully flattened references is safe. The learned budget then keeps
+      // every later dispatch of this connection under the limit from the start.
       if (error?.httpStatus !== 413) throw error;
       const flattenedAll = await Promise.all(wireReferences.map(reference =>
         reference.mimeType === 'image/png' ? flattenReferenceToJpeg(reference) : Promise.resolve(reference)));

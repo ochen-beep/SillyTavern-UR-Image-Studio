@@ -272,21 +272,26 @@ test('openai-images retries a CORS-blocked multipart edit as JSON through the pr
 test('openai-images never falls back to JSON without the CORS proxy opt-in', async () => {
   const transport = makeFallbackTransport({ multipartError: multipartCorsError(), jsonResponse: jsonResponse({ data: [{ b64_json: 'cmVzdWx0' }] }) });
   const req = { prompt: 'Edit this', references: REFS };
-  await assert.rejects(
-    invokeImageProvider({
-      endpoint: 'https://api.example', apiKey: 'secret',
-      connection: { useCorsProxy: false },
-      route: route('openai-images', 'gpt-image-1'),
-      request: req, transport,
-    }),
-    error => error?.code === 'MULTIPART_CORS_REQUIRED',
-  );
-  assert.equal(transport.calls.length, 1);
-  assert.equal(transport.calls[0].kind, 'multipart');
-  // The dialect stamp records the attempted multipart; delivery stays untouched
-  // (no fallback happened).
-  assert.equal(req.editDialect, 'multipart');
-  assert.equal(req.delivery, undefined);
+  // The non-auto path verifies the CORS claim with the free OPTIONS oracle
+  // before surfacing it; a dead preflight keeps the historical typed error.
+  const restoreFetch = mockDeadPreflight();
+  try {
+    await assert.rejects(
+      invokeImageProvider({
+        endpoint: 'https://api.example', apiKey: 'secret',
+        connection: { useCorsProxy: false },
+        route: route('openai-images', 'gpt-image-1'),
+        request: req, transport,
+      }),
+      error => error?.code === 'MULTIPART_CORS_REQUIRED',
+    );
+    assert.equal(transport.calls.length, 1);
+    assert.equal(transport.calls[0].kind, 'multipart');
+    // The dialect stamp records the attempted multipart; delivery stays untouched
+    // (no fallback happened).
+    assert.equal(req.editDialect, 'multipart');
+    assert.equal(req.delivery, undefined);
+  } finally { restoreFetch(); }
 });
 
 test('openai-images never falls back after an HTTP response (double-billing guard)', async () => {

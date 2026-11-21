@@ -239,10 +239,14 @@ test('chain: oracle alive on multipart → ambiguous, no dialect retry', async (
   } finally { restore(); }
 });
 
-test('chain: explicit-direct policy keeps the shipped single multipart attempt', async () => {
+test('chain: explicit-direct keeps a single multipart attempt; dead preflight keeps the CORS verdict', async () => {
   const transport = scriptedTransport((url, options, kind) => {
     if (kind === 'multipart') throw Object.assign(new TypeError('Failed to fetch'), { code: 'MULTIPART_CORS_REQUIRED' });
     throw new Error(`unexpected ${url}`);
+  });
+  const restore = mockFetch((_url, options) => {
+    if (options?.method === 'OPTIONS') throw new TypeError('Failed to fetch');
+    throw new Error('unexpected direct fetch');
   });
   try {
     await assert.rejects(
@@ -252,8 +256,32 @@ test('chain: explicit-direct policy keeps the shipped single multipart attempt',
       }),
       error => error?.code === 'MULTIPART_CORS_REQUIRED',
     );
-    assert.deepEqual(transport.calls.map(c => c.kind), ['multipart'], 'явный приказ — ни оракула, ни цепочки');
-  } finally { /* no fetch mock to restore */ }
+    assert.deepEqual(transport.calls.map(c => c.kind), ['multipart'], 'явный приказ — ни одной платной второй попытки');
+  } finally { restore(); }
+});
+
+test('chain: explicit-direct + live preflight → ambiguous outcome, still a single attempt', async () => {
+  // A live preflight means the multipart POST may have reached the provider
+  // (mid-flight drop): the surfaced error must not claim "enable CORS" —
+  // the outcome is unknown and possibly billed.
+  const transport = scriptedTransport((url, options, kind) => {
+    if (kind === 'multipart') throw Object.assign(new TypeError('Failed to fetch'), { code: 'MULTIPART_CORS_REQUIRED' });
+    throw new Error(`unexpected ${url}`);
+  });
+  const restore = mockFetch((_url, options) => {
+    if (options?.method === 'OPTIONS') return { ok: true, status: 200 };
+    throw new Error('unexpected direct fetch');
+  });
+  try {
+    await assert.rejects(
+      () => invokeImageProvider({
+        endpoint: 'https://gw.example', apiKey: 'k', connection: connection(),
+        route: route({ transport: { deliveryPolicy: 'explicit-direct' } }), request: request(), transport,
+      }),
+      error => error?.code === 'IMAGE_DELIVERY_AMBIGUOUS' && /multipart/.test(error.message),
+    );
+    assert.deepEqual(transport.calls.map(c => c.kind), ['multipart'], 'оракул бесплатный и платных повторов не добавляет');
+  } finally { restore(); }
 });
 
 test('chain: shipped explicit-proxy fallback goes through the same oracle (dead → JSON proxy)', async () => {
