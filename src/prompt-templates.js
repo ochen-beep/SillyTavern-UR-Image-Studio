@@ -186,6 +186,54 @@ export async function replaceTemplateStoreRecords(records) {
 }
 
 /**
+ * File-transfer import: append `drafts` as new records (fresh ids are minted
+ * here — incoming ids from foreign installs are never reused) and apply
+ * `overwrite` patches to existing records by id — all in ONE store mutation,
+ * so a batch of N templates costs a single file upload.
+ * @param {Array<{name: string, instruction: string}>} drafts
+ * @param {Array<{id: string, name?: string, instruction: string}>} [overwrite]
+ * @returns {Promise<number|null>} persisted record count, or null when the
+ * store is read-only (caller surfaces the error).
+ */
+export async function importTemplates(drafts, { overwrite = [] } = {}) {
+    if (!drafts.length && !overwrite.length) return 0;
+    if (cachedTemplates === null) await listTemplates();
+    const now = Date.now();
+    const mutate = records => {
+        for (const patch of overwrite) {
+            const index = records.findIndex(item => item.id === patch.id);
+            if (index === -1) continue;
+            records[index] = {
+                ...records[index],
+                name: patch.name ?? records[index].name,
+                instruction: patch.instruction,
+                updatedAt: now,
+            };
+        }
+        for (const draft of drafts) {
+            records.push({
+                id: uid(),
+                name: draft.name,
+                type: 'instruction',
+                instruction: draft.instruction,
+                createdAt: now,
+                updatedAt: now,
+            });
+        }
+        return drafts.length + overwrite.length;
+    };
+    const persisted = await applyTemplateMutation(mutate);
+    if (persisted === undefined) return null; // readonly/unknown store
+    cachedTemplates = null; // the mirror changed wholesale; re-read on next list
+    recordDiagnosticEvent({
+        event: 'template-crud', stage: 'templates', operation: 'import',
+        details: { created: drafts.length, overwritten: overwrite.length },
+    });
+    log('Импортированы шаблоны', persisted);
+    return persisted;
+}
+
+/**
  * Fresh records for export. Null in legacy mode — the exporter then keeps
  * reading templates from settings, as before.
  */

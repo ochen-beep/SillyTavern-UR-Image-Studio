@@ -209,6 +209,14 @@
 /* ── Templates ── */
 .uris-templates-create { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 8px; }
 .uris-templates-create .uris-btn { flex: 1; min-width: 120px; }
+/* Import/export row: sits above the create row, both pinned to the tab top. */
+.uris-templates-io { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 6px; }
+.uris-templates-io .uris-btn { flex: 1; min-width: 120px; }
+/* Card header extras (rename + export): own container so the flex name keeps
+   its space on narrow mobile headers. */
+.uris-header-extra { display: inline-flex; gap: 2px; flex: 0 0 auto; align-items: center; }
+/* Drag-and-drop import highlight on the templates tab. */
+.uris-templates.uris-drop-active { outline: 2px dashed var(--uris-accent); outline-offset: -2px; border-radius: 8px; }
 /* Header radio in the template card: doubles as the "make active" click target
    (visible when collapsed). Filled accent = active, hollow ring = inactive.
    20px — это в первую очередь кликабельная зона активации, не только индикатор. */

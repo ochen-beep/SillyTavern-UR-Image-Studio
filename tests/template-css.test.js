@@ -41,3 +41,13 @@ test('кнопка-статус — 20px: стандарт кликабельн�
         assert.match(body, /height:\s*20px/, `${selector} height`);
     }
 });
+
+test('кнопка скачивания шаблона — ghost-стиль шапки, без дефолтного бокса UA', () => {
+    const body = ruleBody('.uris-template-export');
+    assert.ok(body, '.uris-template-export rule not found');
+    assert.match(body, /background:\s*transparent/, 'no default UA background box');
+    assert.match(body, /border:\s*0/, 'no default UA border');
+    // Same geometry as the rename button it sits next to in the header.
+    assert.match(body, /width:\s*24px/);
+    assert.match(body, /height:\s*24px/);
+});

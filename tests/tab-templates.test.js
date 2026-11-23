@@ -58,6 +58,18 @@ test('renderTemplateCard renders a clone action like the connect-card clone', ()
     assert.match(html, /Клонировать/);
 });
 
+test('renderTemplateCard wraps header extras (rename + export) in their own container', () => {
+    const html = renderTemplateCard({ id: 't1', name: 'Director', type: 'instruction', instruction: '' });
+    assert.match(html, /class="uris-header-extra"/);
+    assert.match(html, /uris-template-export/, 'per-card export button lives in the header extras container');
+    assert.match(html, /title="Скачать шаблон \(\.md\)"/);
+    // The container must sit after the name span inside the same header.
+    const header = html.match(/<div class="uris-preset-card-header">[\s\S]*?<\/div>/)?.[0] ?? '';
+    const nameIdx = header.indexOf('uris-name"');
+    const extrasIdx = header.indexOf('uris-header-extra');
+    assert.ok(nameIdx !== -1 && extrasIdx > nameIdx, 'extras follow the name inside the header');
+});
+
 test('active template card shows the active dot and accent class, not the legacy glow', () => {
     state.activeTemplateId = 't1';
     const html = renderTemplateCard({ id: 't1', name: 'Director', type: 'instruction', instruction: '' });

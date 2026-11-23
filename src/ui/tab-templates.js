@@ -1,28 +1,40 @@
 // @ts-check
 /** Templates tab: instruction templates only. */
 import { state, escapeHtml, showConfirmModal, showInputModal, error } from '../core.js';
-import { listTemplates, saveTemplate, deleteTemplate, createInstructionTemplate, reorderTemplates } from '../prompt-templates.js';
+import { listTemplates, saveTemplate, deleteTemplate, createInstructionTemplate, reorderTemplates, importTemplates } from '../prompt-templates.js';
 import { patchChatConfig } from '../chat-binding.js';
 import { refreshActive } from './tabs.js';
 import { reportFailure, URIS_SCOPES } from '../error-pool.js';
 import { generatePromptText } from '../text-api.js';
 import { editTextModal } from './text-editor.js';
 import { makeCardReorderable } from './card-drag.js';
+import {
+    collectTemplates, planImport, templateToMarkdown, sanitizeFilename,
+    dedupeFileNames, downloadBlob, loadJsZip,
+} from '../template-transfer.js';
+import { recordDiagnosticEvent } from '../diagnostic-events.js';
 
 /** @param {HTMLElement} root */
 export function render(root) {
     root.innerHTML = `
         <div class="uris-templates">
-            <div class="uris-templates-list" id="urisTemplatesList"></div>
             <div class="uris-templates-actions" id="urisTemplatesActions"></div>
+            <div class="uris-templates-list" id="urisTemplatesList"></div>
         </div>`;
+    bindDropZone(root);
     return Promise.all([renderActions(root), renderList(root)]);
 }
 
 async function renderActions(root) {
     const host = root.querySelector('#urisTemplatesActions');
     if (!host) return;
-    host.innerHTML = renderTemplateCreateActions(state.settings.experimentalTemplateFromDescription === true);
+    host.innerHTML = `
+        <div class="uris-templates-io">
+            <button class="uris-btn uris-btn-outline" data-template-io="import"><i class="fa-solid fa-file-import"></i> Импорт</button>
+            <button class="uris-btn uris-btn-outline" data-template-io="export"><i class="fa-solid fa-file-export"></i> Экспорт всех</button>
+            <input type="file" class="uris-template-io-file" accept=".txt,.md,.markdown,.prompty,.json,.docx,.zip" multiple hidden>
+        </div>
+        ${renderTemplateCreateActions(state.settings.experimentalTemplateFromDescription === true)}`;
     host.querySelectorAll('[data-create-type]').forEach(button => {
         button.addEventListener('click', async () => {
             // createTemplateFromDescription throws on invalid LLM JSON or a
@@ -45,6 +57,86 @@ async function renderActions(root) {
             }
         });
     });
+    const fileInput = host.querySelector('.uris-template-io-file');
+    host.querySelector('[data-template-io="import"]')?.addEventListener('click', () => fileInput?.click());
+    fileInput?.addEventListener('change', async () => {
+        const files = [...(fileInput.files ?? [])];
+        fileInput.value = '';
+        if (files.length) await runImport(files);
+    });
+    host.querySelector('[data-template-io="export"]')?.addEventListener('click', runExportAll);
+}
+
+// Drop target is the whole tab (the list may be short or empty).
+function bindDropZone(root) {
+    const host = root.querySelector('.uris-templates');
+    if (!host) return;
+    host.addEventListener('dragover', event => {
+        event.preventDefault();
+        host.classList.add('uris-drop-active');
+    });
+    host.addEventListener('dragleave', () => host.classList.remove('uris-drop-active'));
+    host.addEventListener('drop', async event => {
+        event.preventDefault();
+        // ST keeps a delegated drop handler on document.body (chat attachment
+        // import) — a bubbling drop would be processed by BOTH handlers.
+        event.stopPropagation();
+        host.classList.remove('uris-drop-active');
+        const files = [...(event.dataTransfer?.files ?? [])];
+        if (files.length) await runImport(files);
+    });
+}
+
+async function runImport(files) {
+    try {
+        const { records: drafts, failed } = await collectTemplates(files);
+        if (!drafts.length) {
+            toastr?.warning(failed ? `Шаблоны не распознаны: файлов с ошибками ${failed}` : 'В выбранных файлах нет шаблонов');
+            return;
+        }
+        const existing = await listTemplates();
+        const conflicts = drafts.filter(draft => existing.some(template => template.name.trim().toLowerCase() === draft.name.trim().toLowerCase()));
+        let policy = 'copy';
+        if (conflicts.length) {
+            const shown = conflicts.slice(0, 5).map(conflict => conflict.name).join(', ');
+            const more = conflicts.length > 5 ? ` и ещё ${conflicts.length - 5}` : '';
+            // Per bulk-import UX: overwrite is never the default — Cancel keeps
+            // both (clone-style suffix), OK is the explicit destructive path.
+            policy = (await showConfirmModal(
+                `Совпадают имена с существующими шаблонами (${conflicts.length}): ${shown}${more}.\n\n`
+                + 'OK — перезаписать совпавшие, Отмена — добавить как копии.',
+            )) ? 'overwrite' : 'copy';
+        }
+        const { toCreate, toOverwrite } = planImport(existing, drafts, policy);
+        const persisted = await importTemplates(toCreate, { overwrite: toOverwrite });
+        if (persisted === null) throw new Error('хранилище не сохранило шаблоны (read-only сессия)');
+        toastr?.success(`Импортировано: новых ${toCreate.length}, перезаписано ${toOverwrite.length}${failed ? `, ошибок ${failed}` : ''}`);
+        refreshActive();
+    } catch (e) {
+        error('Templates: import failed:', e?.message || e);
+        reportFailure({ scope: URIS_SCOPES.templates, message: e?.message || String(e), toast: true, toastText: 'Ошибка импорта шаблонов: ' + (e?.message || e) });
+    }
+}
+
+async function runExportAll() {
+    try {
+        const templates = await listTemplates();
+        if (!templates.length) {
+            toastr?.info('Нет шаблонов для экспорта');
+            return;
+        }
+        const JSZip = await loadJsZip();
+        const zip = new JSZip();
+        const names = dedupeFileNames(templates.map(template => `${sanitizeFilename(template.name)}.md`));
+        templates.forEach((template, index) => zip.file(names[index], templateToMarkdown(template)));
+        const blob = await zip.generateAsync({ type: 'blob' });
+        downloadBlob(`uris-templates-${new Date().toISOString().slice(0, 10)}.zip`, blob);
+        recordDiagnosticEvent({ event: 'template-crud', stage: 'templates', operation: 'export', details: { count: templates.length } });
+        toastr?.success(`Экспортировано шаблонов: ${templates.length}`);
+    } catch (e) {
+        error('Templates: export failed:', e?.message || e);
+        reportFailure({ scope: URIS_SCOPES.templates, message: e?.message || String(e), toast: true, toastText: 'Ошибка экспорта шаблонов: ' + (e?.message || e) });
+    }
 }
 
 /** @param {boolean} experimentalEnabled */
@@ -92,7 +184,10 @@ export function renderTemplateCard(template) {
         <div class="uris-preset-card-header">
             <button class="uris-template-status${active ? ' uris-status-active' : ''}" type="button" title="${active ? 'Активен' : 'Сделать активным'}" aria-label="${active ? 'Активен' : 'Сделать активным'}"></button>
             <span class="uris-name" title="${escapeHtml(template.name)}">${escapeHtml(template.name)}</span>
-            <button class="uris-name-edit" type="button" title="Переименовать" aria-label="Переименовать"><i class="fa-solid fa-pencil"></i></button>
+            <span class="uris-header-extra">
+                <button class="uris-name-edit" type="button" title="Переименовать" aria-label="Переименовать"><i class="fa-solid fa-pencil"></i></button>
+                <button class="uris-template-export" type="button" title="Скачать шаблон (.md)" aria-label="Скачать шаблон"><i class="fa-solid fa-download"></i></button>
+            </span>
         </div>
         <div class="uris-preset-card-body"${collapsed ? ' hidden' : ''}>
             <div class="uris-field"><div class="uris-field-head">
@@ -183,6 +278,18 @@ function bindCards(host) {
             if (!created) return;
             toastr?.success(`Скопировано: ${created.name}`);
             refreshActive();
+        });
+        // Export reads the card (collect(), like Clone): what you see is what
+        // you download, including a pending debounced edit.
+        card.querySelector('.uris-template-export')?.addEventListener('click', () => {
+            const current = collect();
+            try {
+                const blob = new Blob([templateToMarkdown(current)], { type: 'text/markdown' });
+                downloadBlob(`${sanitizeFilename(current.name)}.md`, blob);
+            } catch (e) {
+                error('Templates: export failed:', e?.message || e);
+                reportFailure({ scope: URIS_SCOPES.templates, message: 'Экспорт шаблона: ' + (e?.message || e), toast: true, toastText: 'Ошибка экспорта шаблона: ' + (e?.message || e) });
+            }
         });
         card.querySelector('.uris-del')?.addEventListener('click', async () => {
             if (!await showConfirmModal('Удалить шаблон?')) return;

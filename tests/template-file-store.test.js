@@ -224,4 +224,53 @@ describe('template file store', () => {
         assert.equal(store.templateStoreMode(), 'readonly');
         assert.equal(uploads.length, 0, 'no user-files traffic');
     });
+
+    it('importTemplates appends drafts with fresh ids in ONE file upload', async () => {
+        await seedServerFile([
+            { id: 't1', name: 'Director', type: 'instruction', instruction: 'Direct.' },
+        ]);
+
+        const persisted = await templates.importTemplates([
+            { name: 'A', instruction: 'ia' },
+            { name: 'B', instruction: 'ib' },
+        ]);
+        await store.flushTemplateWrites();
+
+        assert.equal(persisted, 2);
+        const records = fileTemplates();
+        assert.equal(records.length, 3, 'seeded record kept, two drafts appended');
+        const newIds = records.slice(1).map(r => r.id);
+        assert.ok(newIds.every(id => id && !['t1'].includes(id)), 'fresh ids are minted, incoming ids ignored');
+        assert.ok(records.slice(1).every(r => r.type === 'instruction' && r.createdAt > 0 && r.updatedAt > 0));
+        assert.equal(uploads.length, 1, 'a batch is a single upload, not one per template');
+    });
+
+    it('importTemplates overwrite patches existing records in place', async () => {
+        const created = Date.UTC(2026, 0, 1);
+        await seedServerFile([
+            { id: 't1', name: 'Old name', type: 'instruction', instruction: 'old', createdAt: created, updatedAt: created },
+        ]);
+
+        const persisted = await templates.importTemplates([], { overwrite: [{ id: 't1', name: 'New name', instruction: 'new' }] });
+        await store.flushTemplateWrites();
+
+        assert.equal(persisted, 1);
+        const record = fileTemplates()[0];
+        assert.equal(record.id, 't1');
+        assert.equal(record.name, 'New name');
+        assert.equal(record.instruction, 'new');
+        assert.equal(record.createdAt, created, 'createdAt is preserved on overwrite');
+        assert.ok(record.updatedAt > created);
+        assert.equal(fileTemplates().length, 1, 'overwrite never appends');
+    });
+
+    it('importTemplates refuses readonly stores with null (no uploads)', async () => {
+        verifyAvailable = false;
+
+        const persisted = await templates.importTemplates([{ name: 'A', instruction: 'ia' }]);
+        await store.flushTemplateWrites();
+
+        assert.equal(persisted, null);
+        assert.equal(uploads.length, 0);
+    });
 });

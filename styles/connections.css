@@ -31,13 +31,15 @@
     pointer-events: auto; background: var(--uris-surface-btn); border-color: var(--uris-border);
 }
 .uris-preset-card-header .uris-server-name::placeholder { color: var(--uris-text-dim); }
-.uris-name-edit {
+.uris-name-edit,
+.uris-template-export {
     flex: 0 0 auto; display: inline-flex; align-items: center; justify-content: center;
     width: 24px; height: 24px; padding: 0; border: 0; border-radius: var(--uris-radius);
     background: transparent; color: var(--uris-text-dim); cursor: pointer;
     transition: color .12s, background .12s;
 }
-.uris-name-edit:hover { color: var(--uris-text-strong); background: var(--uris-surface-btn); }
+.uris-name-edit:hover,
+.uris-template-export:hover { color: var(--uris-text-strong); background: var(--uris-surface-btn); }
 
 /* Drag & drop порядка карточек (шаблоны, коннекты): ghost и grabbing-курсор
    переиспользуют блок .uris-drag-ghost у чипов референсов (z-слой --uris-z-ghost);
