@@ -91,15 +91,24 @@ test('uris-picker-overlay: явные top/left/width/height вместо inset: 
     assert.doesNotMatch(block, /inset:\s*0/, 'inset: 0 запрещён: в ST mobile bottom-sheet улетает за верх экрана');
 });
 
-test('мобильная ERR-панель: top-привязка, без bottom (ST mobile body fixed)', () => {
+test('ERR-панель — absolute внутри окна, не fixed (драг окна не отрывает панель)', () => {
+    const block = ruleBlock('.uris-error-panel {');
+    assert.match(block, /position:\s*absolute/, 'fixed уходил от бейджа при перетаскивании окна — координаты считаются от окна');
+    assert.match(block, /max-height:\s*min\(420px,\s*calc\(100% - 60px\)\)/, 'высота ограничена окном (containing block), не вьюпортом');
+});
+
+test('мобильная ERR-панель: top-привязка от окна, без --uris-st-top', () => {
     // мобильный блок — последний @media (max-width: 768px) c .uris-error-panel
     const mediaIdx = css.lastIndexOf('.uris-error-panel');
     assert.notEqual(mediaIdx, -1, 'правила .uris-error-panel не найдены');
     const open = css.indexOf('{', mediaIdx);
     const close = css.indexOf('}', open);
     const block = css.slice(open + 1, close);
-    assert.match(block, /top:\s*calc\(/, 'мобильная панель должна привязываться top: calc(...) — bottom уводит её за экран в ST mobile');
-    assert.match(block, /bottom:\s*auto/, 'bottom должен быть явно отключён (auto)');
+    assert.match(block, /position:\s*absolute/, 'на мобиле панель тоже внутри окна: вырожденный containing block ST не участвует');
+    assert.match(block, /top:\s*52px/, 'лист под шапкой окна — координаты оконные');
+    assert.match(block, /left:\s*8px/, 'панель растягивается между полями окна');
+    assert.doesNotMatch(block, /--uris-st-top/, 'st-top больше не нужен: координаты отсчитываются от окна');
+    assert.doesNotMatch(block, /bottom:/, 'top-привязка, панель не растягивается к низу');
 });
 
 test('панель бейджа выше sticky-тулбара галереи (мобильная регрессия наложения)', () => {

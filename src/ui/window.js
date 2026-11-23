@@ -66,7 +66,7 @@ export const _testWindowMarkup = { WINDOW_TEMPLATE };
  * тянет getComputedStyle/matchMedia/restoreGeometry, которых в fake-dom нет).
  * removePanel общий — он же снимает эти слушатели.
  */
-export const _testWindowLifecycle = { bindQueueBadge, bindErrorPool, bindWindowEscape, removePanel, collapseWindow };
+export const _testWindowLifecycle = { bindQueueBadge, bindErrorPool, bindWindowEscape, removePanel, collapseWindow, closeTransientPanels };
 
 export function mountPanel() {
     let el = document.getElementById(WIN_ID);
@@ -666,12 +666,14 @@ function bindQueueBadge(el) {
         badge.setAttribute('aria-expanded', String(!panel.hidden));
         el.querySelector('#urisQueueCount').textContent = String(count);
         if (!panel.hidden) {
-            // Как у панели INFO: лист открывается под своим бейджем, а не в
-            // углу вьюпорта. На мобиле позицию задаёт CSS.
+            // Как у панели INFO: лист открывается под своим бейджем — координаты
+            // относительно окна (absolute внутри #urisWindow), не вьюпорта, чтобы
+            // панель ехала вместе с окном. На мобиле позицию задаёт CSS.
             if (!isMobileViewport()) {
+                const winRect = el.getBoundingClientRect();
                 const rect = badge.getBoundingClientRect();
-                panel.style.top = `${Math.max(8, rect.bottom + 6)}px`;
-                panel.style.right = `${Math.max(8, window.innerWidth - rect.right)}px`;
+                panel.style.top = `${Math.max(8, rect.bottom - winRect.top + 6)}px`;
+                panel.style.right = `${Math.max(8, winRect.right - rect.right)}px`;
             }
             renderQueuePanel(el);
         }
@@ -721,9 +723,13 @@ function bindErrorPool(el) {
     let refreshSeq = 0;
     const positionPanel = () => {
         if (panel.hidden || isMobileViewport()) return;
+        // Absolute inside the window: coordinates are badge offsets relative to
+        // the window box, so the panel rides every window motion (scroll, zoom,
+        // clamp) without re-sync. Viewport-relative math here went stale on drag.
+        const winRect = el.getBoundingClientRect();
         const rect = badge.getBoundingClientRect();
-        panel.style.top = `${Math.max(8, rect.bottom + 6)}px`;
-        panel.style.right = `${Math.max(8, window.innerWidth - rect.right)}px`;
+        panel.style.top = `${Math.max(8, rect.bottom - winRect.top + 6)}px`;
+        panel.style.right = `${Math.max(8, winRect.right - rect.right)}px`;
     };
     const sync = async () => {
         const seq = ++refreshSeq;
@@ -792,12 +798,27 @@ function bindErrorPool(el) {
     sync();
 }
 
+// Geometry gestures (drag/resize) close the transient QUEUE/INFO panels: they
+// are anchored to the header badges, and a moving window would otherwise leave
+// their absolute coordinates stale mid-gesture. Pure readers — closing loses
+// nothing; the next open re-renders from the live journals.
+function closeTransientPanels(el) {
+    for (const badge of el.querySelectorAll('.uris-error-badge')) {
+        if (badge.getAttribute('aria-expanded') !== 'true') continue;
+        const controls = badge.getAttribute('aria-controls');
+        const panel = controls ? el.querySelector(`#${controls}`) : null;
+        if (panel) panel.hidden = true;
+        badge.setAttribute('aria-expanded', 'false');
+    }
+}
+
 function startDrag(e, el) {
     if (isMobileViewport()) return;
     // Secondary button / pen-barrel: not a drag. Touch and pen are pointerType
     // 'touch' / 'pen' and arrive here too — one handler covers all of them.
     if (e.button !== undefined && e.button !== 0) return;
     if (e.target.closest('.uris-icon-btn')) return;
+    closeTransientPanels(el);
     const pointerId = e.pointerId;
     // Геометрия жеста читается ОДИН раз на pointerdown: размеры окна и inset
     // топ-бара не меняются в течение драга, а прежние чтения rect на каждый
@@ -846,6 +867,7 @@ function startDrag(e, el) {
 function startResize(e, el) {
     if (e.button !== undefined && e.button !== 0) return;
     e.stopPropagation(); e.preventDefault();
+    closeTransientPanels(el);
     const pointerId = e.pointerId;
     const startX = e.clientX, startY = e.clientY;
     const r = el.getBoundingClientRect();

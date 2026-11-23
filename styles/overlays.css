@@ -41,7 +41,11 @@
 .uris-badge-dot[hidden] { display: none; }
 .uris-error-count { font-weight: 400; opacity: var(--uris-o-85); margin-left: 2px; }
 .uris-error-panel {
-    position: fixed;
+    /* absolute внутри #urisWindow: панель всегда при своём бейдже — драг,
+       ресайз, zoom и scroll окна не оставляют протухших координат (fixed
+       уходил от бейджа при перетаскивании окна). Инлайн top/right задаёт
+       window.js от rect бейджа относительно окна. */
+    position: absolute;
     top: 0;
     right: 0;
     /* Выше любого содержимого вкладок: на мобиле тулбар галереи — sticky с
@@ -50,7 +54,9 @@
        Панель — транзиентный оверлей, ниже шапки окна не опускается. */
     z-index: 30;
     width: min(380px, calc(100% - 20px));
-    max-height: min(70vh, 420px);
+    /* 100% = высота окна (containing block): панель не пересекает нижний край
+       окна при любом его размере, лишняя высота скроллится внутри. */
+    max-height: min(420px, calc(100% - 60px));
     overflow-y: auto;
     box-sizing: border-box;
     padding: 10px;
@@ -88,15 +94,14 @@
 
 @media (max-width: 768px) {
     .uris-error-panel {
-        position: fixed;
-        /* top-привязка вместо bottom: в ST-мобиле body { position: fixed }
-           схлопывает контейнер fixed-элементов, и bottom:N уводит панель
-           за верхний край. top + max-height работают всегда. Лист открывается
-           под шапкой окна (высота шапки ~44px от --uris-st-top). */
-        top: calc(var(--uris-st-top, 0px) + 48px);
+        /* absolute внутри окна — вырожденный containing block ST-мобилы
+           (body { position: fixed }) больше не участвует: координаты
+           отсчитываются от окна, а оно на мобиле fullscreen. Лист открывается
+           под шапкой окна (высота шапки ~44px + зазор). */
+        position: absolute;
+        top: 52px;
         right: 8px;
         left: 8px;
-        bottom: auto;
         width: auto;
         max-height: min(65dvh, 440px);
         border-radius: var(--uris-radius-card);

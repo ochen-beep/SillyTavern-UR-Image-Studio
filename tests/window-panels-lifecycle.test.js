@@ -135,3 +135,37 @@ test('Esc при открытом карточном меню закрывает
     assert.equal(core.state.settings.collapsed, false, 'окно НЕ сворачивается при открытом меню');
     assert.equal(menu.overlay.parentNode, null, 'меню закрыто своим capture-обработчиком');
 });
+
+
+test('Геометрический жест: closeTransientPanels закрывает открытые панели и сбрасывает aria-expanded', () => {
+    const el = mount();
+    const queueBadge = el.querySelector('#urisQueueBadge');
+    const errorBadge = el.querySelector('#urisErrorBadge');
+    const queuePanel = el.querySelector('#urisQueuePanel');
+    const errorPanel = el.querySelector('#urisErrorPanel');
+    queuePanel.hidden = false;
+    errorPanel.hidden = false;
+    queueBadge.setAttribute('aria-expanded', 'true');
+    errorBadge.setAttribute('aria-expanded', 'true');
+
+    _testWindowLifecycle.closeTransientPanels(el);
+
+    assert.equal(queuePanel.hidden, true, 'QUEUE-панель скрыта');
+    assert.equal(errorPanel.hidden, true, 'INFO-панель скрыта');
+    assert.equal(queueBadge.getAttribute('aria-expanded'), 'false');
+    assert.equal(errorBadge.getAttribute('aria-expanded'), 'false');
+});
+
+test('closeTransientPanels: закрытые панели не трогает, панели без aria-controls безопасны', () => {
+    const el = mount();
+    const queuePanel = el.querySelector('#urisQueuePanel');
+    queuePanel.hidden = true;
+    _testWindowLifecycle.closeTransientPanels(el);
+    assert.equal(queuePanel.hidden, true, 'закрытая панель осталась закрытой');
+    // A badge without aria-controls must not throw.
+    const orphan = el.querySelector('#urisErrorBadge');
+    orphan.removeAttribute('aria-controls');
+    orphan.setAttribute('aria-expanded', 'true');
+    _testWindowLifecycle.closeTransientPanels(el);
+    assert.equal(orphan.getAttribute('aria-expanded'), 'false');
+});
