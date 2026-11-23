@@ -34,11 +34,14 @@ function makeCtx({ check, clickOk }) {
     return {
         POPUP_TYPE,
         POPUP_RESULT,
-        callGenericPopup: async (html, type, _def, _opts) => {
+        callGenericPopup: async (content, type, _def, _opts) => {
             if (type !== POPUP_TYPE.CONFIRM) throw new Error('expected CONFIRM');
             const host = document.createElement('div');
             host.id = 'fakePopup';
-            host.innerHTML = html;
+            // ST appends an HTMLElement content; strings still ride innerHTML
+            // (popup.js) — mirror both so this stub stays honest about ST.
+            if (typeof content === 'string') host.innerHTML = content;
+            else host.appendChild(content);
             document.body.appendChild(host);
             const cb = host.querySelector('#urisDeleteFile');
             if (check) {

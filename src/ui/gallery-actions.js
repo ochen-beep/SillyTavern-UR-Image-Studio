@@ -450,12 +450,24 @@ export async function confirmDeleteModal(ctx) {
     document.addEventListener('change', onChange, { capture: true });
     let result;
     try {
+        // Built as DOM (not a string): ST renders string popup content via
+        // innerHTML, and the caption text must stay text no matter what.
+        const box = document.createElement('div');
+        const label = document.createElement('label');
+        label.className = 'checkbox_label uris-label-block';
+        const checkbox = document.createElement('input');
+        checkbox.type = 'checkbox';
+        checkbox.id = 'urisDeleteFile';
+        const caption = document.createElement('span');
+        caption.textContent = 'Также стереть файл и убрать из галереи чата (Show Gallery)';
+        label.appendChild(checkbox);
+        label.appendChild(caption);
+        const question = document.createElement('div');
+        question.textContent = 'Удалить картинку из галереи расширения?';
+        box.appendChild(question);
+        box.appendChild(label);
         result = await ctx.callGenericPopup(
-            'Удалить картинку из галереи расширения?' +
-            '<label class="checkbox_label uris-label-block">' +
-            '<input type="checkbox" id="urisDeleteFile">' +
-            '<span>Также стереть файл и убрать из галереи чата (Show Gallery)</span>' +
-            '</label>',
+            box,
             ctx.POPUP_TYPE.CONFIRM,
             '',
             { okButton: 'Удалить', cancelButton: 'Отмена' },

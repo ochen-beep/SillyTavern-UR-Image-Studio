@@ -771,10 +771,22 @@ export function sanitizePrompt(t) {
 }
 
 // ── Modal wrappers over ST (like DS Comments) ──
+// ST renders string popup content via innerHTML, so interpolated names (folder
+// names from imported backups, template names) must never ride a raw string:
+// build a text node instead. whiteSpace preserves the '\n\n' formatting these
+// dialogs were written with (string path collapsed them to one line).
+export function dialogTextContent(text) {
+    if (typeof document === 'undefined') return String(text ?? '');
+    const div = document.createElement('div');
+    div.style.whiteSpace = 'pre-wrap';
+    div.textContent = String(text ?? '');
+    return div;
+}
+
 export async function showConfirmModal(text) {
     const ctx = getCtx();
     if (ctx.callGenericPopup) {
-        const r = await ctx.callGenericPopup(text, ctx.POPUP_TYPE.CONFIRM);
+        const r = await ctx.callGenericPopup(dialogTextContent(text), ctx.POPUP_TYPE.CONFIRM);
         return r === 1 || r === true;
     }
     return confirm(text);
@@ -782,7 +794,7 @@ export async function showConfirmModal(text) {
 export async function showInputModal(text, def = '') {
     const ctx = getCtx();
     if (ctx.callGenericPopup) {
-        return await ctx.callGenericPopup(text, ctx.POPUP_TYPE.INPUT, def, { okButton: 'ОК' });
+        return await ctx.callGenericPopup(dialogTextContent(text), ctx.POPUP_TYPE.INPUT, def, { okButton: 'ОК' });
     }
     return prompt(text, def);
 }

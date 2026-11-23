@@ -433,7 +433,7 @@ test('sidebar: удаление группы поднимает подпапки
     globalThis.SillyTavern.getContext = () => ({
         extensionSettings: {}, saveSettingsDebounced: () => {}, saveMetadata: () => {},
         getRequestHeaders: () => ({}), chatMetadata: _chatMetadata,
-        callGenericPopup: async (text) => { confirms.push(text); return true; },
+        callGenericPopup: async (text) => { confirms.push(text?.textContent ?? String(text)); return true; },
         POPUP_TYPE: { CONFIRM: 'confirm' },
     });
 
