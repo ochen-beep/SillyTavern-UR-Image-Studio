@@ -90,7 +90,7 @@ export function render(root) {
                     <input type="text" class="text_pole" id="urisLabCaller" maxlength="64" value="${escapeHtml(_lab.caller)}">
                 </div>
                 <div class="uris-settings-actions">
-                    <button type="button" class="uris-btn uris-btn-outline" id="urisLabRun"${_lab.running ? ' disabled' : ''}><i class="fa-solid fa-image"></i> Сгенерировать</button>
+                    <button type="button" class="uris-btn uris-btn-confirm" id="urisLabRun"${_lab.running ? ' disabled' : ''}><i class="fa-solid fa-image"></i> Сгенерировать</button>
                     <button type="button" class="uris-btn uris-btn-ghost" id="urisLabAbort"${_lab.running ? '' : ' hidden'}><i class="fa-solid fa-stop"></i> Отменить</button>
                 </div>
                 <small class="uris-hint" id="urisLabOut">${_lab.running ? 'Генерация…' : 'Готово к вызову.'}</small>

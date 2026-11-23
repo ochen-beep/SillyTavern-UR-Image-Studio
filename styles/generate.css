@@ -458,7 +458,7 @@
 .uris-refs-add-tile {
     width: 56px; aspect-ratio: 3 / 4;
     border: 2px dashed var(--SmartThemeBorderColor, #666);
-    background: transparent; color: var(--SmartThemeBodyColor, #aaa);
+    background: transparent; color: var(--uris-text-mut, #aaa);
     border-radius: var(--uris-radius-card); cursor: pointer;
     display: flex; align-items: center; justify-content: center;
     font-size: calc(22px * var(--uris-font-scale, 1));

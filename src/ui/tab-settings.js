@@ -92,21 +92,25 @@ export function render(root) {
                 <small class="uris-hint">[[тип: описание]] в ответах персонажа превращаются в картинки. Профили триггеров — вкладка «Медиа».</small>
                 <label class="checkbox_label"><input type="checkbox" id="uris_inline_chips" ${state.settings.inlineChips === true ? 'checked' : ''}><span>Компакт-режим инлайна (чипы вместо картинок) ${UNSTABLE_BADGE}</span></label>
                 <small class="uris-hint">На месте маркера — чип «📷 тип»; клик раскрывает картинку, ⌃ сворачивает обратно. Удобно, когда картинок в посте много.</small>
-                <label class="checkbox_label"><span>Позиция картинки в посте</span>
+                <div class="uris-field">
+                    <label for="uris_launcher_shell_position">Позиция картинки в посте</label>
                     <select class="text_pole uris-notify-select" id="uris_launcher_shell_position">
                         <option value="context" ${resolveShellPosition() === 'context' ? 'selected' : ''}>По смыслу (цитата из промпта)</option>
                         <option value="start" ${resolveShellPosition() === 'start' ? 'selected' : ''}>В начало поста</option>
                         <option value="middle" ${resolveShellPosition() === 'middle' ? 'selected' : ''}>В середину поста</option>
                         <option value="end" ${resolveShellPosition() === 'end' ? 'selected' : ''}>В конец поста</option>
-                    </select></label>
-                <small class="uris-hint">«По смыслу» ищет абзац по цитате из промпта Stage 1 (титр на картинке); цитаты нет — картинка в конце. Смена действует и на уже готовые картинки.</small>
-                <label class="checkbox_label"><span>Клик по картинке в посте</span>
+                    </select>
+                    <small class="uris-hint">«По смыслу» ищет абзац по цитате из промпта Stage 1 (титр на картинке); цитаты нет — картинка в конце. Смена действует и на уже готовые картинки.</small>
+                </div>
+                <div class="uris-field">
+                    <label for="uris_shell_click_action">Клик по картинке в посте</label>
                     <select class="text_pole uris-notify-select" id="uris_shell_click_action">
                         <option value="lightbox" ${resolveShellClickAction() === 'lightbox' ? 'selected' : ''}>Лайтбокс (просмотр всех версий)</option>
                         <option value="tab" ${resolveShellClickAction() === 'tab' ? 'selected' : ''}>Новая вкладка браузера</option>
                         <option value="none" ${resolveShellClickAction() === 'none' ? 'selected' : ''}>Ничего</option>
-                    </select></label>
-                <small class="uris-hint">Нативное меню браузера (сохранить/копировать) на картинках в посте всегда доступно правой кнопкой или зажатием.</small>
+                    </select>
+                    <small class="uris-hint">Нативное меню браузера (сохранить/копировать) на картинках в посте всегда доступно правой кнопкой или зажатием.</small>
+                </div>
                 <label class="checkbox_label"><input type="checkbox" id="uris_auto_retry_ambiguous" ${state.settings.autoRetryAmbiguous === true ? 'checked' : ''}><span>Авто-повтор при неоднозначной доставке (очередь)</span></label>
                 <small class="uris-hint">Если прямой запрос к шлюзу ушёл «без ответа», задача один раз переотправится сама — следующая попытка пойдёт через прокси. Выключено по умолчанию: повтор возможной уже оплаченной генерации — на вашей совести.</small>
             </section>

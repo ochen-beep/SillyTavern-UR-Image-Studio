@@ -187,7 +187,7 @@
        видимую высоту с учётом URL-бара. */
     max-height: 80vh; max-height: 80dvh;
     overflow: auto;
-    color: var(--SmartThemeBodyColor, var(--uris-text-strong));
+    color: var(--uris-text-strong); /* фон диалога зафиксирован тёмным (surface-card) — токен темы светлых тем даёт <4.5:1 */
 }
 .uris-picker-dialog h4 { margin-top: 0; font-size: var(--uris-icon); }
 /* Picker использует тот же компактный row чипов, что и вкладка. */

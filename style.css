@@ -139,7 +139,11 @@
        чата. Фиксируем непрозрачный --uris-bg, как у шапки/вкладок/карточек. */
     box-sizing: border-box;
     background: var(--uris-bg);
-    color: var(--SmartThemeBodyColor, var(--uris-text-strong));
+    /* Текст — наш постоянный токен, не --SmartThemeBodyColor: фон окна
+       зафиксирован тёмным (см. выше), а BodyColor светлых тем рассчитан на
+       светлый фон (MEMO давал 4.0:1 — ниже WCAG AA). На тёмных темах разницы
+       нет: там BodyColor ≈ --uris-text-strong. */
+    color: var(--uris-text-strong);
     border: 1px solid var(--SmartThemeBorderColor, var(--uris-border-soft));
     border-radius: var(--uris-radius-window); z-index: var(--uris-z-window);
     display: flex; flex-direction: column;
@@ -254,6 +258,11 @@
 .uris-row { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; flex-wrap: wrap; }
 .uris-row label { min-width: var(--uris-label-w, 90px); font-size: var(--uris-font-sm); color: var(--uris-text-mut); opacity: var(--uris-o-85); }
 .uris-row .text_pole { flex: 1; min-width: 0; }
+/* Инпуты внутри окна сидят на наших фиксированно-тёмных поверхностях — их
+   текст пинуется к токену URIS: ST-класс .text_pole жёстко берёт
+   --SmartThemeBodyColor, а светлые темы настраивают его под светлый фон
+   (MEMO давал 4.0:1 на нашем тёмном фоне — ниже WCAG AA). */
+.uris-window .text_pole { color: var(--uris-text-strong); }
 .uris-field { margin-bottom: 8px; }
 .uris-field label { display: block; font-size: var(--uris-font-sm); opacity: var(--uris-o-85); margin-bottom: 2px; }
 .uris-field .text_pole { width: 100%; box-sizing: border-box; }
