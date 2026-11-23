@@ -669,9 +669,13 @@ function listActive() {
 
 /**
  * Sanitized connection list: ids/labels/model availability only — never
- * endpoints or keys.
+ * endpoints or keys. Gated like every other bridge surface: an OFF bridge
+ * must not even reveal which connections exist.
  */
 async function listConnections() {
+    if (!isGenerationAllowed()) {
+        throw bridgeError(isBridgeActive() ? 'EXT_DISABLED' : 'NOT_READY', 'URIS bridge is not accepting requests (extension disabled or not initialized)');
+    }
     const connections = await listImageConnections();
     return connections.map(conn => ({
         id: conn.id,
@@ -681,8 +685,21 @@ async function listConnections() {
     }));
 }
 
-/** Overall bridge state, including the active chat's default connection. */
+/**
+ * Overall bridge state, including the active chat's default connection.
+ * getStatus is the state-check surface — it must answer even on an OFF bridge,
+ * but the connection details stay hidden behind the gate.
+ */
 async function getStatus() {
+    if (!isGenerationAllowed()) {
+        return {
+            enabled: state.settings?.enabled === true,
+            ready: _ready,
+            accepting: false,
+            connection: null,
+            active: [],
+        };
+    }
     let connection = null;
     try {
         const snapshot = await resolveChatConfigSnapshot();
@@ -734,6 +751,9 @@ function off(type, cb) {
 
 /** Sanitized template list for consumers ({id, name, type}) — no prompt bodies. */
 async function listBridgeTemplates() {
+    if (!isGenerationAllowed()) {
+        throw bridgeError(isBridgeActive() ? 'EXT_DISABLED' : 'NOT_READY', 'URIS bridge is not accepting requests (extension disabled or not initialized)');
+    }
     const templates = await listTemplates();
     return templates.map(t => ({
         id: t.id,
@@ -744,6 +764,9 @@ async function listBridgeTemplates() {
 
 /** Sanitized reference pool list ({id, name, folders, bindingMode}) — no payloads. */
 async function listBridgeRefs() {
+    if (!isGenerationAllowed()) {
+        throw bridgeError(isBridgeActive() ? 'EXT_DISABLED' : 'NOT_READY', 'URIS bridge is not accepting requests (extension disabled or not initialized)');
+    }
     const refs = await listRefs();
     return refs.map(ref => ({
         id: ref.id,

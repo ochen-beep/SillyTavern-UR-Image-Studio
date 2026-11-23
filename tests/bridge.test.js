@@ -147,6 +147,50 @@ test('bridge: activation publishes global and deactivate removes it', () => {
     assert.equal(getBridge(), null);
 });
 
+test('bridge: an OFF bridge hides connection/template/ref metadata (EXT_DISABLED)', async () => {
+    const { state } = await import('../src/core.js');
+    const { mockFetch, installStGlobals } = await import('./_helpers.js');
+    const savedSettings = state.settings;
+    const savedST = globalThis.SillyTavern;
+    const savedWindow = globalThis.window;
+    const savedCustomEvent = globalThis.CustomEvent;
+    installStGlobals();
+    globalThis.CustomEvent = class CustomEvent extends Event {
+        constructor(type, init) { super(type, init); this.detail = init?.detail; }
+    };
+    const restoreFetch = mockFetch(() => ({ ok: true, status: 200, json: async () => ({}), text: async () => '' }));
+    const bridge = activateBridge();
+    try {
+        markBridgeReady();
+        // Bridge explicitly off — the read surface must not leak metadata.
+        state.settings = { enabled: true, bridgeEnabled: false };
+        for (const method of ['listConnections', 'listTemplates', 'listRefs']) {
+            await assert.rejects(
+                () => bridge[method](),
+                err => err.code === 'EXT_DISABLED',
+                `${method} is gated when the bridge is off`,
+            );
+        }
+        const status = await bridge.getStatus();
+        assert.equal(status.accepting, false, 'status stays answerable');
+        assert.equal(status.connection, null, 'status hides the active connection while gated');
+
+        // Turning the bridge on re-opens the read surface (degenerate empty lists
+        // are fine here — the point is the gate, not the data).
+        state.settings = { enabled: true, bridgeEnabled: true };
+        await bridge.listConnections();
+        await bridge.listTemplates();
+        await bridge.listRefs();
+    } finally {
+        state.settings = savedSettings;
+        restoreFetch();
+        globalThis.SillyTavern = savedST;
+        globalThis.window = savedWindow;
+        globalThis.CustomEvent = savedCustomEvent;
+        deactivateBridge();
+    }
+});
+
 test('bridge: buildPrompt surface rejects with structured codes (no ST needed)', async () => {
     const { state } = await import('../src/core.js');
     const savedSettings = state.settings;
