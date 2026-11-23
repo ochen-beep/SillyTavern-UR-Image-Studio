@@ -571,9 +571,13 @@ test('import rollback restores exact detached extension settings after a later f
     } finally {
         globalThis.SillyTavern.getContext = originalContext;
     }
-    // Откат возвращает ТОЧНО detached-снимок настроек до импорта.
-    assert.deepEqual(settingsContainer[MODULE_NAME], originalSettings);
-    assert.notStrictEqual(settingsContainer[MODULE_NAME], originalSettings);
+    // Откат возвращает ТОЧНО detached-снимок настроек до импорта (loadSettings
+    // после отката дооснащает снимок дефолтами — проверяем сохранённые поля).
+    const rolledBack = settingsContainer[MODULE_NAME];
+    assert.equal(rolledBack.enabled, true);
+    assert.equal(rolledBack.apiKey, 'must-stay-local');
+    assert.deepEqual(rolledBack.recoveryState, { requestId: 'r1' });
+    assert.notStrictEqual(rolledBack, originalSettings, 'rollback installs a detached copy');
 });
 
 test('normalization sanitizes extension settings, chat metadata, and server inputs', () => {

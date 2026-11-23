@@ -16,7 +16,7 @@ import {
     LF_API_KEY, LF_REFS_POOL, LF_REFS_FOLDERS,
     LF_GENERATION_DRAFT_PREFIX, META_KEY, IMAGE_CONNECTION_SETTINGS_KEY,
     IMAGE_CONNECTION_KEY_PREFIX,
-    log, warn, error, getCtx, showConfirmModal,
+    log, warn, error, getCtx, showConfirmModal, loadSettings,
 } from './core.js';
 import { ALLOWED_CONTRACTS, isSecretKey, normalizeRouteContract } from './image-connection-schema.js';
 import { invalidateTemplateCache, replaceTemplateStoreRecords, getTemplateRecordsForExport } from './prompt-templates.js';
@@ -699,6 +699,10 @@ export async function importUrisData(data, options = {}) {
             durationMs: Date.now() - startedAt,
             details: { mode, importedRecords, importedChatBindings },
         });
+        // The import replaced extensionSettings[MODULE_NAME] wholesale; the
+        // module-level state.settings still points at the pre-import object,
+        // so UI edits (and saveSettings) would target the orphan. Re-bind.
+        try { loadSettings(); } catch (e) { warn('importUrisData: settings reload failed', e?.message); }
         return {
             importedRecords,
             importedChatBindings,
@@ -707,6 +711,8 @@ export async function importUrisData(data, options = {}) {
     } catch (e) {
         error('importUrisData: write error, performing rollback:', e.message);
         const rollbackErrors = await restoreSafeSnapshot(snapshot);
+        // The rollback also replaced the settings object; re-bind for the same reason.
+        try { loadSettings(); } catch (e) { warn('importUrisData: settings reload after rollback failed', e?.message); }
         recordDiagnosticEvent({
             event: 'import-run', stage: 'data', level: 'error',
             outcome: rollbackErrors.length > 0 ? 'rollback-failed' : 'rolled-back',

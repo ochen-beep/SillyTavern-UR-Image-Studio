@@ -194,4 +194,51 @@ test('import/export round-trips a current chat config and refs', async () => {
 	    assert.deepEqual(cfgAfter.refs.referenceIds, ['rt-ref']);
 	});
 
+// Import re-binds state.settings: after importUrisData replaced the settings
+// object wholesale, a UI edit must land in the persisted context, not in the
+// orphaned pre-import object.
+test('import re-binds state.settings so post-import UI edits persist', async () => {
+    const savedSettings = {};
+    const writes = [];
+    globalThis.SillyTavern = {
+        libs: { localforage: lfMock },
+        getContext: () => ({
+            get extensionSettings() { return { ur_image_studio: savedSettings }; },
+            saveSettingsDebounced: () => writes.push(JSON.stringify(savedSettings)),
+            saveMetadata: () => {},
+            getRequestHeaders: () => ({}),
+            chatId: '',
+            chatMetadata: {},
+        }),
+    };
+    const { state, loadSettings, saveSettings } = await import('../src/core.js');
+    const { importUrisData } = await import('../src/data-port.js');
 
+    loadSettings();
+    assert.ok(state.settings === savedSettings, 'precondition: settings bound to context');
+
+    const exported = await exportUrisData();
+    // Exactly what data-port does on import: replace the settings object.
+    globalThis.SillyTavern = {
+        libs: { localforage: lfMock },
+        getContext: () => ({
+            get extensionSettings() { return { ur_image_studio: savedSettings }; },
+            set extensionSettings(_v) { /* ignored: import writes into the key */ },
+            saveSettingsDebounced: () => writes.push(JSON.stringify(savedSettings)),
+            saveMetadata: () => {},
+            getRequestHeaders: () => ({}),
+            chatId: '',
+            chatMetadata: {},
+        }),
+    };
+    // Force the replacement shape the import performs on a plain object ctx.
+    const ctx = globalThis.SillyTavern.getContext();
+    ctx.extensionSettings.ur_image_studio = { ...savedSettings, uiScale: 1.25 };
+
+    await importUrisData(exported, { mode: 'merge' });
+
+    assert.ok(state.settings === savedSettings, 'state.settings re-bound to the live context object');
+    state.settings.uiScale = 1.75;
+    saveSettings();
+    assert.equal(JSON.parse(writes.at(-1)).uiScale, 1.75, 'the post-import edit reached persisted settings');
+});
