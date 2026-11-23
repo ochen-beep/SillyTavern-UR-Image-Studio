@@ -34,3 +34,6 @@ Desktop.ini
 # cloud-sync conflict leftovers (Nextcloud/Dropbox style)
 *.sync-conflict-*
 .superpowers/
+
+# local-only changelog (purged from history 2026-11-23)
+CHANGELOG.md
