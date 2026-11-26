@@ -20,7 +20,8 @@ import { validateNaisteraToken } from '../providers/image-naistera.js';
 import { COMFYUI_DEFAULT_WORKFLOW_TXT2IMG, COMFYUI_DEFAULT_WORKFLOW_IMG2IMG, summarizeWorkflow, readWorkflowFile } from '../providers/image-comfyui.js';
 import { getVisibleModelChoices, partitionLikelyImageModels } from '../dispatch-plan.js';
 import { reportFailure, URIS_SCOPES } from '../error-pool.js';
-import { showConfirmModal, log, escapeHtml } from '../core.js';
+import { showConfirmModal, log, escapeHtml, state } from '../core.js';
+import { patchChatConfig } from '../chat-binding.js';
 import { forgetAccordion, getAccordionOpen, setAccordionOpen } from './accordion-state.js';
 
 const MANUAL_MODEL = '__manual__';
@@ -599,6 +600,12 @@ export function bindServerConnectionForm(form, draft, dependencies = {}) {
             if (draft.id) {
                 await remove(draft.id);
                 if (draft.id) forgetAccordion(accordionId(draft.id));
+                // Drop the deleted connection from the chat binding, or the chat
+                // would keep pointing at it (same sweep as template deletion).
+                if (state.activeImageProfileId === draft.id) {
+                    await patchChatConfig({ imageProfileId: null });
+                    state.activeImageProfileId = null;
+                }
             }
         } catch (error) {
             notifyError(error);
