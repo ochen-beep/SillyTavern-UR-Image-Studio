@@ -335,13 +335,17 @@ export async function optimizeReferenceImage(input, options = {}) {
 // бинарного размера, поэтому один жирный PNG выталкивает тело за лимит, хотя
 // тот же рисунок JPEG'ом помещается с запасом.
 //
-// Подгонка — только WIRE-TIME: каноничный референс в сторе остаётся PNG с
-// альфой, и провайдеры без выученного лимита получают ровно то, что получали
-// раньше. ponytail: флаттен в JPEG — единственный ярус; даунскейл ниже maxEdge
-// добавляем, только если какой-то провайдер отвергнет полностью сплощённое тело.
+// Fitting is WIRE-TIME only: the canonical reference in the store keeps its
+// pixels and alpha. The wire tier is JPEG at the geometry v3 stored, so a
+// gateway that accepted v3 references keeps receiving the same size class.
+// ponytail: one wire tier and it drops alpha; add a PNG tier if that loss
+// shows on budget-limited connections.
 
 /** Slack JSON-конверта вокруг data URL (model/prompt/size/n/скобки). */
 const WIRE_FIT_OVERHEAD_BYTES = 4096;
+
+export const WIRE_MAX_EDGE = 1024;
+export const WIRE_JPEG_QUALITY = 0.85;
 
 /**
  * Оценка размера JSON-тела диспетча с этими референсами. data URL — это и есть
@@ -359,7 +363,7 @@ export function wireBodyBytes(references, prompt = '') {
  * сам смысл операции (платим прозрачностью за размер тела). Возвращает НОВЫЙ
  * объект в форме parseDataUrl; вход нетронут.
  */
-export async function flattenReferenceToJpeg(reference, { maxEdge = MAX_EDGE, quality = JPEG_QUALITY } = {}) {
+export async function flattenReferenceToJpeg(reference, { maxEdge = WIRE_MAX_EDGE, quality = WIRE_JPEG_QUALITY } = {}) {
     const source = await inputToBlob(reference.dataUrl);
     const decoded = await decodeBrowserBlob(source);
     try {
@@ -370,6 +374,7 @@ export async function flattenReferenceToJpeg(reference, { maxEdge = MAX_EDGE, qu
         const context = canvas.getContext('2d');
         context.fillStyle = '#ffffff';
         context.fillRect(0, 0, width, height);
+        context.imageSmoothingQuality = 'high';
         context.drawImage(decoded.image || decoded, 0, 0, width, height);
         const blob = await canvasBlob(canvas, 'image/jpeg', quality);
         const dataUrl = await blobToDataUrl(blob);
@@ -380,24 +385,26 @@ export async function flattenReferenceToJpeg(reference, { maxEdge = MAX_EDGE, qu
 }
 
 /**
- * Подогнать набор референсов под бюджет тела соединения, сплощая сначала
- * самые тяжёлые PNG. Возвращает НОВЫЙ массив или null, когда набор и так
- * влезает (частый случай: лимит не выучен или референсы мелкие). Альфа
- * выживает на каждом референсе, которому флаттен не понадобился.
- * `options.flatten` — тестовый шов, как в ingestReferenceImage.
+ * Fit a reference set under the connection's body budget by moving the
+ * heaviest references to the wire tier first. Returns a NEW array or null
+ * when the set already fits. Alpha survives on every reference that did not
+ * need the tier.
+ * `options.flatten` is the test seam, as in ingestReferenceImage.
  */
-export async function fitReferencesToWireBudget(references, budgetBytes, prompt = '', { flatten = flattenReferenceToJpeg, maxEdge = MAX_EDGE } = {}) {
+export async function fitReferencesToWireBudget(references, budgetBytes, prompt = '', { flatten = flattenReferenceToJpeg, maxEdge = WIRE_MAX_EDGE } = {}) {
     if (!Array.isArray(references) || !references.length) return null;
     if (!Number.isSafeInteger(budgetBytes) || budgetBytes <= 0) return null;
     if (wireBodyBytes(references, prompt) <= budgetBytes) return null;
     const fitted = [...references];
-    const flattenOrder = fitted
+    const order = fitted
         .map((reference, index) => ({ reference, index }))
-        .filter(({ reference }) => reference?.mimeType === 'image/png')
         .sort((a, b) => b.reference.dataUrl.length - a.reference.dataUrl.length);
-    for (const { index } of flattenOrder) {
+    for (const { index } of order) {
         if (wireBodyBytes(fitted, prompt) <= budgetBytes) break;
-        fitted[index] = await flatten(fitted[index], { maxEdge });
+        const tiered = await flatten(fitted[index], { maxEdge });
+        // A reference already at the wire tier cannot shrink: keep its bytes
+        // instead of paying another lossy generation for nothing.
+        if (tiered.dataUrl.length < fitted[index].dataUrl.length * 0.9) fitted[index] = tiered;
     }
     return fitted;
 }

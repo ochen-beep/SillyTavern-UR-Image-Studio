@@ -48,6 +48,7 @@ import {
     MAX_EDGE,
     MAX_INPUT_BYTES,
     OPTIMIZATION_VERSION,
+    WIRE_MAX_EDGE,
     uploadReferenceImage,
     imageToDataUrl,
     loadReferenceImage,
@@ -566,12 +567,24 @@ test('fit flattens the fattest PNG first and keeps the thin PNG transparent', as
     assert.equal(fat.mimeType, 'image/png');
 });
 
-test('fit never flattens JPEG references and flattens all when nothing else fits', async () => {
-    const a = jpegRef(500);
-    const b = jpegRef(490);
-    const fitted = await fitReferencesToWireBudget([a, b], 500 * 1024, '', { flatten: fakeFlatten });
-    // JPEG сплощать нечего: лучшее усилие — вернуть копии как есть, без замен.
-    assert.deepEqual(fitted, [a, b]);
+test('fit moves JPEG references to the wire tier too, heaviest first', async () => {
+    const calls = [];
+    const flatten = async (reference, { maxEdge }) => {
+        calls.push([reference.description, maxEdge]);
+        return fakeFlatten(reference);
+    };
+    const a = { ...jpegRef(500), description: 'a' };
+    const b = { ...jpegRef(490), description: 'b' };
+    const fitted = await fitReferencesToWireBudget([a, b], 500 * 1024, '', { flatten });
+    assert.deepEqual(calls, [['a', WIRE_MAX_EDGE], ['b', WIRE_MAX_EDGE]]);
+    assert.ok(wireBodyBytes(fitted, '') <= 500 * 1024);
+});
+
+test('fit keeps a reference the tier cannot meaningfully shrink', async () => {
+    const stored = jpegRef(600);
+    const barelySmaller = async reference => ({ ...reference, dataUrl: reference.dataUrl.slice(0, -10) });
+    const fitted = await fitReferencesToWireBudget([stored], 100 * 1024, '', { flatten: barelySmaller });
+    assert.equal(fitted[0], stored, 'no second lossy generation for a few bytes');
 });
 
 test('fit stops as soon as the budget is met, not after flattening everything', async () => {

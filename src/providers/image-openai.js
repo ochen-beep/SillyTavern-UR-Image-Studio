@@ -1,7 +1,6 @@
 // @ts-check
-import { trace, warn } from '../core.js';
-import { summarizeReference, fitReferencesToWireBudget, flattenReferenceToJpeg, wireBodyBytes } from '../references.js';
-import { wireBodyBudget, noteWireBodyLimit } from '../connection-evidence.js';
+import { trace } from '../core.js';
+import { summarizeReference } from '../references.js';
 import { imageResultFromValue, providerError, readJsonResponse, authProfileFor, referencesFor, requireInvocation, assertEncodedReferenceCount, diagnosticRequestOptions, ASPECT_SIZES } from './image-base.js';
 import { resolveEndpoint } from '../endpoint-utils.js';
 import { getProviderDescriptor } from '../provider-descriptors.js';
@@ -534,37 +533,9 @@ export async function generateOpenAIImage(input) {
   });
   const headers = { Authorization: `Bearer ${apiKey}` };
   if (references.length) {
-    // Wire-copy fitting under the learned body limit (HTTP 413): canonical
-    // references in the store stay untouched, only the copy for this dispatch
-    // gets flattened. Connections without a learned limit work as before.
-    let wireReferences = references;
-    const budget = await wireBodyBudget(diagnostic?.connId);
-    if (budget) {
-      const fitted = await fitReferencesToWireBudget(references, budget, request?.prompt);
-      if (fitted) {
-        const flattened = fitted.filter((reference, index) => reference !== references[index]).length;
-        warn(`wire-body-limit: соединение ${diagnostic.connId}: тело ужато под бюджет ${budget} Б (${flattened} из ${references.length} референсов сплощено в JPEG, стор не тронут)`);
-        wireReferences = fitted;
-      }
-    }
-    try {
-      // The edit dialect chain (multipart → JSON → img2img) already returns
-      // the parsed payload with warnings.
-      return await dispatchEditWithDialectChain({ endpoint, route, request, references: wireReferences, transport, headers, signal, connection, diagnostic });
-    } catch (error) {
-      // 413 is a gateway rejection BEFORE the app (nginx client_max_body_size
-      // and kin): nothing was generated or billed, so exactly one retry with
-      // fully flattened references is safe. The learned budget then keeps
-      // every later dispatch of this connection under the limit from the start.
-      if (error?.httpStatus !== 413) throw error;
-      const flattenedAll = await Promise.all(wireReferences.map(reference =>
-        reference.mimeType === 'image/png' ? flattenReferenceToJpeg(reference) : Promise.resolve(reference)));
-      if (flattenedAll.every((reference, index) => reference === wireReferences[index])) throw error;
-      const failedBytes = wireBodyBytes(wireReferences, request?.prompt);
-      warn(`wire-body-limit: HTTP 413 при теле ~${failedBytes} Б — бюджет выучен, референсы сплощены, отправка повторена один раз`);
-      if (diagnostic?.connId) noteWireBodyLimit(diagnostic.connId, failedBytes).catch(() => {});
-      return await dispatchEditWithDialectChain({ endpoint, route, request, references: flattenedAll, transport, headers, signal, connection, diagnostic });
-    }
+    // The edit dialect chain (multipart → JSON → img2img) already returns
+    // the parsed payload with warnings.
+    return await dispatchEditWithDialectChain({ endpoint, route, request, references, transport, headers, signal, connection, diagnostic });
   }
   const geometry = wireGeometry(route, request);
   const payload = generationBody(route, request, geometry);
