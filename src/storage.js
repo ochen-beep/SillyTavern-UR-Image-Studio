@@ -10,6 +10,7 @@ import { addCard, countCardsByImagePath, listCards, mergeFolderWithCards, remove
 import { listRefs } from './refs-library.js';
 import { materializeImageResult, uploadGeneratedImage, listNativeImages, getCharacterImageFolder } from './native-image-storage.js';
 import { canonicalizeNativeImagePath } from './native-image-path.js';
+import { deleteStoredServerFile } from './user-files-storage.js';
 
 function isNativeGalleryPath(value) {
     return canonicalizeNativeImagePath(value) !== null;
@@ -96,23 +97,6 @@ async function isReferencedByPool(imagePath) {
     }
 }
 
-async function deleteNativeImageFile(imagePath) {
-    const ctx = getCtx();
-    try {
-        const response = await fetch('/api/images/delete', {
-            method: 'POST',
-            headers: { ...(ctx.getRequestHeaders?.() ?? {}), 'Content-Type': 'application/json' },
-            body: JSON.stringify({ path: imagePath }),
-        });
-        if (!response.ok) {
-            throw new Error(`HTTP ${response.status}`);
-        }
-        return true;
-    } catch (error) {
-        log('Native image file delete failed:', error.message);
-        return false;
-    }
-}
 
 /**
  * Delete a gallery card. With deleteFile=false (default) the card is hidden
@@ -136,13 +120,13 @@ export async function deleteGalleryCard(chatId, id, { deleteFile = false } = {})
             return true;
         }
         await removeCard(id);
-        const deleted = await deleteNativeImageFile(card.imagePath);
+        const deleted = await deleteStoredServerFile(card.imagePath);
         if (!deleted) {
             log('Gallery card removed but native file deletion was not confirmed', id);
         }
         // The thumbnail lives in its own folder and is owned by this card only;
         // best-effort — a stale thumbnail costs a little disk, nothing else.
-        if (card.thumbPath) await deleteNativeImageFile(card.thumbPath);
+        if (card.thumbPath) await deleteStoredServerFile(card.thumbPath);
         recordDiagnosticEvent({
             event: 'gallery-card-remove', stage: 'gallery', chatHash: hashDiagnosticId(chatId),
             outcome: 'deleted', details: { deleteFile: true, fileDeleted: deleted },
@@ -173,7 +157,7 @@ export async function clearGallery(chatId, { deleteFiles = false } = {}) {    co
         for (const card of mine) {
             const shared = countCardsByImagePath(card.imagePath) > 1;
             const referenced = await isReferencedByPool(card.imagePath);
-            if (!shared && !referenced) await deleteNativeImageFile(card.imagePath);
+            if (!shared && !referenced) await deleteStoredServerFile(card.imagePath);
         }
         await Promise.all(mine.map(card => removeCard(card.id)));
     } else {
