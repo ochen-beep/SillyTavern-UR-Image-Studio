@@ -17,7 +17,7 @@
  * телефоне не обязан включать режим «Папки» на десктопе.
  */
 
-import { getCtx, saveSettings, sanitizeId, uid, log } from './core.js';
+import { saveSettings, sanitizeId, uid, log, urisSettings as studioSettings } from './core.js';
 import { createFileStore } from './file-store.js';
 import { FOLDER_COLOR_PALETTE } from './refs-library.js';
 import { detachFolderFromCards } from './gallery-index.js';
@@ -128,13 +128,6 @@ export function normalizeGalleryViewPrefs(data = {}) {
     };
 }
 
-function studioSettings() {
-    const ctx = getCtx();
-    if (!ctx.extensionSettings) ctx.extensionSettings = {};
-    const root = ctx.extensionSettings;
-    if (!root.ur_image_studio || typeof root.ur_image_studio !== 'object') root.ur_image_studio = {};
-    return root.ur_image_studio;
-}
 
 export function getGalleryViewPrefs() {
     const raw = studioSettings()[GALLERY_VIEW_PREFS_KEY];

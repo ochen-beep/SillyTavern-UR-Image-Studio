@@ -240,6 +240,22 @@ function resolveEntitiesFromText({ text, candidates, corrections }) {
  * @param {BuildSceneContextInput} input
  * @returns {Promise<SceneContextSnapshot>}
  */
+
+/** Stage 2 wire entries: image refs carry the path, description refs carry the
+ * text plus how the alias matched (for the UI chips). */
+function buildStage2RefEntries(orderedEntities, matchedReferences) {
+    return orderedEntities
+        .filter(e => e.bindingMode === 'description' ? (e.description && String(e.description).trim()) : (e.imagePath && String(e.imagePath).trim()))
+        .map((e, index) => ({
+            id: e.id,
+            name: e.name,
+            ...(e.bindingMode !== 'description' ? { imagePath: String(e.imagePath) } : {}),
+            ...(e.bindingMode === 'description' ? { description: String(e.description || '') } : {}),
+            ...(e.bindingMode === 'description' ? { bindingMode: 'description' } : {}),
+            ...(e.bindingMode === 'description' ? { matchedLabel: matchedReferences.find(ref => ref.id === e.id)?.matchedPhrases?.[0] || e.name || `reference ${index + 1}` } : {}),
+        }));
+}
+
 export async function buildSceneContextSnapshot(input) {
     const {
         chatId,
@@ -260,16 +276,7 @@ export async function buildSceneContextSnapshot(input) {
         .filter(e => e.description && String(e.description).trim())
         .map(e => ({ id: e.id, name: e.name, description: String(e.description) }));
 
-    const stage2Refs = orderedEntities
-        .filter(e => e.bindingMode === 'description' ? (e.description && String(e.description).trim()) : (e.imagePath && String(e.imagePath).trim()))
-        .map((e, index) => ({
-            id: e.id,
-            name: e.name,
-            ...(e.bindingMode !== 'description' ? { imagePath: String(e.imagePath) } : {}),
-            ...(e.bindingMode === 'description' ? { description: String(e.description || '') } : {}),
-            ...(e.bindingMode === 'description' ? { bindingMode: 'description' } : {}),
-            ...(e.bindingMode === 'description' ? { matchedLabel: matchedReferences.find(ref => ref.id === e.id)?.matchedPhrases?.[0] || e.name || `reference ${index + 1}` } : {}),
-        }));
+    const stage2Refs = buildStage2RefEntries(orderedEntities, matchedReferences);
 
     /** @type {SceneContextSnapshot} */
     const snapshot = {
@@ -304,16 +311,7 @@ export async function resolvePromptReferenceContext({ prompt, candidates, correc
         corrections,
     });
 
-    const stage2Refs = orderedEntities
-        .filter(e => e.bindingMode === 'description' ? (e.description && String(e.description).trim()) : (e.imagePath && String(e.imagePath).trim()))
-        .map((e, index) => ({
-            id: e.id,
-            name: e.name,
-            ...(e.bindingMode !== 'description' ? { imagePath: String(e.imagePath) } : {}),
-            ...(e.bindingMode === 'description' ? { description: String(e.description || '') } : {}),
-            ...(e.bindingMode === 'description' ? { bindingMode: 'description' } : {}),
-            ...(e.bindingMode === 'description' ? { matchedLabel: matchedReferences.find(ref => ref.id === e.id)?.matchedPhrases?.[0] || e.name || `reference ${index + 1}` } : {}),
-        }));
+    const stage2Refs = buildStage2RefEntries(orderedEntities, matchedReferences);
 
     return deepFreezeSnapshot({
         promptHash: hashMessage(prompt),

@@ -6,7 +6,7 @@
  * runFullPipelineForDraft orchestrates Stage 1 + Stage 2; it lives here
  * (entry point is Stage 1) and imports Stage 2 to avoid circular dependencies.
  */
-import { state, fnv1aHex, getCtx } from './core.js';
+import { state, fnv1aHex, getCtx, emitWindowEvent } from './core.js';
 import { randomToken } from './random.js';
 import { buildStage1ContextParts } from './stage1-context.js';
 import { recordDiagnosticEvent, hashDiagnosticId } from './diagnostic-events.js';
@@ -31,18 +31,6 @@ const autoFlights = new Map();
 
 // ── Scene-first Stage 1 API ──
 
-/**
- * Fire a Stage 1 lifecycle event for the UI (per-request Stop button toggle,
- * queue "skip current"). Guarded so the pipeline stays testable in node (no
- * window); in the browser the Generate tab / queue status listen for it.
- * @param {string} type
- * @param {object} detail
- */
-function emitStage1Event(type, detail) {
-    if (typeof window !== 'undefined' && typeof window.dispatchEvent === 'function') {
-        try { window.dispatchEvent(new CustomEvent(type, { detail })); } catch { /* ignore */ }
-    }
-}
 
 /**
  * Fingerprint of an AUTO run's identity inputs: scene text + effective
@@ -97,7 +85,7 @@ export async function runStage1ForDraft(input, onStatus = () => {}, signal, opts
     }
     const useSignal = ownController.signal;
     state.activeGenerations.set(stage1RequestId, ownController);
-    emitStage1Event('uris:stage1-start', {
+    emitWindowEvent('uris:stage1-start', {
         requestId: stage1RequestId, chatId, msgId,
         source: opts.isAuto ? 'auto' : (signal ? 'queue' : 'manual'),
     });
@@ -107,7 +95,7 @@ export async function runStage1ForDraft(input, onStatus = () => {}, signal, opts
     } finally {
         state.activeGenerations.delete(stage1RequestId);
         recordDiagnosticEvent({ event: 'stage1-end', stage: 'stage1', requestId: stage1RequestId, msgId });
-        emitStage1Event('uris:stage1-end', { requestId: stage1RequestId, chatId, msgId });
+        emitWindowEvent('uris:stage1-end', { requestId: stage1RequestId, chatId, msgId });
     }
 
     async function runStage1Inner() {

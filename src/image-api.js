@@ -13,7 +13,7 @@ import { addCard, updateCard } from './gallery-index.js';
 import { getTemplate } from './prompt-templates.js';
 import { providerError, assertApiKeyForContract } from './providers/image-base.js';
 import { summarizeReference } from './references.js';
-import { aspectDeviates } from './aspect-ratio.js';
+import { aspectDeviates, reducedRatio } from './aspect-ratio.js';
 import { resolutionShortfall } from './image-dimensions.js';
 import { getDiagnosticSessionId, hashDiagnosticId, recordDiagnosticEvent, flushDiagnosticEvents } from './diagnostic-events.js';
 import { savePendingBrowserRequest, updatePendingBrowserRequest, discardPendingBrowserRequest, dispatchErrorKnown } from './browser-image-recovery.js';
@@ -339,13 +339,7 @@ export async function generateImageRequest(imageConnId, request, onStatus, signa
         const outputMeta = materialized.output || {};
         const outWidth = Number.isFinite(outputMeta.width) ? outputMeta.width : null;
         const outHeight = Number.isFinite(outputMeta.height) ? outputMeta.height : null;
-        const outputAspect = outWidth && outHeight
-            ? (() => {
-                const gcd = (a, b) => b ? gcd(b, a % b) : a;
-                const divisor = gcd(outWidth, outHeight) || 1;
-                return `${outWidth / divisor}:${outHeight / divisor}`;
-            })()
-            : null;
+        const outputAspect = outWidth && outHeight ? reducedRatio(outWidth, outHeight) : null;
         // Post-hoc truth check: the wire may have carried the requested ratio
         // (param dialect) or not (warning upstream already fired), but either
         // way the gateway/model could return a different canvas. Surface the

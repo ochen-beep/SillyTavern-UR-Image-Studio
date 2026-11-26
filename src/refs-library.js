@@ -19,8 +19,9 @@
  */
 import {
     META_KEY,
-    uid, log, warn, getCtx, getImageConnectionSettings, IMAGE_CONNECTION_SETTINGS_KEY, saveSettings,
+    uid, log, warn, getCtx, saveSettings,
     DEFAULT_CHAT_CONFIG_ENVELOPE, deepClone, sanitizeId,
+    sharedConnectionSettings as imageSettings,
 } from './core.js';
 import { normalizeAliases } from './scene-context.js';
 import { canonicalizeNativeImagePath, canonicalizeStoredPath } from './native-image-path.js';
@@ -34,20 +35,6 @@ export const REFS_MANIFEST_NAME = 'uris_refs_manifest.json';
 export const REFS_SHARD_PREFIX = 'uris_refs_shard_';
 export const REFS_META_NAME = 'uris_refs_meta.json';
 export const REFS_STORE_VERSION = 1;
-
-/** Shared image-connections settings object, creating the nesting on demand. */
-function imageSettings() {
-    const ctx = getCtx();
-    if (!ctx.extensionSettings) ctx.extensionSettings = {};
-    if (!ctx.extensionSettings.ur_image_studio || typeof ctx.extensionSettings.ur_image_studio !== 'object') {
-        ctx.extensionSettings.ur_image_studio = {};
-    }
-    const settings = ctx.extensionSettings.ur_image_studio;
-    if (!settings[IMAGE_CONNECTION_SETTINGS_KEY] || typeof settings[IMAGE_CONNECTION_SETTINGS_KEY] !== 'object') {
-        settings[IMAGE_CONNECTION_SETTINGS_KEY] = getImageConnectionSettings({});
-    }
-    return settings[IMAGE_CONNECTION_SETTINGS_KEY];
-}
 
 // ── Pool + folders store (server file) ──
 

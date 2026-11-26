@@ -77,6 +77,16 @@ function fnv1a64(input, seed) {
   return hash;
 }
 
+/** Server-owned records precede browser ownership metadata and often only
+ * contain the plugin route projection. Preserve that durable compatibility. */
+export function isServerOwnedConnection(value) {
+  const input = value && typeof value === 'object' ? value : {};
+  return input.executionOwner === 'server'
+    || input.serverOwned === true
+    || input.legacyServer === true
+    || input.kind === 'server-image';
+}
+
 /** Browser-safe, synchronous stable route ID. This is an identifier, not a secret. */
 export function deriveStableRouteId(source, model, contract) {
   const normalizedSource = text(source);

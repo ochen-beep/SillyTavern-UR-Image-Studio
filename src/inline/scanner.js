@@ -3,7 +3,7 @@
  * Сканер: подписки на события ST, дедуп (_scanInFlight по msgId), planScan →
  * store/queue. DOM не трогает — рендер подписан на uris:inline-* события.
  */
-import { state, getCtx } from '../core.js';
+import { state, getCtx, emitWindowEvent } from '../core.js';
 import { hashMessage } from '../generation-drafts.js';
 import { recordDiagnosticEvent } from '../diagnostic-events.js';
 import { parseInline } from './grammar.js';
@@ -64,7 +64,7 @@ function recordSkip(marker) {
 }
 
 function notifyUpdate(msgId) {
-    try { window.dispatchEvent(new CustomEvent('uris:inline-update', { detail: { msgId: Number(msgId) } })); } catch { /* node */ }
+    emitWindowEvent('uris:inline-update', { detail: { msgId: Number(msgId) } });
 }
 
 export function scannerActive() { return _handlers != null; }

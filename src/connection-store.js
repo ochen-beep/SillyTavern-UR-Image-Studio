@@ -1,44 +1,20 @@
 // @ts-check
 /** Shared image connection metadata and browser-local API keys. */
 import {
-    IMAGE_CONNECTION_SETTINGS_KEY,
-    MODULE_NAME,
     getImageConnectionKeyNamespace,
-    getImageConnectionSettings,
     getCtx,
     saveSettings,
     uid,
+    sharedConnectionSettings as settings,
 } from './core.js';
-import { normalizeConnectionRecord, stripSecrets } from './image-connection-schema.js';
-
-function moduleSettings() {
-    const ctx = getCtx();
-    if (!ctx.extensionSettings) ctx.extensionSettings = {};
-    if (!ctx.extensionSettings[MODULE_NAME] || typeof ctx.extensionSettings[MODULE_NAME] !== 'object') {
-        ctx.extensionSettings[MODULE_NAME] = {};
-    }
-    return ctx.extensionSettings[MODULE_NAME];
-}
-
-function settings() {
-    const shared = moduleSettings();
-    if (!shared[IMAGE_CONNECTION_SETTINGS_KEY] || typeof shared[IMAGE_CONNECTION_SETTINGS_KEY] !== 'object') {
-        shared[IMAGE_CONNECTION_SETTINGS_KEY] = getImageConnectionSettings({});
-    }
-    return shared[IMAGE_CONNECTION_SETTINGS_KEY];
-}
+import { normalizeConnectionRecord, stripSecrets, isServerOwnedConnection } from './image-connection-schema.js';
 
 function normalize(value) {
     return normalizeConnectionRecord(stripSecrets(value));
 }
 
-function isBrowserOwnedConnection(value) {
-    const input = value && typeof value === 'object' ? value : {};
-    return input.executionOwner !== 'server'
-        && input.serverOwned !== true
-        && input.legacyServer !== true
-        && input.kind !== 'server-image';
-}
+/** Browser-owned is simply not-server-owned (see the schema predicate). */
+const isBrowserOwnedConnection = (value) => !isServerOwnedConnection(value);
 
 function storedConnections() {
     const values = settings().connections;

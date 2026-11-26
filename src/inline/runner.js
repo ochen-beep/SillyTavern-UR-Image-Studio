@@ -24,7 +24,7 @@
  * Stop таверны накрывает и инлайн; requestId `inl_<uuid>` — тот же неймспейс
  * наблюдаемости, что у мостовых `ext_*`.
  */
-import { state, getCtx, fnv1aHex } from '../core.js';
+import { state, getCtx, fnv1aHex, emitWindowEvent } from '../core.js';
 import { randomToken } from '../random.js';
 import { resolveChatConfigSnapshot, buildCandidates } from '../pipeline-config.js';
 import { resolvePromptReferenceContext } from '../scene-context.js';
@@ -117,10 +117,6 @@ function newInlineRequestId() {
     return `inl_${uuid}`;
 }
 
-function emitInline(type, detail) {
-    if (typeof window === 'undefined' || typeof window.dispatchEvent !== 'function') return;
-    try { window.dispatchEvent(new CustomEvent(type, { detail })); } catch { /* рендер не должен падать из-за события */ }
-}
 
 /**
  * Платная задача инлайна. Сериализация — автолейн (queueInlineJob);
@@ -176,7 +172,7 @@ export async function processJob({ msgId, idx, type, desc }, operation = null) {
     // всё равно попадёт в ленту, а задвоения не будет.
     noteQueued({ id: requestId, label: postLabel(msgId, 'Инлайн'), lane: 'auto' });
     noteRunning(requestId);
-    emitInline('uris:inline-start', { requestId, msgId });
+    emitWindowEvent('uris:inline-start', { requestId, msgId });
     const descHash = stableHash(`${type}|${desc}`);
     // Живой pending сразу: сохранённый requestId — единственный способ для
     // planScan отличить работающую генерацию от осиротевшей. Без него задача,
@@ -290,7 +286,7 @@ export async function processJob({ msgId, idx, type, desc }, operation = null) {
             details: { msgId, type, code: outcome === 'ready' ? null : errorCode, cardId } });
         // Закрыть строку журнала исходом (один писатель — продюсер).
         noteFinished(requestId, outcome === 'ready' ? 'success' : outcome, outcome === 'ready' ? '' : errorText);
-        emitInline('uris:inline-end', { requestId, msgId, idx, type, outcome, imagePath, error: outcome === 'ready' ? null : errorText });
+        emitWindowEvent('uris:inline-end', { requestId, msgId, idx, type, outcome, imagePath, error: outcome === 'ready' ? null : errorText });
     }
 }
 
@@ -304,7 +300,7 @@ export function queueInlineJob(job) {
     // переходит в «выполняется» только когда processJob реально стартует.
     // Пишет продюсер (один писатель; окно — только читатель).
     noteQueued({ id: operation.requestId, label: postLabel(job.msgId, 'Инлайн'), lane: 'auto' });
-    emitInline('uris:inline-queued', { requestId: operation.requestId, msgId: job.msgId });
+    emitWindowEvent('uris:inline-queued', { requestId: operation.requestId, msgId: job.msgId });
     return enqueueAutoLane(() => processJob(job, operation));
 }
 

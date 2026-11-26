@@ -6,7 +6,7 @@
  * runStage2 — positional compatibility adapter, used by ui/gallery-actions.js
  * for "regenerate". runStage2ForDraft is the primary scene-first entry point.
  */
-import { state, getCtx, trace, warn } from './core.js';
+import { state, getCtx, trace, warn, emitWindowEvent } from './core.js';
 import { randomToken } from './random.js';
 import { STUDIO_CHAT_ID } from './studio-scope.js';
 import { recordDiagnosticEvent, hashDiagnosticId } from './diagnostic-events.js';
@@ -29,19 +29,6 @@ import { recordReferenceEvidence } from './connection-evidence.js';
 import { playStageSound } from './notify.js';
 import { composeReferencePrompt } from './reference-binding.js';
 import { attachCard } from './inline/store.js';
-
-/**
- * Fire a Stage 2 lifecycle event for the UI (per-request Stop button toggle,
- * queue "skip current"). Guarded so the pipeline stays testable in node (no
- * window); in the browser the Generate tab / queue status listen for it.
- * @param {string} type
- * @param {object} detail
- */
-function emitStage2Event(type, detail) {
-    if (typeof window !== 'undefined' && typeof window.dispatchEvent === 'function') {
-        try { window.dispatchEvent(new CustomEvent(type, { detail })); } catch { /* ignore */ }
-    }
-}
 
 // ── Stage 2: immutable submission snapshot ──
 
@@ -183,7 +170,7 @@ export async function runStage2ForDraft(input, onStatus = () => {}, signal, opts
             noteQueued({ id: activeRequestId, label: postLabel(msgId), lane: laneFromSource(journalSource) });
             noteRunning(activeRequestId);
         }
-        emitStage2Event('uris:stage2-start', {
+        emitWindowEvent('uris:stage2-start', {
             requestId: activeRequestId, chatId, msgId,
             source: journalSource,
         });
@@ -454,7 +441,7 @@ export async function runStage2ForDraft(input, onStatus = () => {}, signal, opts
                     outcome: cancelled ? 'cancelled' : (failure ? 'error' : 'ready'),
                     durationMs: startedAt ? Date.now() - startedAt : null,
                 });
-                emitStage2Event('uris:stage2-end', {
+                emitWindowEvent('uris:stage2-end', {
                     requestId: activeRequestId, chatId, msgId,
                     outcome: cancelled ? 'cancelled' : (failure ? 'error' : 'success'),
                     error: failure && !cancelled ? (failure.message || '') : '',

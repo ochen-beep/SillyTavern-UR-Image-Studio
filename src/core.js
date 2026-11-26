@@ -70,6 +70,29 @@ export function getImageConnectionSettings(settings = {}) {
         selectedRouteId: typeof input.selectedRouteId === 'string' && input.selectedRouteId ? input.selectedRouteId : null,
     };
 }
+
+/**
+ * Ensure extensionSettings.ur_image_studio exists and return the module root.
+ * The shared image-connection store and device-local prefs (folder pins,
+ * gallery view filters) both live under it.
+ */
+export function urisSettings() {
+    const ctx = getCtx();
+    if (!ctx.extensionSettings) ctx.extensionSettings = {};
+    const root = ctx.extensionSettings;
+    if (!root.ur_image_studio || typeof root.ur_image_studio !== 'object') root.ur_image_studio = {};
+    return root.ur_image_studio;
+}
+
+/** The shared image-connections sub-object under urisSettings(), ensured. */
+export function sharedConnectionSettings() {
+    const settings = urisSettings();
+    if (!settings[IMAGE_CONNECTION_SETTINGS_KEY] || typeof settings[IMAGE_CONNECTION_SETTINGS_KEY] !== 'object') {
+        settings[IMAGE_CONNECTION_SETTINGS_KEY] = getImageConnectionSettings({});
+    }
+    return settings[IMAGE_CONNECTION_SETTINGS_KEY];
+}
+
 export function getImageConnectionKeyNamespace(connectionId) {
     const id = String(connectionId || '').trim();
     return `${IMAGE_CONNECTION_KEY_PREFIX}${id}`;
@@ -593,6 +616,17 @@ export function fnv1a32(value) {
  */
 export function fnv1aHex(value) {
     return fnv1a32(value).toString(16);
+}
+
+/**
+ * Dispatch a window CustomEvent when a window exists (node tests have none).
+ * Shared by the stage1/stage2/inline event emitters.
+ * @param {string} type
+ * @param {any} detail
+ */
+export function emitWindowEvent(type, detail) {
+    if (typeof window === 'undefined' || typeof window.dispatchEvent !== 'function') return;
+    try { window.dispatchEvent(new CustomEvent(type, { detail })); } catch { /* never crash on an event */ }
 }
 
 /**

@@ -1,6 +1,7 @@
 // @ts-check
 /** Shared browser-owned image connection facade. */
 import { normalizeReferenceCap } from './reference-limits.js';
+import { isServerOwnedConnection } from './image-connection-schema.js';
 import {
     createConnection as createStoredConnection,
     getConnection as getStoredConnection,
@@ -12,15 +13,7 @@ import {
 const REFERENCE_MODES = new Set(['auto', 'off', 'custom']);
 const REFERENCE_PROTOCOLS = new Set(['multipart-edits', 'multimodal-chat', 'inline-data', 'url-param']);
 
-export function isServerOwnedConnection(value) {
-    const input = value && typeof value === 'object' ? value : {};
-    // Existing server records precede browser ownership metadata and often only
-    // contain the plugin route projection. Preserve that durable compatibility.
-    return input.executionOwner === 'server'
-        || input.serverOwned === true
-        || input.legacyServer === true
-        || input.kind === 'server-image';
-}
+export { isServerOwnedConnection };
 
 export function normalizeReferenceOptions(value) {
     const input = value && typeof value === 'object' && !Array.isArray(value) ? value : {};
