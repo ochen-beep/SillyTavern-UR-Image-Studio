@@ -11,6 +11,8 @@ import { makeThumbnailForPath } from './native-image-storage.js';
 import { uploadNamedUserFile } from './user-files-storage.js';
 import { randomToken } from './random.js';
 import { MAX_REFERENCE_BYTES_PER_IMAGE, MAX_REFERENCE_BYTES_TOTAL } from './reference-limits.js';
+import { detectImageMime } from './http.js';
+import { jpegExifRotated } from './jpeg-exif.js';
 
 export async function imageToDataUrl(url, options = {}) {
     try {
@@ -133,12 +135,17 @@ export async function dataUrlToFile(dataUrl, filename) {
 // at a content validator ("Image edit file content does not match its declared
 // MIME type", HTTP 400) even though the browser encodes it correctly. The bump
 // also documents the contract change for anything that compares versions.
-export const OPTIMIZATION_VERSION = 'ref-v3-1024';
-export const MAX_EDGE = 1024;
+// v4: a source that already fits is stored untouched, and the edge cap is the
+// 2048x2048 square OpenAI documents for image input.
+export const OPTIMIZATION_VERSION = 'ref-v4-2048';
+export const MAX_EDGE = 2048;
 export const MAX_INPUT_BYTES = 25 * 1024 * 1024;
+// Above this a fitting source is re-encoded instead of passing through: the
+// cap only keeps pathological files out of storage and request bodies.
+export const MAX_PASSTHROUGH_BYTES = 8 * 1024 * 1024;
 export const WEBP_PHOTO_QUALITY = 0.82;
 export const WEBP_ALPHA_QUALITY = 0.88;
-export const JPEG_QUALITY = 0.85;
+export const JPEG_QUALITY = 0.95;
 
 // webp deliberately absent: an original webp file must not slip onto the wire
 // through the source pass-through (sourceCanWin) — the same relay validators
@@ -243,7 +250,7 @@ function hasAlpha(context, width, height) {
  * the platform decoder and must be manually checked on target browsers. Node
  * tests use the _test seam instead of emulating a browser DOM.
  *
- * Options: maxEdge caps the long edge (default MAX_EDGE=1024), quality /
+ * Options: maxEdge caps the long edge (default MAX_EDGE), quality /
  * qualityAlpha override the opaque/alpha encoder quality, version overrides
  * the reported optimizationVersion label (thumbnails use their own label so
  * reference re-optimization never matches on them).
@@ -271,18 +278,43 @@ export async function optimizeReferenceImage(input, options = {}) {
         const width = Math.max(1, Math.round(sourceWidth * scale));
         const height = Math.max(1, Math.round(sourceHeight * scale));
 
+        // A source that already fits is stored as is: re-encoding a lossless or
+        // high-quality file only spends quality. Only true PNG/JPEG bytes may
+        // pass (a relay content validator rejects bytes that do not match the
+        // declared MIME), and an EXIF-rotated JPEG still takes the canvas,
+        // which bakes the rotation into the pixels.
+        const pinned = Array.isArray(options.formats) && options.formats.length > 0;
+        let faithful = false;
+        if (!pinned && scale === 1 && CANONICAL_MIMES.has(sourceMime)) {
+            const bytes = await source.arrayBuffer();
+            faithful = detectImageMime(new Uint8Array(bytes)) === sourceMime
+                && (sourceMime !== 'image/jpeg' || !jpegExifRotated(bytes));
+        }
+        if (faithful && source.size <= MAX_PASSTHROUGH_BYTES) {
+            log(`[refs] optimize: source ${sourceMime} ${source.size}B scale=${scale.toFixed(3)} → ${sourceMime} ${source.size}B (passthrough)`);
+            return {
+                dataUrl: await (seam.blobToDataUrl || blobToDataUrl)(source),
+                blob: source,
+                mime: sourceMime,
+                width,
+                height,
+                sourceBytes: source.size,
+                optimizedBytes: source.size,
+                optimizationVersion: resolveVersion(options, maxEdge),
+            };
+        }
+
         canvas = (seam.createCanvas || nativeCanvas)(width, height);
         const context = canvas?.getContext?.('2d', { willReadFrequently: true });
         if (!context) throw imageError('could not create canvas context');
+        context.imageSmoothingQuality = 'high';
         context.drawImage(bitmap.image || bitmap, 0, 0, width, height);
         const alpha = hasAlpha(context, width, height);
         // Receiver-safe default (v3): jpeg for opaque, png for alpha — the same
         // formats ComfyUI/SillyTavern-adjacent tools send. options.formats pins
         // an explicit set for callers with different constraints (thumbnails
         // keep webp: local files, never uploaded to providers).
-        const formats = Array.isArray(options.formats) && options.formats.length
-            ? options.formats
-            : (alpha ? ['image/png'] : ['image/jpeg']);
+        const formats = pinned ? options.formats : (alpha ? ['image/png'] : ['image/jpeg']);
         const qualityForMime = (mime) => (mime === 'image/webp'
             ? (alpha ? webpAlphaQuality : webpPhotoQuality)
             : (mime === 'image/jpeg' ? jpegQuality : undefined));
@@ -301,7 +333,8 @@ export async function optimizeReferenceImage(input, options = {}) {
             } catch { /* Continue through the MIME fallback chain. */ }
         }
         const candidate = valid.sort((a, b) => a.size - b.size)[0] || null;
-        const sourceCanWin = scale === 1 && CANONICAL_MIMES.has(sourceMime) && candidate && source.size < candidate.size;
+        // A thumbnail source (pinned formats, local-only) still wins on size alone.
+        const sourceCanWin = (pinned ? scale === 1 && CANONICAL_MIMES.has(sourceMime) : faithful) && candidate && source.size < candidate.size;
         const selected = sourceCanWin ? source : candidate;
         if (!selected) throw imageError('no compatible image encoder is available');
         const mime = String(selected.type).toLowerCase();

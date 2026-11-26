@@ -47,6 +47,7 @@ import {
     __testOnly,
     MAX_EDGE,
     MAX_INPUT_BYTES,
+    MAX_PASSTHROUGH_BYTES,
     OPTIMIZATION_VERSION,
     WIRE_MAX_EDGE,
     uploadReferenceImage,
@@ -127,11 +128,13 @@ function createOptimizerSeam({
     alpha = false,
     encodings = {},
     sourceDecode = true,
+    sourceBytes = 'source-image',
+    sourceType = 'image/png',
 } = {}) {
     const calls = [];
     return {
         calls,
-        sourceBlob: new Blob(['source-image'], { type: 'image/png' }),
+        sourceBlob: new Blob([sourceBytes], { type: sourceType }),
         async decode(blob) {
             if (blob._decodable === false) throw new Error('candidate is not decodable');
             return { width: blob._width ?? width, height: blob._height ?? height, close() {} };
@@ -162,11 +165,15 @@ function createOptimizerSeam({
     };
 }
 
-test('optimizeReferenceImage returns canonical result without upscaling', async () => {
+// Real PNG signature: only bytes true to the declared MIME may pass through.
+const PNG_SIGNATURE = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+
+test('optimizeReferenceImage stores a fitting PNG source untouched, without upscaling', async () => {
     const seam = createOptimizerSeam({
         width: 320,
         height: 240,
-        encodings: { 'image/jpeg': { data: 'larger-than-source-jpeg' } },
+        sourceBytes: PNG_SIGNATURE,
+        encodings: { 'image/jpeg': { data: 'smaller-than-source-jpeg' } },
     });
     const result = await optimizeReferenceImage(seam.sourceBlob, { _test: seam });
     assert.deepEqual(Object.keys(result).sort(), ['blob', 'dataUrl', 'height', 'mime', 'optimizationVersion', 'optimizedBytes', 'sourceBytes', 'width']);
@@ -176,17 +183,72 @@ test('optimizeReferenceImage returns canonical result without upscaling', async 
     assert.equal(result.blob, seam.sourceBlob);
     assert.equal(result.optimizedBytes, seam.sourceBlob.size);
     assert.equal(result.optimizationVersion, OPTIMIZATION_VERSION);
-    assert.equal(MAX_EDGE, 1024);
+    assert.equal(MAX_EDGE, 2048);
+    // A smaller JPEG candidate no longer wins: quality is not spent to save bytes.
+    assert.deepEqual(seam.calls, [], 'nothing is encoded when the source already fits');
+});
+
+test('optimizeReferenceImage: a fitting JPEG passes through only when it is upright', async () => {
+    // SOI + APP1 "Exif" with a single IFD0 entry (Orientation) + EOI.
+    const jpegWithOrientation = orientation => new Uint8Array([
+        0xff, 0xd8, 0xff, 0xe1, 0x00, 0x22, 0x45, 0x78, 0x69, 0x66, 0x00, 0x00,
+        0x49, 0x49, 0x2a, 0x00, 0x08, 0x00, 0x00, 0x00,
+        0x01, 0x00, 0x12, 0x01, 0x03, 0x00, 0x01, 0x00, 0x00, 0x00, orientation, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0xff, 0xd9,
+    ]);
+    const upright = createOptimizerSeam({ width: 1000, height: 1000, sourceType: 'image/jpeg', sourceBytes: jpegWithOrientation(1) });
+    const kept = await optimizeReferenceImage(upright.sourceBlob, { _test: upright });
+    assert.equal(kept.blob, upright.sourceBlob);
+    assert.deepEqual(upright.calls, []);
+
+    // A rotated JPEG takes the canvas: it bakes the rotation into the pixels.
+    const rotated = createOptimizerSeam({
+        width: 1000,
+        height: 1000,
+        sourceType: 'image/jpeg',
+        sourceBytes: jpegWithOrientation(6),
+        encodings: { 'image/jpeg': { data: 're-encoded' } },
+    });
+    const baked = await optimizeReferenceImage(rotated.sourceBlob, { _test: rotated });
+    assert.equal(baked.mime, 'image/jpeg');
+    assert.notEqual(baked.blob, rotated.sourceBlob);
+});
+
+test('optimizeReferenceImage: bytes that do not match the declared MIME are re-encoded', async () => {
+    // Typed image/png, but the payload is not a PNG: a relay content validator
+    // rejects such a file with 400.
+    const seam = createOptimizerSeam({
+        width: 320,
+        height: 240,
+        encodings: { 'image/jpeg': { data: 'larger-than-the-source-jpeg' } },
+    });
+    const result = await optimizeReferenceImage(seam.sourceBlob, { _test: seam });
+    assert.equal(result.mime, 'image/jpeg');
+    assert.notEqual(result.blob, seam.sourceBlob);
+});
+
+test('optimizeReferenceImage: a fitting source above MAX_PASSTHROUGH_BYTES is re-encoded', async () => {
+    const bytes = new Uint8Array(MAX_PASSTHROUGH_BYTES + 1);
+    bytes.set(PNG_SIGNATURE);
+    const seam = createOptimizerSeam({
+        width: 320,
+        height: 240,
+        sourceBytes: bytes,
+        encodings: { 'image/jpeg': { data: 'small-jpeg' } },
+    });
+    const result = await optimizeReferenceImage(seam.sourceBlob, { _test: seam });
+    assert.equal(result.mime, 'image/jpeg');
+    assert.notEqual(result.blob, seam.sourceBlob);
 });
 
 test('optimizeReferenceImage enforces edge limit and rejects oversize or non-images', async () => {
     const seam = createOptimizerSeam({
-        width: 2048,
-        height: 1024,
+        width: 4096,
+        height: 2048,
         encodings: { 'image/jpeg': { data: 'jpeg' } },
     });
     const result = await optimizeReferenceImage(seam.sourceBlob, { _test: seam });
-    assert.deepEqual([result.width, result.height], [1024, 512]);
+    assert.deepEqual([result.width, result.height], [2048, 1024]);
     await assert.rejects(optimizeReferenceImage(new Blob(['not image'], { type: 'text/plain' }), { _test: seam }), /image input/);
     const tooLarge = new Blob([new Uint8Array(MAX_INPUT_BYTES + 1)], { type: 'image/png' });
     await assert.rejects(optimizeReferenceImage(tooLarge, { _test: seam }), /too large/);
@@ -194,6 +256,8 @@ test('optimizeReferenceImage enforces edge limit and rejects oversize or non-ima
 
 test('optimizeReferenceImage: opaque reference encodes JPEG only — webp is not a candidate', async () => {
     const seam = createOptimizerSeam({
+        width: 4096,
+        height: 2048,
         encodings: {
             'image/webp': { data: 'tiny-webp', type: 'image/webp' },
             'image/jpeg': { data: 'valid-jpeg', type: 'image/jpeg' },
@@ -204,11 +268,13 @@ test('optimizeReferenceImage: opaque reference encodes JPEG only — webp is not
     // webp не кодируется вовсе: релейные апстримы (adobe2banana, инцидент
     // 2026-09-08) отвергают его контент-валидатором с 400 "does not match
     // its declared MIME type", хотя браузер кодирует webp корректно.
-    assert.deepEqual(seam.calls, [['image/jpeg', 0.85]]);
+    assert.deepEqual(seam.calls, [['image/jpeg', 0.95]]);
 });
 
 test('optimizeReferenceImage: alpha reference encodes PNG only', async () => {
     const seam = createOptimizerSeam({
+        width: 4096,
+        height: 2048,
         alpha: true,
         encodings: {
             'image/webp': { data: 'tiny-webp', type: 'image/webp' },
@@ -241,17 +307,19 @@ test('optimizeReferenceImage: formats option pins webp (thumbnail contract)', as
     assert.deepEqual(seam.calls, [['image/webp', 0.82]]);
 });
 
-test('OPTIMIZATION_VERSION bumps to ref-v3-1024 (invalidates cached webp results)', () => {
-    assert.equal(OPTIMIZATION_VERSION, 'ref-v3-1024');
+test('OPTIMIZATION_VERSION bumps to ref-v4-2048 (fitting sources pass through untouched)', () => {
+    assert.equal(OPTIMIZATION_VERSION, 'ref-v4-2048');
 });
 
 test('optimizeReferenceImage accepts callback-based toBlob', async () => {
     const seam = createOptimizerSeam({
+        width: 4096,
+        height: 2048,
         encodings: { 'image/jpeg': { data: 'valid-jpeg', type: 'image/jpeg' } },
     });
     const result = await optimizeReferenceImage(seam.sourceBlob, { _test: seam });
     assert.equal(result.mime, 'image/jpeg');
-    assert.deepEqual(seam.calls, [['image/jpeg', 0.85]]);
+    assert.deepEqual(seam.calls, [['image/jpeg', 0.95]]);
 });
 
 function createNormalizeSeam({ alpha = false, fail = false } = {}) {
