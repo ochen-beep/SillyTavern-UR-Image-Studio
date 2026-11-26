@@ -19,7 +19,8 @@ import {
     log, warn, error, getCtx, showConfirmModal, loadSettings,
 } from './core.js';
 import { ALLOWED_CONTRACTS, isSecretKey, normalizeRouteContract } from './image-connection-schema.js';
-import { invalidateTemplateCache, replaceTemplateStoreRecords, getTemplateRecordsForExport } from './prompt-templates.js';
+import { invalidateTemplateCache, replaceTemplateStoreRecords } from './prompt-templates.js';
+import { listTemplateRecords } from './template-file-store.js';
 import { reportFailure, URIS_SCOPES } from './error-pool.js';
 import { invalidatePoolCache, getRefsForExport, replaceRefsRecords } from './refs-library.js';
 import { getParamPresetsForExport, replaceParamPresetRecords } from './param-presets.js';
@@ -390,7 +391,7 @@ export async function exportUrisData(options = {}) {
         // the store is not in file mode (readonly, still probing) — the exporter
         // then falls back to the blob and behaves exactly as before.
         const sharedSource = settings?.imageConnections ? cloneExact(settings.imageConnections) : {};
-        const freshTemplates = await getTemplateRecordsForExport();
+        const freshTemplates = await listTemplateRecords();
         if (freshTemplates) sharedSource.templates = freshTemplates;
         const freshPool = await getRefsForExport();
         if (freshPool) {
@@ -511,7 +512,7 @@ async function snapshotSafeData() {
     // separately so a failed import can roll the file store back too. Same for
     // the refs pool and presets: a rollback that restores settings but leaves
     // imported file-store content behind would end in a half-rolled-back state.
-    const templateRecords = await getTemplateRecordsForExport();
+    const templateRecords = await listTemplateRecords();
     const refsRecords = await getRefsForExport();
     const presetRecords = await getParamPresetsForExport();
     const galleryCards = await getCardsForExport();

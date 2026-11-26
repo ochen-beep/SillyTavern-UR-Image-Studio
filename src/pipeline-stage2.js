@@ -23,7 +23,7 @@ import {
 import { resolvePromptReferenceContext } from './scene-context.js';
 import { materializeStage2References, summarizeReference } from './references.js';
 import { withPinnedRefs } from './refs-library.js';
-import { resolveChatConfigSnapshot, resolveActivePresets, buildCandidates } from './pipeline-config.js';
+import { resolveChatConfigSnapshot, buildCandidates } from './pipeline-config.js';
 import { resolveConnection } from './connections.js';
 import { recordReferenceEvidence } from './connection-evidence.js';
 import { playStageSound } from './notify.js';
@@ -245,8 +245,9 @@ export async function runStage2ForDraft(input, onStatus = () => {}, signal, opts
             corrections: await withPinnedRefs(submission.references || { includedIds: [], excludedIds: [], revision: 0 }),
         });
 
-        const { imageConnId: resolvedImageConnId } = await resolveActivePresets(snapshot);
-        imageConnId = resolvedImageConnId;
+        // The captured snapshot is authoritative: the connection id frozen at
+        // submit time, not whatever is active right now.
+        imageConnId = snapshot.imageProfileId || null;
         const resolvedConnection = imageConnId ? await resolveConnection(imageConnId) : null;
         effectiveRoute = snapshot.imageRoute || resolvedConnection?.conn?.selectedRoute || null;
         // Kept for the diagnostic log line: `editProtocol` lives on the

@@ -3,7 +3,6 @@
 import { normalizeReferenceCap } from './reference-limits.js';
 import {
     createConnection as createStoredConnection,
-    deleteConnection as deleteStoredConnection,
     getConnection as getStoredConnection,
     getConnectionApiKey,
     listConnections as listStoredConnections,
@@ -74,10 +73,6 @@ export function normalizeServerProjection(value) {
     };
 }
 
-export async function listConnections() {
-    return listStoredConnections();
-}
-
 export async function listImageConnections() {
     const connections = await listStoredConnections();
     return connections
@@ -99,10 +94,6 @@ export async function saveConnection(patch) {
     if (!patch?.id) return null;
     const connection = await updateStoredConnection(patch.id, patch);
     return connection ? normalizeServerProjection(connection) : null;
-}
-
-export async function deleteConnection(id) {
-    return deleteStoredConnection(id);
 }
 
 export async function resolveConnection(id) {

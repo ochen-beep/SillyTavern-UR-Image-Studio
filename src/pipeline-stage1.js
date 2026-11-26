@@ -45,17 +45,6 @@ function emitStage1Event(type, detail) {
 }
 
 /**
- * Resolve a template record for a draft.
- *
- * @param {string|null} templateId
- * @returns {Promise<any|null>}
- */
-async function resolveTemplateForDraft(templateId) {
-    if (!templateId) return null;
-    return await getTemplate(templateId);
-}
-
-/**
  * Fingerprint of an AUTO run's identity inputs: scene text + effective
  * template + image route/params. Stored on the draft (autoPromptFp /
  * autoDoneFp) so repeat automation for unchanged content+settings is free.
@@ -163,7 +152,9 @@ export async function runStage1ForDraft(input, onStatus = () => {}, signal, opts
             corrections: draft.references || { includedIds: [], excludedIds: [], revision: 0 },
         });
 
-        const template = await resolveTemplateForDraft(effectiveTemplateId);
+        // Null id must not touch the template store (store-less environments
+        // hang on the probe) — keep the cheap null path at the call site.
+        const template = effectiveTemplateId ? await getTemplate(effectiveTemplateId) : null;
         throwIfAborted();
 
         // Опциональный контекст Stage 1 (персона/карточка/лорбук/история):

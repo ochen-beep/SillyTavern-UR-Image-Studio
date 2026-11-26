@@ -11,7 +11,7 @@
  * This file only re-exports — importers (index.js, ui/*, tests/*)
  * keep writing `import { ... } from './pipeline.js'` unchanged.
  */
-export { createChatConfigSnapshot, resolveActivePresets, buildCandidates } from './pipeline-config.js';
+export { createChatConfigSnapshot, buildCandidates } from './pipeline-config.js';
 export { runStage1ForDraft, runFullPipelineForDraft } from './pipeline-stage1.js';
 export { runStage2ForDraft, runStage2 } from './pipeline-stage2.js';
-export { createQueueItem, enqueueGeneration, stopQueue, cancelQueuedItem, cancelForeignQueueItems, resubmitQueueRow, queueItemFingerprint, findQueuedDuplicate } from './pipeline-queue.js';
+export { createQueueItem, enqueueGeneration, stopQueue, cancelQueuedItem, cancelForeignQueueItems, resubmitQueueRow, findQueuedDuplicate } from './pipeline-queue.js';

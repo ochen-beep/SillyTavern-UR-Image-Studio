@@ -88,20 +88,6 @@ export async function resolveStage1ChatConfigSnapshot() {
     };
 }
 
-// ── Active presets resolution (chat-scoped snapshot) ──
-
-/**
- * @returns {Promise<{imageConnId: string|null, template:object|null}>}
- */
-export async function resolveActivePresets(chatConfig) {
-    const snapshot = chatConfig || createChatConfigSnapshot();
-    const imageConn = snapshot.imageProfileId ? await getConnection(snapshot.imageProfileId) : null;
-    return {
-        imageConnId: imageConn?.id || snapshot.imageProfileId || null,
-        template: null,
-    };
-}
-
 // ── Reference candidates ──
 
 /**

@@ -8,8 +8,8 @@
  * override in a collapsed «Расширенные» section for the cases where
  * auto-resolution misfires.
  */
-import { deleteConnection, saveConnection } from '../connections.js';
-import { getConnectionApiKey, setConnectionApiKey } from '../connection-store.js';
+import { saveConnection } from '../connections.js';
+import { deleteConnection, getConnectionApiKey, setConnectionApiKey } from '../connection-store.js';
 import { probeConnection } from '../connect-probe.js';
 import { CONTRACTS, normalizeEndpoint, normalizeConnectionTimeoutMs, CONNECTION_TIMEOUT_DEFAULT_MS } from '../image-connection-schema.js';
 import { deliveryHintFor, editDialectHintFor, editDialectsBothRejected, clearDeliveryEvidenceFor } from '../delivery-evidence.js';

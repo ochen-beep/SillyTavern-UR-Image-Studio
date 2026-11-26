@@ -19,7 +19,7 @@
 
 import { getCtx, state, fnv1aHex } from '../core.js';
 import { isGenerationEligible } from '../post-navigator.js';
-import { rerollInline, normalizeAnchorText } from '../inline/runner.js';
+import { queueInlineJob, normalizeAnchorText } from '../inline/runner.js';
 import { upsertItem, deleteItem, itemKey, getSlot } from '../inline/store.js';
 import { hashMessage } from '../generation-drafts.js';
 import { randomToken } from '../random.js';
@@ -232,7 +232,7 @@ function launcherDeps() {
         rerollInline: (job) => {
             // queueInlineJob writes the pending item itself; one reconcile
             // mounts the shell without waiting for the inline event.
-            rerollInline(job);
+            queueInlineJob(job);
             reconcileVisible();
         },
         runFullPipeline: async (input) => {

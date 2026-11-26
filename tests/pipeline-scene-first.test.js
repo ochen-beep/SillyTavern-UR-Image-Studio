@@ -692,7 +692,7 @@ test('createQueueItem captures the schema-v4 config and selected route at enqueu
 test('queued browser generation refuses to dispatch after its connection is removed', async () => {
     await setupImageApi('image-1');
     const { createQueueItem, enqueueGeneration, stopQueue } = await import('../src/pipeline.js');
-    const { deleteConnection } = await import('../src/connections.js');
+    const { deleteConnection } = await import('../src/connection-store.js');
     const item = await createQueueItem({
         chatId: 'chat-1', msgId: 4, messageText: 'Aria waits.',
         requestedAction: 'current-prompt-stage2', templateId: null,
@@ -1114,19 +1114,6 @@ test('reference delivery policy does not mutate Stage 2 logical references', asy
     assert.equal(policy.maxRefs, 1);
     assert.deepEqual(resolution.stage2Refs, before);
     assert.equal(resolution.stage2Refs.length, 2);
-});
-
-test('resolveActivePresets uses the explicit image-profile snapshot instead of current state', async () => {
-    await setupImageApi();
-    coreState.activeImageProfileId = 'img-b';
-
-    const { resolveActivePresets } = await import('../src/pipeline.js');
-    const result = await resolveActivePresets({
-        imageProfileId: 'img-a',
-        templateId: null,
-    });
-    assert.equal(result.imageConnId, 'img-a');
-    assert.equal(Object.hasOwn(result, 'activeChars'), false);
 });
 
 test('queue item keeps captured chat config after switching to another chat', async () => {

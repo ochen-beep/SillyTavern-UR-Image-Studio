@@ -288,9 +288,6 @@ export async function listRefs() {
     return Array.isArray(records) ? records.map(ref => normalizePoolReference(ref)) : [];
 }
 
-async function requireSharedStore() {
-    return sharedStore();
-}
 
 export async function getRef(id) {
     const arr = await listRefs();
@@ -298,7 +295,7 @@ export async function getRef(id) {
 }
 
 export async function createRef(data = {}) {
-    const store = await requireSharedStore();
+    const store = await sharedStore();
     const item = normalizePoolReference(data);
     const response = await store.create('refs', item);
     const persisted = normalizePoolReference({ ...item, ...(response || {}) });
@@ -365,7 +362,7 @@ export async function updateRef(id, patch) {
     if (patch.folders !== undefined) {
         next.folders = uniqueStrings(Array.isArray(patch.folders) ? patch.folders : []);
     }
-    const store = await requireSharedStore();
+    const store = await sharedStore();
     const payload = normalizePoolReference(next);
     const response = await store.update('refs', id, payload);
     if (response === null) throw new Error(`reference ${id} vanished before the update could be saved`);
@@ -376,7 +373,7 @@ export async function updateRef(id, patch) {
 }
 
 export async function deleteRef(id) {
-    const store = await requireSharedStore();
+    const store = await sharedStore();
     await store.delete('refs', id);
     await refreshPoolCache();
     // Sweep the id from the live binding (open chat or studio twin) — a pin or
@@ -572,7 +569,7 @@ export async function createFolder(name, opts = {}) {
         parentId: opts.parentId ? String(opts.parentId) : null,
         order: folders.length,
     }, folders.length);
-    const store = await requireSharedStore();
+    const store = await sharedStore();
     const created = normalizeFolder(await store.create('ref-folders', item), folders.length);
     recordDiagnosticEvent({ event: 'refs-crud', stage: 'refs', operation: 'folder-create', details: { id: created.id } });
     return created;
@@ -598,7 +595,7 @@ export async function updateFolder(id, patch = {}) {
         id: current.id,
         order: current.order,
     }, index);
-    const store = await requireSharedStore();
+    const store = await sharedStore();
     return normalizeFolder(await store.update('ref-folders', id, next), index);
 }
 
@@ -612,7 +609,7 @@ export async function renameFolder(id, name) {
 export async function deleteFolder(id) {
     const folders = await listFolders();
     if (!folders.some(folder => folder.id === id)) return;
-    const store = await requireSharedStore();
+    const store = await sharedStore();
     await store.delete('ref-folders', id);
     await store.updateWhere('ref-folders',
         folder => folder && folder.parentId === id,
@@ -642,7 +639,7 @@ export async function mergeFolders(sourceId, targetId) {
     if (!sourceId || !targetId || sourceId === targetId) return 0;
     const folders = await listFolders();
     if (!folders.some(folder => folder.id === sourceId) || !folders.some(folder => folder.id === targetId)) return 0;
-    const store = await requireSharedStore();
+    const store = await sharedStore();
     // One batch mutate for every moved reference (see deleteFolder).
     const affected = await store.updateWhere('refs',
         ref => Array.isArray(ref.folders) && ref.folders.includes(sourceId),

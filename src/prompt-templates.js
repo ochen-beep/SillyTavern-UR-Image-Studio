@@ -232,11 +232,3 @@ export async function importTemplates(drafts, { overwrite = [] } = {}) {
     log('Импортированы шаблоны', persisted);
     return persisted;
 }
-
-/**
- * Fresh records for export. Null in legacy mode — the exporter then keeps
- * reading templates from settings, as before.
- */
-export async function getTemplateRecordsForExport() {
-    return listTemplateRecords();
-}

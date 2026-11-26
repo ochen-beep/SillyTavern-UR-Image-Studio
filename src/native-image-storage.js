@@ -50,10 +50,6 @@ export function getCharacterImageFolder() {
     return name || NATIVE_GALLERY_FOLDER;
 }
 
-function safeFilename(name = '') {
-    return sanitizeUploadFilename(name);
-}
-
 function parseDataUrl(value) {
     const match = String(value || '').match(/^data:(image\/(png|jpe?g|webp|gif));base64,([a-z0-9+/=\s]+)$/i);
     if (!match) throw new Error('Expected an image data URL');
@@ -85,7 +81,7 @@ async function uploadPayload({ image, format }, { filename, ch_name, signal, tim
         response = await fetchWithTimeout('/api/images/upload', {
             method: 'POST',
             headers: headers(),
-            body: JSON.stringify({ image, format, ch_name: ch_name ?? NATIVE_GALLERY_FOLDER, filename: safeFilename(filename) }),
+            body: JSON.stringify({ image, format, ch_name: ch_name ?? NATIVE_GALLERY_FOLDER, filename: sanitizeUploadFilename(filename) }),
             ...(signal === undefined ? {} : { signal }),
             ...(diagnostic ? { __urisDiagnostic: { ...diagnostic, role: 'native-upload' } } : {}),
         }, timeoutMs);

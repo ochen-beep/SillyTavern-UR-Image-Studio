@@ -20,6 +20,7 @@ globalThis.SillyTavern = {
 };
 
 const connections = await import('../src/connections.js');
+const { deleteConnection: deleteStoredConnection } = await import('../src/connection-store.js');
 
 beforeEach(() => {
     for (const key of Object.keys(extensionSettings)) delete extensionSettings[key];
@@ -79,8 +80,8 @@ test('shared image connection CRUD persists safe metadata without server request
     assert.equal(updated.name, 'Updated');
     assert.equal(extensionSettings.ur_image_studio.imageConnections.connections[0].apiKey, undefined);
 
-    assert.equal(await connections.deleteConnection(created.id), true);
-    assert.deepEqual(await connections.listConnections(), []);
+    assert.equal(await deleteStoredConnection(created.id), true);
+    assert.deepEqual(await connections.listImageConnections(), []);
     assert.equal(settingsSaveCalls, 3);
 });
 
