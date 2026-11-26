@@ -113,6 +113,8 @@ export async function deleteGalleryFolder(id) {
         if (index !== -1) list.splice(index, 1);
     });
     await detachFolderFromCards(id);
+    // Reset the device-local view filter if it pointed at the deleted folder.
+    if (getGalleryViewPrefs().filter === id) saveGalleryViewPrefs({ filter: 'all' });
     log('Gallery folder deleted', id);
     return true;
 }
