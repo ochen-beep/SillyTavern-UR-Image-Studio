@@ -38,8 +38,11 @@ export function buildGenerateViewModel({ draft, snapshot, referenceResolution, a
     const normalizedDraft = normalizeTemplateSelection(draft);
     // effectiveTemplateId: activeTemplateId is the default source; a draft-level
     // override (templateSelection === 'override') is authoritative, including the
-    // explicit base-mode override where templateId is null.
-    const effectiveTemplateId = resolveDraftTemplateId(normalizedDraft, activeTemplateId);
+    // explicit base-mode override where templateId is null. An id whose template
+    // record is gone (deleted template, restore that swapped records) resolves
+    // to base mode — orphaned ids never reach the UI or the change handler.
+    const resolvedTemplateId = resolveDraftTemplateId(normalizedDraft, activeTemplateId);
+    const effectiveTemplateId = templates.some(t => t?.id === resolvedTemplateId) ? resolvedTemplateId : null;
     const currentHash = hashMessage(messageText);
     // The studio scene text is an editable input, not a source message — there
     // is no "original" it could drift from, so the stale badge never applies.
@@ -99,12 +102,8 @@ export function renderGenerateMarkup(vm) {
     const stage1Label = stage1Action === 'build-prompt' ? 'Построить промпт' : 'Перестроить промпт';
 
     const effectiveId = vm.effectiveTemplateId ?? null;
-    const effectiveUnknown = effectiveId !== null && !templates.some(t => t.id === effectiveId);
     const templateOptions = `<option value="" ${effectiveId === null ? 'selected' : ''}>— базовый режим —</option>` +
-        templates.map(t => `<option value="${escapeHtml(t.id)}" ${t.id === effectiveId ? 'selected' : ''}>${escapeHtml(t.name)}</option>`).join('') +
-        (effectiveUnknown
-            ? `<option value="${escapeHtml(effectiveId)}" selected>${escapeHtml(effectiveId)}</option>`
-            : '');
+        templates.map(t => `<option value="${escapeHtml(t.id)}" ${t.id === effectiveId ? 'selected' : ''}>${escapeHtml(t.name)}</option>`).join('');
 
     const ambiguityList = renderAmbiguitiesMarkup(ambiguities, entities);
     const followOn = state.settings.followLastPost !== false;

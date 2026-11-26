@@ -97,6 +97,20 @@ test('buildGenerateViewModel keeps generate-image when draft matches message has
     assert.equal(vm.canGenerateImage, true);
 });
 
+test('buildGenerateViewModel resolves an orphaned template id to base mode', () => {
+    const templates = [{ id: 't1', name: 'Твит' }];
+    const draft = { chatId: 'c', msgId: 1, messageHash: hashMessage('x'), prompt: 'a cat', promptOrigin: 'stage1' };
+    const vm = baseVm({ draft, snapshot: null, templates, messageText: 'x', activeTemplateId: 'mvj05d34c2mxge' });
+    assert.equal(vm.effectiveTemplateId, null);
+
+    const html = renderGenerateMarkup(vm);
+    assert.ok(html.includes('базовый режим'));
+    assert.ok(!html.includes('mvj05d34c2mxge'), 'raw orphaned id must not render');
+
+    const liveVm = baseVm({ draft, snapshot: null, templates, messageText: 'x', activeTemplateId: 't1' });
+    assert.equal(liveVm.effectiveTemplateId, 't1');
+});
+
 test('buildGenerateViewModel surfaces stage1 and stage2 errors', () => {
     const draft = {
         prompt: 'x',
@@ -321,7 +335,7 @@ test('renderGenerateMarkup selects active template for a default draft', () => {
     assert.doesNotMatch(markup, /value="tpl-other"[^>]*selected/);
 });
 
-test('renderGenerateMarkup renders unknown active template fallback for a default draft', () => {
+test('renderGenerateMarkup resolves an unknown active template to base mode', () => {
     const messageText = 'scene';
     const draft = {
         templateSelection: 'default', templateId: null,
@@ -335,8 +349,8 @@ test('renderGenerateMarkup renders unknown active template fallback for a defaul
     }));
     const selectBlock = markup.match(/<select[^>]*id="urisTemplate"[^>]*>[\s\S]*?<\/select>/)?.[0];
     assert.ok(selectBlock);
-    assert.match(selectBlock, /<option value=""[^>]*>— базовый режим —<\/option>/);
-    assert.match(selectBlock, /<option value="tpl-deleted" selected>tpl-deleted<\/option>/);
+    assert.match(selectBlock, /<option value="" selected>— базовый режим —<\/option>/);
+    assert.ok(!selectBlock.includes('tpl-deleted'), 'raw orphaned id must not render');
     assert.doesNotMatch(selectBlock, /<option value="tpl-other"[^>]*selected/);
 });
 
