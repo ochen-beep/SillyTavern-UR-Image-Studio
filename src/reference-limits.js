@@ -10,8 +10,11 @@
  */
 export const MAX_REFERENCE_CAPABILITY = 64;
 // Resource budgets are memory/request safeguards, not provider capabilities.
+// The total fuse sits above the v4 storage reality (passthrough up to 8 MB,
+// 2048px alpha PNGs of a few MB): a 14-reference set can exceed 50 MB of
+// stored bytes while staying well under any provider's own request ceiling.
 export const MAX_REFERENCE_BYTES_PER_IMAGE = 25 * 1024 * 1024;
-export const MAX_REFERENCE_BYTES_TOTAL = 50 * 1024 * 1024;
+export const MAX_REFERENCE_BYTES_TOTAL = 128 * 1024 * 1024;
 
 export function normalizeReferenceCap(value) {
     if (value === null || value === undefined || value === '') return null;

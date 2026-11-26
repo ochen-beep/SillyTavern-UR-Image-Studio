@@ -152,7 +152,10 @@ test('reference byte budget rejects oversized image and aggregate payload', () =
     const one = `data:image/png;base64,${largePayload}`;
     assert.throws(() => assertReferenceByteBudget([{ dataUrl: one }]), error => error?.code === 'REFERENCE_TOO_LARGE');
     const small = `data:image/png;base64,${'A'.repeat(1024)}`;
-    const refs = Array.from({ length: 70000 }, () => ({ dataUrl: small }));
+    // 1024 base64 chars decode to 768 bytes; size the set from the constant
+    // itself so the aggregate always crosses the fuse, whatever its value.
+    const count = Math.ceil((MAX_REFERENCE_BYTES_TOTAL + 1) / 768);
+    const refs = Array.from({ length: count }, () => ({ dataUrl: small }));
     assert.throws(() => assertReferenceByteBudget(refs), error => error?.code === 'REFERENCE_BYTE_BUDGET_EXCEEDED');
     assert.ok(MAX_REFERENCE_BYTES_TOTAL > MAX_REFERENCE_BYTES_PER_IMAGE);
 });
