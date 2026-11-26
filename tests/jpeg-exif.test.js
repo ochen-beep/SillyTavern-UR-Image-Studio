@@ -28,3 +28,18 @@ test('jpegExifRotated treats undecodable input as rotated', () => {
     const truncated = new Uint8Array(jpeg(exif(TIFF_LITTLE, ORIENTATION_LITTLE(6)))).slice(0, 24).buffer;
     assert.equal(jpegExifRotated(truncated), true);
 });
+
+test('jpegExifRotated survives lengthless markers and broken segment headers', () => {
+    // TEM (FF 01) and RSTn between segments carry no length: the scan must
+    // step over them instead of reading garbage as a segment size (which used
+    // to loop forever on a zero length).
+    const tem = [0xff, 0x01];
+    const rst = [0xff, 0xd0];
+    const upright = jpeg(JFIF_HEADER, tem, rst, exif(TIFF_LITTLE, ORIENTATION_LITTLE(1)));
+    assert.equal(jpegExifRotated(upright), false);
+    const rotated = jpeg(JFIF_HEADER, tem, exif(TIFF_BIG, ORIENTATION_BIG(6)));
+    assert.equal(jpegExifRotated(rotated), true);
+    // An APP1 too short to hold its own length field is broken bytes.
+    const broken = jpeg([0xff, 0xe1, 0x00, 0x00]);
+    assert.equal(jpegExifRotated(broken), true);
+});

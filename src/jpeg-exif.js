@@ -23,7 +23,14 @@ export function jpegExifRotated(bytes) {
             const marker = view.getUint8(offset + 1);
             // Scan data and EOI: no EXIF can follow.
             if (marker === 0xda || marker === 0xd9) return false;
+            // TEM and RSTn carry no payload length.
+            if (marker === 0x01 || (marker >= 0xd0 && marker <= 0xd7)) {
+                offset += 2;
+                continue;
+            }
             const length = view.getUint16(offset + 2);
+            // A segment too short to hold its own length is broken bytes.
+            if (length < 2) return true;
             // APP1 whose payload starts with "Exif\0\0".
             if (marker === 0xe1 && view.getUint32(offset + 4) === 0x45786966) {
                 const tiff = offset + 10;
