@@ -150,7 +150,7 @@ test('pinned refs attach without a prompt mention; an explicit exclude wins', as
     const resolution = await resolvePromptReferenceContext({
         prompt: 'Маша на пляже',
         candidates,
-        corrections: withPinnedRefs({ includedIds: [], excludedIds: [], revision: 0 }),
+        corrections: await withPinnedRefs({ includedIds: [], excludedIds: [], revision: 0 }),
     });
     assert.deepEqual(resolution.stage2Refs.map(ref => ref.id), [pinned.id, other.id]);
 
@@ -158,7 +158,7 @@ test('pinned refs attach without a prompt mention; an explicit exclude wins', as
     const excluded = await resolvePromptReferenceContext({
         prompt: 'Маша на пляже',
         candidates,
-        corrections: withPinnedRefs({ includedIds: [], excludedIds: [pinned.id], revision: 1 }),
+        corrections: await withPinnedRefs({ includedIds: [], excludedIds: [pinned.id], revision: 1 }),
     });
     assert.deepEqual(excluded.stage2Refs.map(ref => ref.id), [other.id]);
 

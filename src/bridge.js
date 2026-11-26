@@ -517,7 +517,7 @@ async function generateOnce(caller, requestId, norm, controller, onStatus) {
             const resolution = await resolvePromptReferenceContext({
                 prompt: basePrompt,
                 candidates,
-                corrections: withPinnedRefs({ includedIds: [], excludedIds: [], revision: 0 }),
+                corrections: await withPinnedRefs({ includedIds: [], excludedIds: [], revision: 0 }),
             });
             for (const r of resolution.stage2Refs || []) {
                 if (r.bindingMode === 'description') {

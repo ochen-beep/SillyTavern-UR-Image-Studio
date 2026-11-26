@@ -590,7 +590,7 @@ test('setChatPinnedRef toggles pinnedIds and withPinnedRefs merges them into cor
 
     // No pins: the caller's corrections pass through untouched.
     const corrections = { includedIds: ['r1'], excludedIds: ['r2'], revision: 1 };
-    assert.strictEqual(withPinnedRefs(corrections), corrections);
+    assert.strictEqual(await withPinnedRefs(corrections), corrections);
 
     assert.deepEqual(setChatPinnedRef('r1', true), ['r1']);
     assert.deepEqual(getChatRefs().pinnedIds, ['r1']);
@@ -599,12 +599,36 @@ test('setChatPinnedRef toggles pinnedIds and withPinnedRefs merges them into cor
     setChatPinnedRef('r1', false);
     assert.deepEqual(getChatRefs().pinnedIds, []);
 
-    setChatPinnedRef('r2', true);
-    assert.deepEqual(withPinnedRefs().includedIds, ['r2']);
+    // A pin whose pool record is gone never rides into corrections.
+    setChatPinnedRef('ghost', true);
     assert.deepEqual(
-        withPinnedRefs({ includedIds: ['r1'], revision: 3 }).includedIds,
-        ['r1', 'r2'],
+        (await withPinnedRefs({ includedIds: [], excludedIds: [], revision: 0 })).includedIds,
+        [],
     );
+
+    const live = await createRef({ name: 'Live', imagePath: '/live.png' });
+    setChatPinnedRef(live.id, true);
+    assert.deepEqual((await withPinnedRefs()).includedIds, [live.id]);
+    assert.deepEqual(
+        (await withPinnedRefs({ includedIds: ['r1'], revision: 3 })).includedIds,
+        ['r1', live.id],
+    );
+});
+
+test('deleteRef sweeps the id from the live chat binding', async () => {
+    _chatMetadata[META_KEY] = {
+        schemaVersion: 5,
+        config: DEFAULT_CONFIG,
+        refs: {},
+    };
+    const ref = await createRef({ name: 'Sweep', imagePath: '/sweep.png' });
+    await saveChatRefs({ referenceIds: [ref.id, 'other'], pinnedIds: [ref.id] });
+
+    await deleteRef(ref.id);
+
+    const refs = getChatRefs();
+    assert.deepEqual(refs.referenceIds, ['other']);
+    assert.deepEqual(refs.pinnedIds, []);
 });
 
 test('filterRefsByFolders returns the union of selected folders', () => {

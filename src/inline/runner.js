@@ -222,7 +222,7 @@ export async function processJob({ msgId, idx, type, desc }, operation = null) {
             const candidates = await buildCandidates(state.currentChatId || 'current');
             const resolution = await resolvePromptReferenceContext({
                 prompt: plan.prompt, candidates,
-                corrections: withPinnedRefs({ includedIds: [], excludedIds: [], revision: 0 }),
+                corrections: await withPinnedRefs({ includedIds: [], excludedIds: [], revision: 0 }),
             });
             for (const r of resolution.stage2Refs || []) {
                 if (r.bindingMode === 'description') {

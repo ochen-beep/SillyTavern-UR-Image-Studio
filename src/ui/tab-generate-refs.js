@@ -182,7 +182,7 @@ export async function resolveDraftPromptReferences(chatId, draft) {
     return await resolvePromptReferenceContext({
         prompt: draft.prompt,
         candidates,
-        corrections: withPinnedRefs(draft.references || { includedIds: [], excludedIds: [], revision: 0 }),
+        corrections: await withPinnedRefs(draft.references || { includedIds: [], excludedIds: [], revision: 0 }),
     });
 }
 

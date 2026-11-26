@@ -242,7 +242,7 @@ export async function runStage2ForDraft(input, onStatus = () => {}, signal, opts
         const referenceResolution = await resolvePromptReferenceContext({
             prompt: draft.prompt,
             candidates,
-            corrections: withPinnedRefs(submission.references || { includedIds: [], excludedIds: [], revision: 0 }),
+            corrections: await withPinnedRefs(submission.references || { includedIds: [], excludedIds: [], revision: 0 }),
         });
 
         const { imageConnId: resolvedImageConnId } = await resolveActivePresets(snapshot);

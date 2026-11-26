@@ -379,6 +379,16 @@ export async function deleteRef(id) {
     const store = await requireSharedStore();
     await store.delete('refs', id);
     await refreshPoolCache();
+    // Sweep the id from the live binding (open chat or studio twin) — a pin or
+    // whitelist entry pointing at a deleted ref would otherwise linger forever.
+    const refs = getChatRefs();
+    const next = {
+        referenceIds: refs.referenceIds.filter(refId => refId !== id),
+        pinnedIds: refs.pinnedIds.filter(refId => refId !== id),
+    };
+    if (next.referenceIds.length !== refs.referenceIds.length || next.pinnedIds.length !== refs.pinnedIds.length) {
+        saveChatRefs(next);
+    }
     recordDiagnosticEvent({ event: 'refs-crud', stage: 'refs', operation: 'delete', details: { id } });
     log('Reference deleted', id);
 }
@@ -789,12 +799,15 @@ export function setChatPinnedRef(refId, pinned) {
 /**
  * Merge the chat's pinned refs into Stage 2 resolver corrections: they are
  * force-included without a prompt mention. An explicit exclude still wins —
- * the resolver checks excludedIds before includedIds.
+ * the resolver checks excludedIds before includedIds. Pins whose pool record
+ * is gone (deleted ref) are dropped — a deleted ref must not resurrect as an
+ * implicit include.
  * @param {{includedIds?:string[],excludedIds?:string[],revision?:number}} [corrections]
- * @returns {{includedIds:string[],excludedIds?:string[],revision?:number}}
+ * @returns {Promise<{includedIds:string[],excludedIds?:string[],revision?:number}>}
  */
-export function withPinnedRefs(corrections = {}) {
-    const pinnedIds = getChatRefs().pinnedIds;
+export async function withPinnedRefs(corrections = {}) {
+    const pool = await listRefs();
+    const pinnedIds = getChatRefs().pinnedIds.filter(id => pool.some(ref => ref?.id === id));
     if (!pinnedIds.length) return corrections || {};
     return {
         ...corrections,
