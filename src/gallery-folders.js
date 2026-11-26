@@ -34,14 +34,6 @@ const store = createFileStore({
     mergeWithServer: true,
 });
 
-/** Resolve the store mode (probe / load) exactly once per session. */
-export function ensureGalleryFoldersReady() {
-    return store.ready();
-}
-
-/** Test seam: which backend the store resolved to ('file' | 'readonly' | 'unknown'). */
-export function galleryFoldersStoreMode() { return store.mode(); }
-
 /** Await durability of queued folder file writes (import paths and tests). */
 export function flushGalleryFolderWrites() {
     return store.flush();

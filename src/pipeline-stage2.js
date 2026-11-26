@@ -522,15 +522,6 @@ function hasUrisItems(msg) {
     return msg.swipe_info.some(snap => Array.isArray(snap?.extra?.uris?.items) && snap.extra.uris.items.length);
 }
 
-/** Текст варианта i по правилам ST (swipes[i] ?? mes текущего). */
-function variantTextAt(msg, i) {
-    const swipes = Array.isArray(msg.swipes) ? msg.swipes : null;
-    if (swipes && swipes[i] !== undefined) return String(swipes[i] ?? '');
-    const current = Number(msg.swipe_id ?? 0);
-    if (i === current) return String(msg.mes ?? '');
-    return null;
-}
-
 /**
  * Приклеить результат Stage 2 к карусели поста. Ошибки хука не влияют на
  * основной результат генерации.

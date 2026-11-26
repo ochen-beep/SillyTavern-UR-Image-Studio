@@ -114,7 +114,7 @@ export async function createImageParam(data = {}) {
     return persisted;
 }
 
-export async function getImageParam(id) {
+async function getImageParam(id) {
     return (await listImageParams()).find(item => item.id === id) || null;
 }
 
