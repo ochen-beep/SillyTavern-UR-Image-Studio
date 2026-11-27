@@ -275,6 +275,53 @@ test('updateRef propagates server failure without changing the existing record',
     assert.deepEqual(store.value('refs'), [original]);
 });
 
+test('updateRef resets stale image metrics when the path changes without new ones', async () => {
+    const original = {
+        id: 'stale', name: 'Stale', imagePath: '/old.webp', thumbPath: '/old-thumb.webp',
+        mime: 'image/webp', width: 640, height: 480,
+        sourceBytes: 10000, optimizedBytes: 5000, optimizationVersion: 'ref-v2-1024',
+    };
+    const store = makeRefStore({ refs: [original] });
+    setRefStoreForTests(store);
+
+    // The gallery-replace path reuses the native path and carries no metrics.
+    const updated = await updateRef('stale', { imagePath: '/new.png' });
+
+    assert.equal(updated.imagePath, '/new.png');
+    assert.equal(updated.thumbPath, undefined, 'thumbPath the old image owned must not survive');
+    assert.equal(updated.mime, undefined);
+    assert.equal(updated.width, undefined);
+    assert.equal(updated.height, undefined);
+    assert.equal(updated.sourceBytes, undefined);
+    assert.equal(updated.optimizedBytes, undefined);
+    assert.equal(updated.optimizationVersion, undefined);
+});
+
+test('updateRef keeps metrics when the image change brings its own', async () => {
+    const original = {
+        id: 'fresh', name: 'Fresh', imagePath: '/old.webp',
+        mime: 'image/webp', width: 640, height: 480,
+        sourceBytes: 10000, optimizedBytes: 5000, optimizationVersion: 'ref-v2-1024',
+    };
+    const store = makeRefStore({ refs: [original] });
+    setRefStoreForTests(store);
+
+    const updated = await updateRef('fresh', {
+        imagePath: '/new.png',
+        thumbPath: 'user/images/URIS_Thumbs/new-thumb.webp',
+        mime: 'image/png', width: 2048, height: 1024,
+        sourceBytes: 90000, optimizedBytes: 45000, optimizationVersion: 'ref-v4-2048',
+    });
+
+    assert.equal(updated.imagePath, '/new.png');
+    assert.equal(updated.thumbPath, 'user/images/URIS_Thumbs/new-thumb.webp');
+    assert.equal(updated.mime, 'image/png');
+    assert.equal(updated.width, 2048);
+    assert.equal(updated.height, 1024);
+    assert.equal(updated.optimizedBytes, 45000);
+    assert.equal(updated.optimizationVersion, 'ref-v4-2048');
+});
+
 test('createRef retains optimizer metadata when the server response omits it', async () => {
     const store = makeRefStore();
     const create = store.create;
@@ -735,6 +782,8 @@ test('releaseRefImage щадит общий файл, пока жив клон, 
 
     const calls = [];
     const originalFetch = globalThis.fetch;
+    // The card-consumer check rides the gallery sharded store: its ready()
+    // probe and monolith read pass through fetch before any unlink.
     globalThis.fetch = async (url, options = {}) => {
         calls.push({ url: String(url), body: options.body });
         return { ok: true, json: async () => ({}), text: async () => '' };
@@ -747,6 +796,36 @@ test('releaseRefImage щадит общий файл, пока жив клон, 
     } finally {
         globalThis.fetch = originalFetch;
     }
-    assert.equal(calls.length, 1, 'unlink происходит, когда записей с этим путём не осталось');
-    assert.ok(String(calls[0]?.url).includes('/api/images/delete'), 'unlink идёт родным ST-маршрутом');
+    const unlink = calls.filter(call => String(call.url).includes('/api/images/delete') || String(call.url).includes('/api/files/delete'));
+    assert.equal(unlink.length, 1, 'unlink происходит ровно один раз, когда записей и карточек с этим путём не осталось');
+    assert.ok(String(unlink[0]?.url).includes('/api/images/delete'), 'unlink идёт родным ST-маршрутом');
+});
+
+test('releaseRefImage щадит файл, на который смотрит карточка галереи', async () => {
+    // The card index rides its own sharded file store: it needs the fake
+    // user-files surface up BEFORE the first addCard, like binaries-migration.
+    const { installStGlobals, makeUserFileServer } = await import('./_helpers.js');
+    installStGlobals();
+    const fileServer = makeUserFileServer();
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = fileServer.fetch;
+    const gallery = await import('../src/gallery-index.js');
+    gallery.resetGalleryStoreForTests();
+    const path = 'user/images/Ref%20Folder/shared-card.png';
+    const ref = await createRef({ name: 'B', imagePath: path });
+    await gallery.addCard({ id: 'card1', imagePath: path });
+
+    const calls = [];
+    globalThis.fetch = async (url, options = {}) => {
+        calls.push(String(url));
+        return { ok: true, json: async () => ({}), text: async () => '' };
+    };
+    try {
+        await deleteRef(ref.id);
+        await releaseRefImage(path);
+        assert.equal(calls.length, 0, 'карточка держит файл: unlink не выполняется');
+    } finally {
+        globalThis.fetch = originalFetch;
+        gallery.resetGalleryStoreForTests();
+    }
 });
