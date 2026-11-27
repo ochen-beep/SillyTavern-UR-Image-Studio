@@ -26,6 +26,7 @@ import {
 import { normalizeAliases } from './scene-context.js';
 import { canonicalizeNativeImagePath, canonicalizeStoredPath } from './native-image-path.js';
 import { deleteStoredServerFile } from './user-files-storage.js';
+import { listCards } from './gallery-index.js';
 import { createShardedFileStore } from './sharded-file-store.js';
 import { recordDiagnosticEvent } from './diagnostic-events.js';
 import { isStudioActive, getStudioBinding, saveStudioBinding } from './studio-scope.js';
@@ -103,9 +104,14 @@ export async function releaseRefImage(oldPath) {
         const pool = await listRefs();
         // Any live record still pointing at the file (this or another reference)
         // forbids the unlink; the merge machinery can bring an old record back.
-        const stillUsed = pool.some(r => canonicalizeStoredPath(r.imagePath)
-            === canonicalizeStoredPath(oldPath));
+        const samePath = p => canonicalizeStoredPath(p) === canonicalizeStoredPath(oldPath);
+        const stillUsed = pool.some(r => samePath(r.imagePath));
         if (stillUsed) return;
+        // Gallery cards are consumers too: a ref saved from the gallery shares
+        // the card's native file, so replacing the ref must not erase the
+        // binary the card renders (same enumeration as the orphan sweep).
+        const cards = await listCards({ reconcile: false });
+        if (cards.some(c => samePath(c.imagePath) || samePath(c.thumbPath))) return;
         // user/files → /api/files/delete (+ снятие защиты), user/images →
         // /api/images/delete — роутинг внутри хелпера.
         await deleteStoredServerFile(oldPath);
@@ -341,10 +347,25 @@ export async function updateRef(id, patch) {
     if (patch.aliases !== undefined) next.aliases = normalizeAliases(patch.aliases);
     if (patch.description != null) next.description = String(patch.description);
     if (patch.bindingMode != null) next.bindingMode = patch.bindingMode === 'description' ? 'description' : 'image';
+    // A different imagePath without fresh metrics means the caller replaced the
+    // image but could not measure it (e.g. reusing a native gallery path):
+    // stale width/height/thumbPath would describe the OLD file, so they reset.
+    // Plain-string comparison covers test/legacy paths that canonicalize to null.
+    const imageChanged = patch.imagePath != null
+        && (canonicalizeStoredPath(patch.imagePath) || patch.imagePath)
+            !== (canonicalizeStoredPath(current.imagePath) || current.imagePath);
     if (patch.imagePath != null) next.imagePath = patch.imagePath;
     if (patch.thumbPath != null) next.thumbPath = patch.thumbPath;
     for (const key of ['mime', 'width', 'height', 'sourceBytes', 'optimizedBytes', 'optimizationVersion']) {
         if (patch[key] !== undefined) next[key] = patch[key];
+    }
+    if (imageChanged) {
+        // A new thumbPath rides the patch (uploaded together with the image);
+        // everything else would point at the old pixels.
+        if (patch.thumbPath == null) delete next.thumbPath;
+        for (const key of ['mime', 'width', 'height', 'sourceBytes', 'optimizedBytes', 'optimizationVersion']) {
+            if (patch[key] === undefined) delete next[key];
+        }
     }
     if (patch.folders !== undefined) {
         next.folders = uniqueStrings(Array.isArray(patch.folders) ? patch.folders : []);
